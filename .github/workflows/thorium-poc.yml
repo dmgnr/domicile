@@ -1,0 +1,42 @@
+name: Thorium POC source-patch preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - thorium-poc
+
+permissions:
+  contents: read
+
+jobs:
+  source-patch-preflight:
+    if: github.repository == 'dmgnr/domicile'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out Domicile
+        uses: actions/checkout@v4
+
+      - name: Test the preflight against synthetic patch fixtures
+        run: scripts/thorium-poc/tests/test-preflight.sh
+
+      - name: Apply the Domicile patch series to pinned Chromium 156
+        id: preflight
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          scripts/thorium-poc/preflight.sh 2>&1 | tee "$RUNNER_TEMP/thorium-poc-preflight.log"
+
+      - name: Preserve patch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thorium-poc-source-patch-preflight
+          path: ${{ runner.temp }}/thorium-poc-preflight.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Report preflight result
+        if: steps.preflight.outcome == 'failure'
+        run: exit 1
