@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: update build contexts for Chromium 156 POC
+
+Refreshes the first Domicile patch's GN contexts for the pinned Chromium 156
+base. This patch is isolated to the Thorium POC preflight.
+---
+
+diff --git a/components/BUILD.gn b/components/BUILD.gn
+index 936e523a..f8a9af09 100644
+--- a/components/BUILD.gn
++++ b/components/BUILD.gn
+@@ -232,6 +232,7 @@ test("components_unittests") {
+     "//components/device_event_log:unit_tests",
+     "//components/device_reauth:unit_tests",
+     "//components/device_signals/core:unit_tests",
++    "//components/domicile:unit_tests",
+     "//components/dom_distiller/core:unit_tests",
+     "//components/download:unit_tests",
+     "//components/encrypted_messages:unit_tests",
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index 3162721b..33f9a3da 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -151,6 +151,7 @@ source_set("browser") {
+     "//components/discardable_memory/common",
+     "//components/discardable_memory/service",
+     "//components/download/database",
++    "//components/domicile:browser",
+     "//components/download/public/common:public",
+     "//components/embedder_support",
+     "//components/embedder_support:user_agent",
+@@ -939,6 +940,8 @@ source_set("browser") {
+     "dom_storage/dom_storage_context_wrapper.h",
+     "dom_storage/session_storage_namespace_handle_impl.cc",
+     "dom_storage/session_storage_namespace_handle_impl.h",
++    "domicile/domicile_frame_sink_broker.cc",
++    "domicile/domicile_frame_sink_broker.h",
+     "download/data_url_blob_reader.cc",
+     "download/data_url_blob_reader.h",
+     "download/download_item_utils.cc",

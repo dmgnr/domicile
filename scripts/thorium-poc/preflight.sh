@@ -9,9 +9,11 @@ CHROMIUM_URL="https://github.com/chromium/chromium.git"
 if [[ "${1:-}" == "--fixture" ]]; then
   SERIES="$2"
   CHECKOUT="$3"
+  OVERRIDE_PATCH="${4:-}"
 else
   SERIES="$ROOT/packages/domicile-engine"
   CHECKOUT="${RUNNER_TEMP:-/tmp}/thorium-poc-chromium"
+  OVERRIDE_PATCH="$ROOT/scripts/thorium-poc/patches/0001-domicile-build-the-non-renderer-frame-sink-broker.patch"
   rm -rf "$CHECKOUT"
   paths_file="${RUNNER_TEMP:-/tmp}/thorium-poc-paths"
   if grep -hE '^(rename from|rename to|deleted file mode) ' "$PATCH_DIR"/*.patch >/dev/null; then
@@ -45,6 +47,10 @@ fi
 git -C "$CHECKOUT" config user.name "Domicile Thorium POC"
 git -C "$CHECKOUT" config user.email "domicile-thorium-poc@invalid.example"
 for patch in "${patches[@]}"; do
+  if [[ "$(basename "$patch")" == "0001-domicile-build-the-non-renderer-frame-sink-broker.patch" && -n "$OVERRIDE_PATCH" ]]; then
+    patch="$OVERRIDE_PATCH"
+    echo "Using isolated Chromium 156 POC override"
+  fi
   echo "Applying $(basename "$patch")"
   if ! git -C "$CHECKOUT" am --keep-non-patch "$patch"; then
     echo "FAILED: $(basename "$patch")" >&2

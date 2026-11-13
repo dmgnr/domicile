@@ -41,4 +41,56 @@ grep -q 'does not apply' "$TMP/fail.log" || fail "failure diagnostics omitted gi
 
 if "$SCRIPT" --fixture "$TMP/series" "$TMP/missing" >"$TMP/missing.log" 2>&1; then fail "missing checkout unexpectedly passed"; fi
 grep -q 'not a git checkout' "$TMP/missing.log" || fail "missing checkout diagnostic absent"
+
+# The upstream patch's Chromium 156 GN contexts fail; the isolated port applies.
+mkdir -p "$TMP/chromium156/components" "$TMP/chromium156/content/browser"
+cat > "$TMP/chromium156/components/BUILD.gn" <<'EOF'
+test("components_unittests") {
+  deps = [
+    "//components/device_event_log:unit_tests",
+    "//components/device_reauth:unit_tests",
+    "//components/device_signals/core:unit_tests",
+    "//components/dom_distiller/core:unit_tests",
+    "//components/download:unit_tests",
+    "//components/encrypted_messages:unit_tests",
+  ]
+}
+EOF
+cat > "$TMP/chromium156/content/browser/BUILD.gn" <<'EOF'
+source_set("browser") {
+  deps = [
+    "//components/discardable_memory/common",
+    "//components/discardable_memory/service",
+    "//components/download/database",
+    "//components/download/public/common:public",
+    "//components/embedder_support",
+    "//components/embedder_support:user_agent",
+  ]
+  sources = [
+    "dom_storage/dom_storage_context_wrapper.h",
+    "dom_storage/session_storage_namespace_handle_impl.cc",
+    "dom_storage/session_storage_namespace_handle_impl.h",
+    "download/data_url_blob_reader.cc",
+    "download/data_url_blob_reader.h",
+    "download/download_item_utils.cc",
+    "download/download_manager_impl.cc",
+    "download/download_manager_impl.h",
+  ]
+}
+EOF
+git -C "$TMP/chromium156" init -q
+git -C "$TMP/chromium156" add .
+git -C "$TMP/chromium156" -c user.email=test@example.invalid -c user.name=Test commit -qm chromium156-fixture
+if git -C "$TMP/chromium156" apply --check "$ROOT/packages/domicile-engine/patches/0001-domicile-build-the-non-renderer-frame-sink-broker.patch" >"$TMP/original.log" 2>&1; then
+  fail "original Chromium GN contexts unexpectedly apply to the 156 fixture"
+fi
+grep -q 'does not apply' "$TMP/original.log" || fail "original patch failed for a reason other than its Chromium 156 contexts"
+PORT_PATCH="$ROOT/scripts/thorium-poc/patches/0001-domicile-build-the-non-renderer-frame-sink-broker.patch"
+mkdir -p "$TMP/series156/patches"
+cp "$ROOT/packages/domicile-engine/patches/0001-domicile-build-the-non-renderer-frame-sink-broker.patch" "$TMP/series156/patches/"
+HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 "$SCRIPT" --fixture "$TMP/series156" "$TMP/chromium156" "$PORT_PATCH" >"$TMP/port-check.log" 2>&1 || fail "Chromium 156 GN port does not apply"
+grep -q '"//components/domicile:unit_tests",' "$TMP/chromium156/components/BUILD.gn" || fail "port omitted domicile unit test target"
+grep -q '"//components/domicile:browser",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted domicile browser target"
+grep -q '"domicile/domicile_frame_sink_broker.cc",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted frame sink broker source"
+grep -q '"domicile/domicile_frame_sink_broker.h",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted frame sink broker header"
 echo "thorium preflight fixture tests passed"
