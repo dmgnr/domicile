@@ -437,6 +437,52 @@ describe(App, () => {
       });
     });
 
+    it("turns on HDR for a display in a profile", async () => {
+      const { host, user } = await renderApp("Displays", {
+        config: {
+          output: {
+            profiles: [{ displays: [{ display: "drm-1" }], name: "laptop" }],
+          },
+        },
+      });
+      expect(
+        screen.queryByRole("textbox", { name: "drm-1 everyday brightness" }),
+      ).toBeNull();
+      await user.click(screen.getByRole("switch", { name: "drm-1 HDR" }));
+      await waitFor(() => {
+        expect(written(host.writes).output.profiles).toEqual([
+          { displays: [{ display: "drm-1", hdr: true }], name: "laptop" },
+        ]);
+      });
+    });
+
+    it("sets how bright everyday content is on a display in HDR", async () => {
+      const { host, user } = await renderApp("Displays", {
+        config: {
+          output: {
+            profiles: [
+              { displays: [{ display: "drm-1", hdr: true }], name: "laptop" },
+            ],
+          },
+        },
+      });
+      const white = screen.getByRole("textbox", {
+        name: "drm-1 everyday brightness",
+      });
+      expect(white).toHaveValue("203");
+      await user.clear(white);
+      await user.type(white, "250");
+      await user.tab();
+      await waitFor(() => {
+        expect(written(host.writes).output.profiles).toEqual([
+          {
+            displays: [{ display: "drm-1", hdr: true, sdr_white: 250 }],
+            name: "laptop",
+          },
+        ]);
+      });
+    });
+
     it("writes a profile monitor's position at the origin", async () => {
       // A profile monitor with no position goes right of the others, so
       // `[0, 0]` has to be written out.

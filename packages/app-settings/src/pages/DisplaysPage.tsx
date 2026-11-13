@@ -4,6 +4,7 @@ import { Select } from "@domicile-desktop/component-library/Select";
 import { Switch } from "@domicile-desktop/component-library/Switch";
 import { TrashIcon } from "@phosphor-icons/react/dist/ssr/Trash";
 import { XIcon } from "@phosphor-icons/react/dist/ssr/X";
+import type { ReactNode } from "react";
 import { useId } from "react";
 
 import { css } from "../../styled-system/css";
@@ -31,6 +32,10 @@ const ROTATIONS = [
 const WHOLE = { integer: true, positive: false } as const;
 const COUNT = { integer: true, positive: true } as const;
 const SCALE = { integer: false, positive: true } as const;
+/** An everyday white in cd/m², which PQ encodes up to 10000. */
+const NITS = { integer: true, positive: true } as const;
+/** The everyday white the desktop uses in HDR when a profile states none. */
+const DEFAULT_SDR_WHITE = 203;
 const ORIGIN = [0, 0] as const;
 
 /** `output`: the profiles that place monitors, and described displays. */
@@ -163,22 +168,29 @@ const ProfileCard = ({
         />
       </SettingRow>
       {profile.displays.length > 0 && (
-        <div aria-hidden className={placementStyles}>
-          {["Monitor", "", "Scale", "X", "Y", "Rotation"].map((heading, at) => (
-            <span className={headingStyles} key={`${at}-${heading}`}>
-              {heading}
-            </span>
+        <div className={placementsStyles}>
+          <div aria-hidden className={headingsStyles}>
+            {PLACEMENT_HEADINGS.map((heading, at) => (
+              <span className={headingStyles} key={`${at}-${heading}`}>
+                {heading}
+              </span>
+            ))}
+          </div>
+          {profile.displays.map((placement, at) => (
+            <PlacementRow
+              editor={editor}
+              key={`${at}-${placement.display}`}
+              path={[...path, "displays", at]}
+              placement={placement}
+            />
           ))}
+          <p className={hintStyles}>
+            HDR turns on only for monitors that support it. Everyday brightness
+            is how bright windows and the desktop look while HDR is on; raise it
+            if they seem dim.
+          </p>
         </div>
       )}
-      {profile.displays.map((placement, at) => (
-        <PlacementRow
-          editor={editor}
-          key={`${at}-${placement.display}`}
-          path={[...path, "displays", at]}
-          placement={placement}
-        />
-      ))}
       {!disabled && (
         <div className={actionsStyles}>
           <AddRow
@@ -211,7 +223,22 @@ type PlacementRowProps = {
   path: ConfigPath;
 };
 
-/** One monitor in a profile: on or off, its scale, position and rotation. */
+/** The grid's column headings; a narrow card labels each setting instead. */
+const PLACEMENT_HEADINGS = [
+  "Monitor",
+  "",
+  "Scale",
+  "X",
+  "Y",
+  "Rotation",
+  "HDR",
+  "Everyday brightness",
+] as const;
+
+/**
+ * One monitor in a profile: on or off, its scale, position, rotation and
+ * HDR. A row of the grid, or on a narrow card a stack of labeled settings.
+ */
 const PlacementRow = ({ editor, path, placement }: PlacementRowProps) => {
   const { readOnly, set } = editor;
   const disabled = readOnly !== undefined;
@@ -222,43 +249,79 @@ const PlacementRow = ({ editor, path, placement }: PlacementRowProps) => {
       <code className={nameStyles} id={nameId}>
         {name}
       </code>
-      <Switch
-        aria-labelledby={nameId}
-        checked={placement.enabled}
-        disabled={disabled}
-        label={placement.enabled ? "On" : "Off"}
-        onCheckedChange={(enabled) => {
-          set([...path, "enabled"], enabled ? undefined : false);
-        }}
-      />
-      <NumberSetting
-        editor={editor}
-        fallback={1}
-        label={`${name} scale`}
-        path={[...path, "scale"]}
-        rule={SCALE}
-        value={placement.scale}
-      />
-      <PositionSetting
-        editor={editor}
-        fallback={undefined}
-        name={name}
-        path={[...path, "position"]}
-        position={placement.position}
-      />
-      <Select
-        aria-label={`${name} rotation`}
-        disabled={disabled}
-        onValueChange={(transform) => {
-          set(
-            [...path, "transform"],
-            transform === "normal" ? undefined : transform,
-          );
-        }}
-        options={ROTATIONS}
-        size="sm"
-        value={placement.transform}
-      />
+      <Field label="On">
+        <Switch
+          aria-labelledby={nameId}
+          checked={placement.enabled}
+          disabled={disabled}
+          label={placement.enabled ? "On" : "Off"}
+          onCheckedChange={(enabled) => {
+            set([...path, "enabled"], enabled ? undefined : false);
+          }}
+        />
+      </Field>
+      <Field label="Scale">
+        <NumberSetting
+          editor={editor}
+          fallback={1}
+          label={`${name} scale`}
+          path={[...path, "scale"]}
+          rule={SCALE}
+          value={placement.scale}
+        />
+      </Field>
+      <Field label="Position">
+        <PositionSetting
+          editor={editor}
+          fallback={undefined}
+          name={name}
+          path={[...path, "position"]}
+          position={placement.position}
+        />
+      </Field>
+      <Field label="Rotation">
+        <Select
+          aria-label={`${name} rotation`}
+          disabled={disabled}
+          onValueChange={(transform) => {
+            set(
+              [...path, "transform"],
+              transform === "normal" ? undefined : transform,
+            );
+          }}
+          options={ROTATIONS}
+          size="sm"
+          value={placement.transform}
+        />
+      </Field>
+      <Field label="HDR">
+        <Switch
+          checked={placement.hdr === true}
+          disabled={disabled}
+          hideLabel
+          label={`${name} HDR`}
+          onCheckedChange={(hdr) => {
+            set([...path, "hdr"], hdr ? true : undefined);
+          }}
+        />
+      </Field>
+      {placement.hdr === true ? (
+        <Field label="Everyday brightness">
+          <span className={nitsStyles}>
+            <NumberSetting
+              editor={editor}
+              fallback={DEFAULT_SDR_WHITE}
+              label={`${name} everyday brightness`}
+              path={[...path, "sdr_white"]}
+              rule={NITS}
+              value={placement.sdr_white ?? DEFAULT_SDR_WHITE}
+            />
+            nits
+          </span>
+        </Field>
+      ) : (
+        <span className={emptyCellStyles} />
+      )}
       {!disabled && (
         <Button
           label={`Remove ${name}`}
@@ -274,6 +337,24 @@ const PlacementRow = ({ editor, path, placement }: PlacementRowProps) => {
     </div>
   );
 };
+
+type FieldProps = {
+  children: ReactNode;
+  label: string;
+};
+
+/**
+ * One setting in a monitor's row: its grid cell, or on a narrow card a line
+ * with its label, which the grid's headings otherwise give.
+ */
+const Field = ({ children, label }: FieldProps) => (
+  <div className={fieldStyles}>
+    <span aria-hidden className={fieldLabelStyles}>
+      {label}
+    </span>
+    <div className={fieldControlStyles}>{children}</div>
+  </div>
+);
 
 type DescribedDisplayProps = {
   editor: ConfigEditor;
@@ -482,12 +563,69 @@ const NumberInput = ({
 
 const hintStyles = css({ color: "muted", fontSize: "xs", margin: 0 });
 
-const placementStyles = grid({
+/** Below this width, each monitor's settings stack into labeled lines. */
+const NARROW = "@container (max-width: 44rem)";
+
+const PLACEMENT_COLUMNS =
+  "minmax(0, 1fr) auto {spacing.16} {spacing.16} {spacing.16} {spacing.28} auto {spacing.28} {spacing.8}";
+
+const placementsStyles = flex({
+  containerType: "inline-size",
+  direction: "column",
+  gap: 3,
+});
+
+const headingsStyles = grid({
+  [NARROW]: { display: "none" },
   alignItems: "center",
   columnGap: 2,
-  gridTemplateColumns:
-    "minmax(0, 1fr) auto {spacing.16} {spacing.16} {spacing.16} {spacing.28} {spacing.8}",
+  gridTemplateColumns: PLACEMENT_COLUMNS,
 });
+
+const placementStyles = grid({
+  [NARROW]: {
+    borderBlockEnd: "1px solid {colors.border}",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    paddingBlockEnd: 3,
+    rowGap: 2.5,
+  },
+  alignItems: "center",
+  columnGap: 2,
+  gridTemplateColumns: PLACEMENT_COLUMNS,
+});
+
+const fieldStyles = css({
+  [NARROW]: {
+    alignItems: "center",
+    display: "flex",
+    gap: 2,
+    gridColumn: "1 / -1",
+    gridRow: "auto",
+    justifyContent: "space-between",
+  },
+  display: "contents",
+});
+
+const fieldLabelStyles = css({
+  [NARROW]: { display: "inline" },
+  color: "muted",
+  display: "none",
+  fontSize: "sm",
+});
+
+const fieldControlStyles = css({
+  [NARROW]: { display: "flex", gap: 2 },
+  display: "contents",
+});
+
+const nitsStyles = flex({
+  align: "center",
+  color: "muted",
+  fontSize: "xs",
+  gap: 1.5,
+});
+
+const emptyCellStyles = css({ [NARROW]: { display: "none" } });
 
 const describedStyles = grid({
   alignItems: "center",
