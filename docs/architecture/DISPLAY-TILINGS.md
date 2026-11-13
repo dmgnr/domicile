@@ -67,6 +67,13 @@ A layer under a surface keeps its display tilings rastered
 (`DomicileKeepsDisplayTilings`), so leaving the surface needs no rebuild. A
 moving layer draws from its tilings.
 
+## Images drawn nearest-neighbor
+
+A display tiling downscales every image in its layer. One drawn
+nearest-neighbor keeps or drops whole source columns, so thin strokes break
+up. The PDF viewer drew its page bitmap that way; patch 0210 draws it
+filtered (`guard-pdf-scaled-text.sh`).
+
 ## Tile memory
 
 - **Upstream budget** (`GetGpuMemoryPolicy`): 1152 MB scaled by the widget's

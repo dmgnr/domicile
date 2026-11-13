@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a PDF drawn smaller keeps its thin strokes
+
+The viewer renders a page bitmap at the device scale and draws it into the
+page with nearest-neighbor sampling, which is right only at 1:1. On a desk
+with monitors at several densities, cc rasters the page smaller for each
+monitor below the highest one (patch 0072), so the bitmap is downscaled:
+nearest-neighbor keeps whole source columns or drops them, and thin strokes
+in text break up.
+
+- `PdfViewWebPlugin::Paint` draws the snapshot with linear, mipmapped
+  sampling. A downscale filters; at 1:1 the pixels are the same.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`. `guard-pdf-scaled-text.sh` checks it.
+---
+ pdf/pdf_view_web_plugin.cc | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index 81f6d1e..1dccd9d 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -104,6 +104,7 @@
+ #include "third_party/skia/include/core/SkImageInfo.h"
+ #include "third_party/skia/include/core/SkRect.h"
+ #include "third_party/skia/include/core/SkRefCnt.h"
++#include "third_party/skia/include/core/SkSamplingOptions.h"
+ #include "third_party/skia/include/core/SkSize.h"
+ #include "ui/base/cursor/cursor.h"
+ #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
+@@ -713,7 +714,14 @@ void PdfViewWebPlugin::Paint(cc::PaintCanvas* canvas, const gfx::Rect& rect) {
+     canvas->scale(snapshot_scale_, snapshot_scale_);
+   }
+ 
+-  canvas->drawImage(snapshot_, 0, 0);
++  // Domicile's engine fork: cc rasters this page smaller than the snapshot
++  // on a monitor below the desk's highest density. Nearest-neighbor sampling
++  // drops whole columns there, and thin strokes in text with them; a
++  // mipmapped, filtered downscale keeps them. At 1:1 it draws the same pixels.
++  canvas->drawImage(snapshot_, 0, 0,
++                    SkSamplingOptions(SkFilterMode::kLinear,
++                                      SkMipmapMode::kLinear),
++                    nullptr);
+ 
+ #if BUILDFLAG(ENABLE_PDF_INK2)
+   if (!ink_module_) {
+-- 
+2.43.0
+

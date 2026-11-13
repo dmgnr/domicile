@@ -117,6 +117,7 @@ TOGETHER=(
   guard-app-only-in-shell
   guard-domicile-fetch
   guard-shell-pdf
+  guard-pdf-scaled-text
   guard-app-module
   guard-video-codecs
   guard-browser-brand
@@ -140,6 +141,7 @@ ONCE=(
   guard-desktop-geometry
   guard-domicile-fetch
   guard-held-moments
+  guard-pdf-scaled-text
   guard-portal-requests
   guard-shell-handover
   guard-shell-pdf
