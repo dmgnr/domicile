@@ -42,6 +42,8 @@ if ((${#patches[@]} == 0)); then
   echo "no patch files found in $SERIES/patches" >&2
   exit 1
 fi
+git -C "$CHECKOUT" config user.name "Domicile Thorium POC"
+git -C "$CHECKOUT" config user.email "domicile-thorium-poc@invalid.example"
 for patch in "${patches[@]}"; do
   echo "Applying $(basename "$patch")"
   if ! git -C "$CHECKOUT" am --keep-non-patch "$patch"; then

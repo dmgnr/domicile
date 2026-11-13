@@ -22,7 +22,13 @@ git -C "$TMP/base" add file.txt
 git -C "$TMP/base" commit -qm change
 git -C "$TMP/base" format-patch -1 --stdout > "$TMP/series/patches/0001.patch"
 git -C "$TMP/base" checkout -q "$BASE"
-"$SCRIPT" --fixture "$TMP/series" "$TMP/base" >"$TMP/ok.log" 2>&1 || fail "applicable fixture patch failed"
+git -C "$TMP/base" config --unset user.email
+git -C "$TMP/base" config --unset user.name
+if HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 "$SCRIPT" --fixture "$TMP/series" "$TMP/base" >"$TMP/ok.log" 2>&1; then
+  :
+else
+  fail "applicable fixture patch failed"
+fi
 grep -q '^after$' "$TMP/base/file.txt" || fail "fixture patch did not apply"
 
 # A failing first patch exits nonzero and leaves actionable diagnostics.
