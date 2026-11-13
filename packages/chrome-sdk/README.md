@@ -146,14 +146,18 @@ bun run generate    # after changing the IDL or domicile-config
 - `packages/domicile-engine/tests/test-host-types-match-the-idl.sh` fails when the file is stale.
 
 `config.schema.json` is the JSON Schema `schemars` derives from
-`domicile-config`'s Rust types, and `src/config.ts` is generated from it, with
-the Rust doc comments as its docs. `bun run generate` writes both and needs
-`cargo`.
+`domicile-config`'s Rust types. Generated from it, with the Rust doc comments
+as their docs:
+
+- `src/config.ts`: the config's types.
+- `src/config-schema.ts`: a Zod schema that reads a config as the compositor
+  does, defaults filled in. Read a config with it, never a copy of the schema.
+
+`bun run generate` writes all three and needs `cargo`.
 
 - `codegen/json-schema.ts` parses the schema subset `schemars` emits. It
   throws on a keyword outside it.
-- `tests/test-config-types-match-the-schema.sh` fails when either file is
-  stale.
+- `tests/test-config-types-match-the-schema.sh` fails when any file is stale.
 
 ### Dependencies
 

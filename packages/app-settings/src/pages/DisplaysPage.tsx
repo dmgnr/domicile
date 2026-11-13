@@ -11,7 +11,7 @@ import { flex, grid } from "../../styled-system/patterns";
 import { AddRow } from "../AddRow";
 import type { ConfigPath } from "../config-document";
 import type { ConfigEditor, ConfigPageProps } from "../config-editor";
-import type { Display, Placement, Profile, TRANSFORMS } from "../config-schema";
+import type { Display, Placement, Profile, Transform } from "../config-schema";
 import type { NumberRule } from "../number-text";
 import { parseNumber } from "../number-text";
 import { Page } from "../Page";
@@ -25,7 +25,7 @@ const ROTATIONS = [
   { label: "270°", value: "rotate-270" },
 ] as const satisfies readonly {
   label: string;
-  value: (typeof TRANSFORMS)[number];
+  value: Transform;
 }[];
 
 const WHOLE = { integer: true, positive: false } as const;

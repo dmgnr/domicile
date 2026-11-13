@@ -5,146 +5,57 @@ import { readSettings } from "./config-schema";
 
 describe(readSettings, () => {
   it("fills in what a config leaves out as the compositor does", () => {
-    expect(readSettings({})).toEqual(
-      Ok({
-        extensions: { settings: {}, unpacked: [], web_store: [] },
-        files: { omit: ["**/.*"] },
-        idle: {},
-        input: {
-          keyboard: {
-            keymaps: [],
-            repeat: { delay_ms: 500, rate: 25 },
-            xkb_layout: "us",
-            xkb_model: "",
-            xkb_options: [],
-            xkb_rules: "",
-            xkb_variant: "",
-          },
-          pointers: [],
-        },
-        lock: {},
-        lockdown: {
-          disable_application_handlers: false,
-          disable_camera: false,
-          disable_location: false,
-          disable_microphone: false,
-          disable_printing: false,
-          disable_save_to_disk: false,
-          disable_sound_output: false,
-        },
-        output: { displays: [], max_scale: 2, profiles: [] },
-        shell_options: {},
-        startup: { commands: [] },
-        theme: { contrast: "normal", mode: "dark", reduced_motion: false },
-      }),
+    const read = readSettings({});
+    expect(read.map(({ files }) => files.omit)).toEqual(Ok(["**/.*"]));
+    expect(read.map(({ input }) => input.keyboard.repeat)).toEqual(
+      Ok({ delay_ms: 500, rate: 25 }),
+    );
+    expect(read.map(({ idle }) => idle)).toEqual(
+      Ok({ blank_after_seconds: undefined, lock_after_seconds: undefined }),
     );
   });
 
-  it("reads displays and profiles with their own defaults", () => {
-    const settings = readSettings({
-      output: {
-        displays: [{ name: "left", size: [1920, 1080] }],
-        profiles: [{ displays: [{ display: "drm-1" }], name: "desk" }],
+  it("reads every key the compositor reads, such as mouse, touchpad and terminal", () => {
+    const config = {
+      input: {
+        mouse: { natural_scroll: true },
+        touchpad: { tap: false },
       },
-    });
-    expect(settings.map((read) => read.output)).toEqual(
-      Ok({
-        displays: [
-          { name: "left", position: [0, 0], scale: 1, size: [1920, 1080] },
-        ],
-        max_scale: 2,
-        profiles: [
-          {
-            displays: [
-              {
-                display: "drm-1",
-                enabled: true,
-                scale: 1,
-                transform: "normal",
-              },
-            ],
-            name: "desk",
-          },
-        ],
-      }),
-    );
-  });
-
-  it("reads a profile's refresh rate and adaptive sync, which Settings does not edit", () => {
-    const placement = {
-      adaptive_sync: true,
-      display: "drm-1",
-      enabled: true,
-      refresh: 120,
-      scale: 1,
-      transform: "normal" as const,
+      terminal: ["foot"],
     };
-    const profiles = [{ displays: [placement], name: "desk" }];
-    expect(
-      readSettings({ output: { profiles } }).map(
-        (read) => read.output.profiles,
-      ),
-    ).toEqual(Ok(profiles));
-  });
-
-  it("reads bound pointers, which Settings does not edit", () => {
-    const pointers = [{ device: "QEMU QEMU USB Tablet", display: "Virtual-1" }];
-    expect(
-      readSettings({ input: { pointers } }).map((read) => read.input.pointers),
-    ).toEqual(Ok(pointers));
-  });
-
-  it("reads a cursor and fonts, which Settings does not edit", () => {
-    const theme = {
-      cursor_hide_after_ms: 1000,
-      cursor_hide_when_typing: true,
-      cursor_size: 32,
-      cursor_theme: "Bibata-Modern-Ice",
-      font_name: "Inter 11",
-      monospace_font_name: "Iosevka 12",
-    };
-    expect(readSettings({ theme }).map((read) => read.theme)).toEqual(
-      Ok({ ...theme, contrast: "normal", mode: "dark", reduced_motion: false }),
+    const read = readSettings(config);
+    expect(read.map(({ input }) => input.mouse.natural_scroll)).toEqual(
+      Ok(true),
     );
-    expect(readSettings({ theme: { cursor_size: 0 } }).isErr()).toBe(true);
-    expect(readSettings({ theme: { cursor_hide_after_ms: 0 } }).isErr()).toBe(
-      true,
-    );
-  });
-
-  it("reads a cursor theme per mode", () => {
-    const cursor_theme = { dark: "Numix-Cursor", light: "Numix-Cursor-Light" };
-    expect(
-      readSettings({ theme: { cursor_theme } }).map((read) => read.theme),
-    ).toEqual(
-      Ok({
-        contrast: "normal",
-        cursor_theme,
-        mode: "dark",
-        reduced_motion: false,
-      }),
-    );
-    expect(
-      readSettings({ theme: { cursor_theme: { light: "Adwaita" } } }).isErr(),
-    ).toBe(true);
-  });
-
-  it("reads the sites to force dark, which Settings does not edit", () => {
-    const force_dark = ["mail.google.com"];
-    expect(
-      readSettings({ theme: { force_dark } }).map((read) => read.theme),
-    ).toEqual(
-      Ok({
-        contrast: "normal",
-        force_dark,
-        mode: "dark",
-        reduced_motion: false,
-      }),
+    expect(read.map(({ input }) => input.touchpad.tap)).toEqual(Ok(false));
+    expect(read.map(({ terminal }) => ({ terminal }))).toEqual(
+      Ok({ terminal: ["foot"] }),
     );
   });
 
   it("says where a config does not fit", () => {
     expect(readSettings({ theme: { mode: "system" } }).isErr()).toBe(true);
     expect(readSettings({ theme: { tint: "red" } }).isErr()).toBe(true);
+  });
+
+  it("refuses numbers the compositor refuses", () => {
+    for (const config of [
+      { idle: { blank_after_seconds: 0 } },
+      { theme: { cursor_size: 0 } },
+      { theme: { cursor_hide_after_ms: 2 ** 32 } },
+      { output: { max_scale: 0 } },
+      {
+        output: {
+          profiles: [{ displays: [{ display: "a", scale: 0 }], name: "p" }],
+        },
+      },
+      {
+        output: {
+          displays: [{ name: "a", position: [2 ** 31, 0], size: [1, 1] }],
+        },
+      },
+    ]) {
+      expect(readSettings(config).isErr()).toBe(true);
+    }
   });
 });

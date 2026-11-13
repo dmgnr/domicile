@@ -72,7 +72,7 @@
           "default": 1,
           "description": "The `wl_output` scale for clients on this display.\n\n`output.max_scale` does not apply to described displays.",
           "format": "uint32",
-          "minimum": 0,
+          "minimum": 1,
           "type": "integer"
         },
         "size": {
@@ -154,17 +154,20 @@
         "refresh": {
           "default": null,
           "description": "The refresh rate to scan out, in Hz, such as `59.94` or `120`. The\nmonitor's advertised rate nearest it is used, at `mode` or else the\nnative size.\n\nAbsent means the native mode's rate when `mode` is absent or the\nnative size, and otherwise the highest rate the monitor offers at\n`mode`, as sway picks.",
+          "exclusiveMinimum": 0.0,
           "format": "double",
           "type": ["number", "null"]
         },
         "scale": {
           "default": 1.0,
           "description": "Device pixels per logical pixel.\n\nFractional, because real scales are: 1.5 on a 2880x1920 panel gives a\n1920x1280 desktop. This differs from the integer `wl_output.scale`; the\ncompositor's `Screens` advertises that, and `xdg_output` carries the\nlogical size.",
+          "exclusiveMinimum": 0.0,
           "format": "double",
           "type": "number"
         },
         "transform": {
           "$ref": "#/$defs/Transform",
+          "default": "normal",
           "description": "Which way up the monitor is."
         }
       },
@@ -194,6 +197,7 @@
               "type": "null"
             }
           ],
+          "default": null,
           "description": "Which of the sites it asks for it runs on. Chrome's default is all."
         },
         "user_scripts": {
@@ -212,6 +216,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/ExtensionSettings"
           },
+          "default": {},
           "description": "Each extension's settings, by id, as chrome://extensions has them. A\nsetting left out is the user's to change in the Settings app; one\nremoved from here goes back to Chrome's default.",
           "type": "object"
         },
@@ -239,7 +244,8 @@
       "description": "What the file index is built from.",
       "properties": {
         "omit": {
-          "$ref": "#/$defs/FilesOmit"
+          "$ref": "#/$defs/FilesOmit",
+          "default": ["**/.*"]
         }
       },
       "type": "object"
@@ -259,14 +265,14 @@
           "default": null,
           "description": "Seconds without input before the screens go dark.\n\nAbsent means never. Zero is refused.",
           "format": "uint64",
-          "minimum": 0,
+          "minimum": 1,
           "type": ["integer", "null"]
         },
         "lock_after_seconds": {
           "default": null,
           "description": "Seconds without input before the desktop locks.\n\nAbsent means the desktop locks only when its shell asks. Zero is\nrefused.",
           "format": "uint64",
-          "minimum": 0,
+          "minimum": 1,
           "type": ["integer", "null"]
         }
       },
@@ -277,7 +283,19 @@
       "description": "Input-device settings.",
       "properties": {
         "keyboard": {
-          "$ref": "#/$defs/KeyboardConfig"
+          "$ref": "#/$defs/KeyboardConfig",
+          "default": {
+            "keymaps": [],
+            "repeat": {
+              "delay_ms": 500,
+              "rate": 25
+            },
+            "xkb_layout": "us",
+            "xkb_model": "",
+            "xkb_options": [],
+            "xkb_rules": "",
+            "xkb_variant": ""
+          }
         },
         "mouse": {
           "$ref": "#/$defs/MouseConfig",
@@ -290,6 +308,7 @@
           }
         },
         "pointers": {
+          "default": [],
           "description": "Tablets and touchscreens, each bound to the display it covers.\n\nRead on a tty only, on every hotplug. An unbound one covers no\ndisplay. See `docs/DISPLAYS.md#tablets-and-touchscreens`.",
           "items": {
             "$ref": "#/$defs/PointerConfig"
@@ -324,6 +343,7 @@
       "description": "Keyboard settings, named after SwayWM's `xkb_*` options.\n\nThe string fields go to xkb verbatim, so sway's multi-layout form\n(`xkb_layout = \"us,de\"`) works. Empty `xkb_rules` and `xkb_model` use the\nlibxkbcommon defaults. The default layout is `us`.\n\nTo switch between layouts, list them in `keymaps` instead.",
       "properties": {
         "keymaps": {
+          "default": [],
           "description": "Keymaps to switch between, the first the one the desktop starts on.\n\nEach is a whole keymap: an entry's unset fields take the defaults, not\nthe fields above, which must stay unset. The shell switches with\n`keymap next` or `keymap <name>`. See `docs/SHELL-CONFIG.md`.",
           "items": {
             "$ref": "#/$defs/Keymap"
@@ -332,6 +352,10 @@
         },
         "repeat": {
           "$ref": "#/$defs/KeyRepeat",
+          "default": {
+            "delay_ms": 500,
+            "rate": 25
+          },
           "description": "How a held key repeats, in native windows and in pages."
         },
         "xkb_layout": {
@@ -505,6 +529,7 @@
       "description": "Output settings.",
       "properties": {
         "displays": {
+          "default": [],
           "description": "The displays that make up the desktop.\n\nEmpty means one output sized to Domicile's own window.",
           "items": {
             "$ref": "#/$defs/DisplayConfig"
@@ -515,10 +540,11 @@
           "default": 2,
           "description": "The highest `wl_output` scale to advertise.\n\nLimits cost: a client at scale N renders N² times the pixels. `1` turns\nscaling off. Applies only while `displays` is empty.",
           "format": "uint32",
-          "minimum": 0,
+          "minimum": 1,
           "type": "integer"
         },
         "profiles": {
+          "default": [],
           "description": "Placements for real monitors, matched against what is connected.\n\nRe-read on every hotplug. Empty leaves the monitors where the engine\nplaced them. See `docs/DISPLAYS.md#profiles`.",
           "items": {
             "$ref": "#/$defs/Profile"
@@ -643,16 +669,18 @@
               "type": "null"
             }
           ],
+          "default": null,
           "description": "The color clients highlight with, or their own when unset."
         },
         "contrast": {
-          "$ref": "#/$defs/Contrast"
+          "$ref": "#/$defs/Contrast",
+          "default": "normal"
         },
         "cursor_hide_after_ms": {
           "default": null,
           "description": "Hides the engine's pointer after this many milliseconds without\npointer input. Unset never hides it. Zero is refused.",
           "format": "uint32",
-          "minimum": 0,
+          "minimum": 1,
           "type": ["integer", "null"]
         },
         "cursor_hide_when_typing": {
@@ -665,7 +693,7 @@
           "description": "The cursor size in logical pixels, for clients and the engine's\npointer. Unset leaves clients their own. Zero is refused.",
           "format": "uint16",
           "maximum": 65535,
-          "minimum": 0,
+          "minimum": 1,
           "type": ["integer", "null"]
         },
         "cursor_theme": {
@@ -677,6 +705,7 @@
               "type": "null"
             }
           ],
+          "default": null,
           "description": "The XCursor theme for clients and the engine's pointer, in both modes\nor one per mode. Unset leaves clients their own."
         },
         "font_name": {
@@ -698,7 +727,8 @@
           "type": ["string", "null"]
         },
         "mode": {
-          "$ref": "#/$defs/ThemeMode"
+          "$ref": "#/$defs/ThemeMode",
+          "default": "dark"
         },
         "monospace_font_name": {
           "default": null,
@@ -855,25 +885,93 @@
       "type": ["string", "null"]
     },
     "extensions": {
-      "$ref": "#/$defs/ExtensionsConfig"
+      "$ref": "#/$defs/ExtensionsConfig",
+      "default": {
+        "settings": {},
+        "unpacked": [],
+        "web_store": []
+      }
     },
     "files": {
-      "$ref": "#/$defs/FilesConfig"
+      "$ref": "#/$defs/FilesConfig",
+      "default": {
+        "omit": ["**/.*"]
+      }
     },
     "idle": {
-      "$ref": "#/$defs/IdleConfig"
+      "$ref": "#/$defs/IdleConfig",
+      "default": {
+        "blank_after_seconds": null,
+        "lock_after_seconds": null
+      }
     },
     "input": {
-      "$ref": "#/$defs/InputConfig"
+      "$ref": "#/$defs/InputConfig",
+      "default": {
+        "keyboard": {
+          "keymaps": [],
+          "repeat": {
+            "delay_ms": 500,
+            "rate": 25
+          },
+          "xkb_layout": "us",
+          "xkb_model": "",
+          "xkb_options": [],
+          "xkb_rules": "",
+          "xkb_variant": ""
+        },
+        "mouse": {
+          "accel_profile": "adaptive",
+          "middle_emulation": false,
+          "natural_scroll": false,
+          "scroll_factor": 1.0,
+          "speed": 0.0
+        },
+        "pointers": [],
+        "touchpad": {
+          "accel_profile": "adaptive",
+          "click_method": "default",
+          "disable_while_typing": "enabled",
+          "drag_lock": false,
+          "middle_emulation": false,
+          "natural_scroll": false,
+          "scroll_acceleration": true,
+          "scroll_factor": 1.0,
+          "scroll_method": "default",
+          "speed": 0.0,
+          "tap": true,
+          "tap_button_map": "lrm",
+          "tap_drag": true,
+          "typing_pause_ms": 200,
+          "typing_repeat_pause_ms": 500
+        }
+      }
     },
     "lock": {
-      "$ref": "#/$defs/LockConfig"
+      "$ref": "#/$defs/LockConfig",
+      "default": {
+        "pam_service": null
+      }
     },
     "lockdown": {
-      "$ref": "#/$defs/LockdownConfig"
+      "$ref": "#/$defs/LockdownConfig",
+      "default": {
+        "disable_application_handlers": false,
+        "disable_camera": false,
+        "disable_location": false,
+        "disable_microphone": false,
+        "disable_printing": false,
+        "disable_save_to_disk": false,
+        "disable_sound_output": false
+      }
     },
     "output": {
-      "$ref": "#/$defs/OutputConfig"
+      "$ref": "#/$defs/OutputConfig",
+      "default": {
+        "displays": [],
+        "max_scale": 2,
+        "profiles": []
+      }
     },
     "shell": {
       "default": null,
@@ -887,7 +985,10 @@
       "type": "object"
     },
     "startup": {
-      "$ref": "#/$defs/StartupConfig"
+      "$ref": "#/$defs/StartupConfig",
+      "default": {
+        "commands": []
+      }
     },
     "terminal": {
       "default": null,
@@ -898,7 +999,21 @@
       "type": ["array", "null"]
     },
     "theme": {
-      "$ref": "#/$defs/ThemeConfig"
+      "$ref": "#/$defs/ThemeConfig",
+      "default": {
+        "accent_color": null,
+        "contrast": "normal",
+        "cursor_hide_after_ms": null,
+        "cursor_hide_when_typing": false,
+        "cursor_size": null,
+        "cursor_theme": null,
+        "font_name": null,
+        "force_dark": [],
+        "icon_theme": null,
+        "mode": "dark",
+        "monospace_font_name": null,
+        "reduced_motion": false
+      }
     }
   },
   "title": "Config",

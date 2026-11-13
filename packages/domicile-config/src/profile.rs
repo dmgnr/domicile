@@ -10,14 +10,14 @@
 //! set is exactly the connected set wins. See `docs/DISPLAYS.md#profiles`.
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
 
 /// One arrangement of monitors, and where each goes.
 ///
 /// Applies when the displays it names are exactly the connected ones.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     /// The profile's name, unique in the config. The log prints it when the
@@ -95,7 +95,7 @@ impl Profile {
 /// One display of a profile: which monitor, and what to do with it.
 ///
 /// Every field but `display` defaults to leaving the monitor as it is.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayPlacement {
     /// The connected display this entry places, matched by exact name.
@@ -128,6 +128,7 @@ pub struct DisplayPlacement {
     /// native size, and otherwise the highest rate the monitor offers at
     /// `mode`, as sway picks.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub refresh: Option<f64>,
     /// Whether to scan out with a variable refresh rate (adaptive sync,
     /// FreeSync, G-Sync Compatible), so a frame that runs late is shown as
@@ -153,6 +154,7 @@ pub struct DisplayPlacement {
     /// compositor's `Screens` advertises that, and `xdg_output` carries the
     /// logical size.
     #[serde(default = "unscaled")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub scale: f64,
     /// Which way up the monitor is.
     #[serde(default)]
@@ -235,7 +237,7 @@ impl DisplayPlacement {
 /// Which way up a monitor is, named for the matching `wl_output.transform`.
 ///
 /// Rotations only; nothing needs flips.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum Transform {
     /// The connector's native orientation.
     #[default]

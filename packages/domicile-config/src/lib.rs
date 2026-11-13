@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// An error loading a config.
 ///
@@ -67,7 +67,7 @@ pub enum ConfigError {
 /// To switch between layouts, list them in `keymaps` instead.
 // `PartialEq` lets a reload detect a change; see the compositor's
 // `Restatement`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyboardConfig {
     pub xkb_rules: String,
@@ -86,7 +86,7 @@ pub struct KeyboardConfig {
 }
 
 /// How a held key repeats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyRepeat {
     /// Milliseconds a key is held before it repeats.
@@ -195,7 +195,7 @@ impl KeyboardConfig {
 /// One keymap the desktop can switch to, in `input.keyboard.keymaps`.
 ///
 /// The `xkb_*` fields are as in `input.keyboard`, with the same defaults.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Keymap {
     /// What the shell shows and `keymap <name>` selects, such as `dvp`.
@@ -249,7 +249,7 @@ impl Keymap {
 }
 
 /// Input-device settings.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct InputConfig {
     pub keyboard: KeyboardConfig,
@@ -282,7 +282,7 @@ impl InputConfig {
 /// A nested compositor has no monitors to enumerate. Each display becomes a
 /// `wl_output` and a region of the chrome page, which the shell addresses by
 /// `name`. `position` and `size` are logical units.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayConfig {
     /// The name the chrome and the compositor use for this display.
@@ -299,6 +299,7 @@ pub struct DisplayConfig {
     ///
     /// `output.max_scale` does not apply to described displays.
     #[serde(default = "one")]
+    #[schemars(range(min = 1))]
     pub scale: u32,
     /// Width and height in logical units. The `wl_output` mode is this times
     /// `scale`.
@@ -397,7 +398,7 @@ fn overlap((start, end): (i64, i64), (other_start, other_end): (i64, i64)) -> bo
 }
 
 /// Output settings.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct OutputConfig {
     /// The displays that make up the desktop.
@@ -408,6 +409,7 @@ pub struct OutputConfig {
     ///
     /// Limits cost: a client at scale N renders N² times the pixels. `1` turns
     /// scaling off. Applies only while `displays` is empty.
+    #[schemars(range(min = 1))]
     pub max_scale: u32,
     /// Placements for real monitors, matched against what is connected.
     ///
@@ -556,17 +558,19 @@ impl std::fmt::Display for Axis {
 /// The unit is in the key name because a generator writes this file.
 // `PartialEq` lets a reload detect a change; see the compositor's
 // `Restatement`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct IdleConfig {
     /// Seconds without input before the screens go dark.
     ///
     /// Absent means never. Zero is refused.
+    #[schemars(range(min = 1))]
     pub blank_after_seconds: Option<u64>,
     /// Seconds without input before the desktop locks.
     ///
     /// Absent means the desktop locks only when its shell asks. Zero is
     /// refused.
+    #[schemars(range(min = 1))]
     pub lock_after_seconds: Option<u64>,
 }
 
@@ -608,7 +612,7 @@ impl IdleConfig {
 /// could unlock it, until the file is added. See `docs/LOCK.md#verifiers`.
 // `PartialEq` lets a reload detect a change; see the compositor's
 // `Restatement`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct LockConfig {
     /// The PAM service the desk's user authenticates against.
@@ -646,7 +650,7 @@ impl LockConfig {
 /// There is no "follow the system" option: the chrome is the system, so there
 /// is nothing to follow. Clients follow this value through the settings
 /// portal; see the compositor's `portals::settings`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemeMode {
     /// Light text on a dark background, which the chrome is designed for.
@@ -662,7 +666,7 @@ pub enum ThemeMode {
 /// compositor's `portals::settings`.
 // `PartialEq` lets a reload detect a change; see the compositor's
 // `Restatement`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ThemeConfig {
     pub mode: ThemeMode,
@@ -679,9 +683,11 @@ pub struct ThemeConfig {
     pub cursor_theme: Option<CursorThemeName>,
     /// The cursor size in logical pixels, for clients and the engine's
     /// pointer. Unset leaves clients their own. Zero is refused.
+    #[schemars(range(min = 1))]
     pub cursor_size: Option<u16>,
     /// Hides the engine's pointer after this many milliseconds without
     /// pointer input. Unset never hides it. Zero is refused.
+    #[schemars(range(min = 1))]
     pub cursor_hide_after_ms: Option<u32>,
     /// Hides the engine's pointer on a typing key press, until the pointer is
     /// next used.
@@ -743,7 +749,7 @@ impl ThemeConfig {
 
 /// An XCursor theme's directory name, such as `Adwaita`, for both modes or
 /// for each.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum CursorThemeName {
     /// The same theme in both modes.
@@ -753,7 +759,7 @@ pub enum CursorThemeName {
 }
 
 /// A cursor theme's directory name for each mode.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PerModeCursorThemes {
     pub dark: String,
@@ -772,8 +778,8 @@ impl CursorThemeName {
 }
 
 /// An sRGB color, written `"#rrggbb"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(try_from = "String", into = "String")]
 #[schemars(schema_with = "accent_color_schema")]
 pub struct AccentColor(pub [u8; 3]);
 
@@ -791,6 +797,12 @@ impl TryFrom<String> for AccentColor {
     }
 }
 
+impl From<AccentColor> for String {
+    fn from(AccentColor([red, green, blue]): AccentColor) -> Self {
+        format!("#{red:02x}{green:02x}{blue:02x}")
+    }
+}
+
 /// The written form `AccentColor::try_from` accepts.
 fn accent_color_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
@@ -800,7 +812,7 @@ fn accent_color_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
 }
 
 /// How strongly clients set text and edges apart from their background.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Contrast {
     #[default]
@@ -815,7 +827,7 @@ pub enum Contrast {
 /// from the list uninstalls it.
 // `PartialEq` lets a reload detect a change; see the compositor's
 // `Restatement`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ExtensionsConfig {
     /// Chrome Web Store ids, installed from the Store and updated from it.
@@ -829,7 +841,7 @@ pub struct ExtensionsConfig {
 }
 
 /// One extension's settings. See [`ExtensionsConfig::settings`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ExtensionSettings {
     /// Runs in private windows. Chrome's default is no.
@@ -846,7 +858,7 @@ pub struct ExtensionSettings {
 
 /// Which sites an extension runs on: `"on_click"`, `"all_sites"`, or a list
 /// of hosts, each also as `*.host` for its subdomains.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SiteAccess {
     Mode(SiteAccessMode),
@@ -855,7 +867,7 @@ pub enum SiteAccess {
 }
 
 /// [`SiteAccess`] other than a list of hosts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SiteAccessMode {
     /// Only on a page where you click its button.
@@ -985,7 +997,7 @@ fn under_home(path: PathBuf, home: Option<&Path>) -> Result<PathBuf, ConfigError
 /// See `docs/SHELL-CONFIG.md#lockdown`.
 // `PartialEq` lets a reload detect a change; see the compositor's
 // `Restatement`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct LockdownConfig {
     pub disable_printing: bool,
@@ -998,7 +1010,7 @@ pub struct LockdownConfig {
 }
 
 /// The full compositor configuration.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub extensions: ExtensionsConfig,

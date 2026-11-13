@@ -6,12 +6,12 @@
 
 use globset::{Glob, GlobBuilder, GlobMatcher};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// What the file index is built from.
 // `PartialEq` lets a reload detect a change; see the compositor's
 // `Restatement`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct FilesConfig {
     pub omit: Omit,
@@ -29,8 +29,8 @@ pub struct FilesConfig {
 ///
 /// The default is `**/.*`, which omits hidden paths. A configured list
 /// replaces the default.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(try_from = "Vec<String>")]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(try_from = "Vec<String>", into = "Vec<String>")]
 // Renamed in the schema so the generated TypeScript does not shadow `Omit`.
 #[schemars(with = "Vec<String>", rename = "FilesOmit")]
 pub struct Omit {
@@ -38,6 +38,12 @@ pub struct Omit {
     /// same paths compare unequal, which costs one extra walk on reload.
     written: Vec<String>,
     rules: Vec<Rule>,
+}
+
+impl From<Omit> for Vec<String> {
+    fn from(omit: Omit) -> Self {
+        omit.written
+    }
 }
 
 /// One pattern, compiled.
