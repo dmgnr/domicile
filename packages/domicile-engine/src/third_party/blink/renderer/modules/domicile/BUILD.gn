@@ -52,6 +52,8 @@ blink_modules_sources("domicile") {
     "domicile_notification.h",
     "domicile_notification_action.cc",
     "domicile_notification_action.h",
+    "domicile_picture_in_picture_video.cc",
+    "domicile_picture_in_picture_video.h",
     "domicile_tray_item.cc",
     "domicile_tray_item.h",
     "domicile_window.cc",

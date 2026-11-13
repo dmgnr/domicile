@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Fri, 13 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the shell draws a video in picture-in-picture
+
+Chrome floats a video in picture-in-picture in a window of its own, with
+its own controls, so patch 0183 turned it off. The shell draws it now:
+
+- `chrome_content_browser_client.cc`: a video's window is
+  domicile::CreateVideoPictureInPictureWindow, which lists the video for
+  the shell, and picture-in-picture is on again. Payment requests stay
+  off.
+- `chrome_browser_interface_binders.cc`: PictureInPictureVideos is bound
+  for the shell's document only, as Downloads is: a page that could reach
+  it could show any page's video and pause it.
+- Blink builds the video interface that
+  `domicile.pictureInPictureVideos` lists, and its action enum.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../chrome_browser_interface_binders.cc        | 18 ++++++++++++++++++
+ .../browser/chrome_content_browser_client.cc   | 17 +++++++----------
+ .../renderer/bindings/generated_in_modules.gni |  4 ++++
+ .../blink/renderer/bindings/idl_in_modules.gni |  1 +
+ 4 files changed, 30 insertions(+), 10 deletions(-)
+
+diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
+index 9ea049d..96576bc 100644
+--- a/chrome/browser/chrome_browser_interface_binders.cc
++++ b/chrome/browser/chrome_browser_interface_binders.cc
+@@ -10,6 +10,7 @@
+ #include "chrome/browser/domicile/domicile_cast_sinks.h"
+ #include "chrome/browser/domicile/domicile_downloads.h"
+ #include "chrome/browser/domicile/domicile_extension_tray.h"
++#include "chrome/browser/domicile/domicile_picture_in_picture.h"
+ #include "chrome/browser/domicile/domicile_pointer_warp.h"
+ #include "chrome/browser/domicile/domicile_shell_fetch.h"
+ #include "chrome/browser/domicile/domicile_tab_helpers.h"
+@@ -701,6 +702,23 @@ void PopulateChromeFrameBinders(
+         domicile::BindDownloads(frame, std::move(receiver));
+       }));
+ 
++  // Domicile's engine fork: the videos in picture-in-picture, for the shell
++  // to draw.
++  //
++  // Gated at BIND time like the downloads: a page that could reach this could
++  // show any page's video and pause it.
++  map->Add<domicile::mojom::PictureInPictureVideos>(base::BindRepeating(
++      [](content::RenderFrameHost* frame,
++         mojo::PendingReceiver<domicile::mojom::PictureInPictureVideos>
++             receiver) {
++        if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
++          mojo::ReportBadMessage(
++              "domicile: only the shell may show picture-in-picture videos.");
++          return;
++        }
++        domicile::BindPictureInPictureVideos(frame, std::move(receiver));
++      }));
++
+   // Domicile's engine fork: GETs with the profile's cookies, for the shell.
+   //
+   // Gated at BIND time like the browser windows, and for their reason: a page
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 3fbbe3d..381e9a3 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/chrome_content_browser_client.h"
+ 
++#include "chrome/browser/domicile/domicile_picture_in_picture.h"
+ #include "components/domicile/browser/force_dark.h"
+ #include "components/domicile/browser/shell_source.h"
+ #include "components/domicile/browser/shell_url_loader_factory.h"
+@@ -5073,15 +5074,9 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
+       web_prefs->preferred_color_scheme ==
+           blink::mojom::PreferredColorScheme::kDark);
+ 
+-  // Domicile's engine fork: no picture-in-picture video. Chrome floats the
+-  // video in a window of its own with its own controls, which is not the
+-  // shell's, so a page sees picture-in-picture as off: its video controls
+-  // have no picture-in-picture button and requestPictureInPicture() is
+-  // refused. Document picture-in-picture is not this setting's; it opens a
+-  // window of the page's own, which a <webview> shows as a shell window.
+-  web_prefs->picture_in_picture_enabled = false;
+-  // Nor payment requests: the payment sheet is Chrome's too, and this
+-  // setting, not --disable-blink-features, is what Blink reads for it.
++  // Domicile's engine fork: no payment requests. The payment sheet is
++  // Chrome's, and this setting, not --disable-blink-features, is what Blink
++  // reads for it.
+   web_prefs->payment_request_enabled = false;
+ 
+   web_prefs->root_scrollbar_theme_color =
+@@ -7789,7 +7784,9 @@ bool ChromeContentBrowserClient::HandleExternalProtocol(
+ std::unique_ptr<content::VideoOverlayWindow>
+ ChromeContentBrowserClient::CreateWindowForVideoPictureInPicture(
+     content::VideoPictureInPictureWindowController* controller) {
+-  return CreateVideoOverlayWindow(controller);
++  // Domicile's engine fork: the shell draws a video in picture-in-picture.
++  // Chrome's window is a widget of its own with its own controls.
++  return domicile::CreateVideoPictureInPictureWindow(controller);
+ }
+ 
+ base::ScopedClosureRunner
+diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
+index 5a15b20..1125b33 100644
+--- a/third_party/blink/renderer/bindings/generated_in_modules.gni
++++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
+@@ -1570,6 +1570,8 @@ generated_enumeration_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_cursor_shape.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_download_state.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_download_state.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_picture_in_picture_action.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_picture_in_picture_action.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_theme.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_theme.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_action.cc",
+@@ -2361,6 +2363,8 @@ generated_interface_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_download.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_display.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_display.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_picture_in_picture_video.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_picture_in_picture_video.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_item.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
+index 521172a..ad367b6 100644
+--- a/third_party/blink/renderer/bindings/idl_in_modules.gni
++++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
+@@ -293,6 +293,7 @@ static_idl_files_in_modules = [
+   "//third_party/blink/renderer/modules/domicile/domicile_cast_sink.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_download.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_host.idl",
++  "//third_party/blink/renderer/modules/domicile/domicile_picture_in_picture_video.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_display.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_shortcut_event.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_shortcut_event_init.idl",

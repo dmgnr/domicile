@@ -7,12 +7,15 @@
 #include <memory>
 #include <optional>
 
+#include "components/domicile/mojom/picture_in_picture.mojom-blink.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/platform/graphics/external_surface_embedder.h"
 #include "third_party/blink/renderer/platform/graphics/surface_layer_bridge.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/events/types/native_pinch.h"
@@ -116,8 +119,16 @@ class CORE_EXPORT AppInputClient : public Supplement<LocalDOMWindow> {
 // `app-id` says which window. It is a reflected content attribute, the way
 // <img src> is, so setting it in HTML and setting it from script are the same
 // operation and re-point the element at another client's surface.
-class CORE_EXPORT HTMLAppElement final : public HTMLElement,
-                                         public WebSurfaceLayerBridgeObserver {
+//
+// `picture-in-picture` instead names a page's video in picture-in-picture, as
+// the desktop's `pictureInPictureVideos` lists it, and the element embeds the
+// surface the video's player draws to: the shell draws the window Chrome
+// floats. Nothing is sent to it; the pointer over it is the page's. See
+// components/domicile/mojom/picture_in_picture.mojom.
+class CORE_EXPORT HTMLAppElement final
+    : public HTMLElement,
+      public WebSurfaceLayerBridgeObserver,
+      public domicile::mojom::blink::PictureInPictureVideoSurface {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -159,6 +170,9 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
   // are its client's: see the .cc. Every other event is an HTMLElement's.
   void DefaultEventHandler(Event&) override;
 
+  // domicile::mojom::blink::PictureInPictureVideoSurface:
+  void SurfaceChanged(const viz::SurfaceId& surface_id) override;
+
   // WebSurfaceLayerBridgeObserver:
   void OnWebLayerUpdated() override;
   void RegisterContentsLayer(cc::Layer*) override;
@@ -181,6 +195,11 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
                   const std::optional<viz::SurfaceId>&);
   // The producer of the surface shown disconnected.
   void OnSurfaceLost();
+
+  // Ask the browser for the surface of the video `picture-in-picture` names,
+  // and embed each it sends. A no-op without a frame or without the
+  // attribute.
+  void ShowPictureInPicture();
 
   bool CreateLayer();
 
@@ -248,6 +267,14 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
 
   std::unique_ptr<::blink::SurfaceLayerBridge> surface_layer_bridge_;
   std::unique_ptr<ExternalSurfaceEmbedder> external_surface_embedder_;
+
+  // A picture-in-picture video's: the browser's list of them, and the
+  // surface of the one shown. Unbound for a window's <app>.
+  HeapMojoRemote<domicile::mojom::blink::PictureInPictureVideos>
+      picture_in_picture_;
+  HeapMojoReceiver<domicile::mojom::blink::PictureInPictureVideoSurface,
+                   HTMLAppElement>
+      picture_in_picture_surface_;
 };
 
 }  // namespace blink

@@ -399,6 +399,28 @@ fullscreen at once:
 Manganese fills the screen with the window while its page is fullscreen
 (`usePageFullscreen`).
 
+## Picture-in-picture video
+
+A page's `requestPictureInPicture()`, or its video controls' button, lists the
+video in `domicile.pictureInPicture.videos`; `change` fires as videos come and
+go, play and pause. Each has the browser window it plays in (`window`), its
+own size, which controls the site offers, and its length and position.
+
+Show one with `<app picture-in-picture="id">`: the element draws the page's
+own video, stretched to its box. Tell the page how big it is shown with
+`pictureInPicture.resize(id, width, height)`, and act on it with
+`pictureInPicture.act(id, action)`:
+
+- `"play"`, `"pause"`, `"previous-track"` and `"next-track"`, as the video's
+  controls do.
+- `"back-to-page"` ends picture-in-picture, leaves the video playing in its
+  page and asks for its window in front (`WEBVIEW_FOCUS_REQUEST_EVENT` on
+  its `<webview>`).
+- `"close"` ends it and pauses the video.
+
+Manganese floats each video over every window, in the bottom-right corner of
+its window's screen, with its controls under the pointer.
+
 ## Crashed pages
 
 A page whose renderer dies (a crash, a kill, out of memory) stays in its view

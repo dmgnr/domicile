@@ -65,6 +65,7 @@ import { screenOverviewsOf } from "@domicile-desktop/manganese-window-management
 import { sightOf } from "@domicile-desktop/manganese-window-management/overview/sight";
 import { steeredInOverview } from "@domicile-desktop/manganese-window-management/overview/steering";
 import { useOverviewPhase } from "@domicile-desktop/manganese-window-management/overview/useOverviewPhase";
+import { PictureInPictureFloats } from "@domicile-desktop/manganese-window-management/picture-in-picture/PictureInPictureFloats";
 import type { Geometry } from "@domicile-desktop/manganese-window-management/placement";
 import type {
   Focus,
@@ -84,10 +85,14 @@ import { useClientIcons } from "@domicile-desktop/manganese-window-management/us
 import { usePointerLock } from "@domicile-desktop/manganese-window-management/usePointerLock";
 import { usePointerWarp } from "@domicile-desktop/manganese-window-management/usePointerWarp";
 import { useWindows } from "@domicile-desktop/manganese-window-management/useWindows";
-import { WindowKind } from "@domicile-desktop/manganese-window-management/window";
+import {
+  browserWindowId,
+  WindowKind,
+} from "@domicile-desktop/manganese-window-management/window";
 import {
   activeIsPrivate,
   closedBrowsersOf,
+  screenHolding,
   screenOfApp,
   shutIdsOf,
   WindowAction,
@@ -136,6 +141,9 @@ import { deskVirtualMonitors } from "./virtual-monitors";
 
 /** No photographs, while the config's folders are listed. */
 const NO_WALLPAPERS: Wallpapers = { dark: [], light: [] };
+
+/** A workspace with no screen, which never shows: see `shown` below. */
+const NOWHERE: Rect = { height: 0, width: 0, x: 0, y: 0 };
 
 type Props = {
   /** What the launcher offers beside files. */
@@ -610,6 +618,18 @@ export const Desktop = ({
     (appId: string) => screenOfApp({ screens: deskScreens, workspaces }, appId),
     [deskScreens, workspaces],
   );
+  // A video in picture-in-picture opens on its window's screen, or on the
+  // focused one while its window is on none.
+  const pictureInPictureWorkspace = useCallback(
+    (window: string): Rect => {
+      const name =
+        screenHolding(windows, browserWindowId(window)) ?? windows.focused;
+      const screen =
+        screens.find(({ geometry }) => geometry.name === name) ?? screens[0];
+      return screen?.geometry.workspace ?? NOWHERE;
+    },
+    [screens, windows],
+  );
   // Frames with their bars; the page's own boxes leave those out and still
   // count a hidden tab.
   const shownWindows = useCallback(() => shownWindowsOf(screens), [screens]);
@@ -782,6 +802,15 @@ export const Desktop = ({
           windows={windows.windows}
         />
       )}
+      {/*
+        Over every window and under the toasts and panels, on every
+        workspace. Not on the lock screen.
+      */}
+      <PictureInPictureFloats
+        pictureInPicture={domicile.pictureInPicture}
+        shown={screens.length > 0 && !lock.locked}
+        workspaceFor={pictureInPictureWorkspace}
+      />
       {/* Over every window, while the overview is open. */}
       {overviews !== undefined && overviewPhase === "open" && (
         <OverviewPicker

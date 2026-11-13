@@ -2,7 +2,7 @@
 // React does not know. A shell loads them with
 // `/// <reference types="@domicile-desktop/react/elements" />`.
 //
-// Only `app-id`, `frame` and `resizing` are declared. `<app>` has no hyphen, so
+// Only `app-id`, `picture-in-picture`, `frame` and `resizing` are declared. `<app>` has no hyphen, so
 // React treats it as a plain HTML element and will not set unknown properties
 // or bind its custom event; use `addEventListener` for it.
 //
@@ -34,15 +34,21 @@ declare module "react" {
     // biome-ignore lint/style/useConsistentTypeDefinitions: declaration merging into IntrinsicElements requires an interface
     interface IntrinsicElements {
       /**
-       * A Wayland client's window. `app-id` is the host's ID for it.
-       * `frame` is the synced frame it shows (`DomicileWindow.frame`).
-       * `resizing`, by its presence, marks an interactive resize.
+       * A Wayland client's window, or a video in picture-in-picture. `app-id`
+       * is the host's ID for the window, and `picture-in-picture` the
+       * video's (`DomicilePictureInPictureVideo.id`). `frame` is the synced
+       * frame a window shows (`DomicileWindow.frame`). `resizing`, by its
+       * presence, marks an interactive resize.
        */
-      app: DetailedHTMLProps<HTMLAttributes<HTMLAppElement>, HTMLAppElement> & {
-        "app-id": string;
-        frame?: string | undefined;
-        resizing?: string | undefined;
-      };
+      app: DetailedHTMLProps<HTMLAttributes<HTMLAppElement>, HTMLAppElement> &
+        (
+          | {
+              "app-id": string;
+              frame?: string | undefined;
+              resizing?: string | undefined;
+            }
+          | { "picture-in-picture": string }
+        );
     }
   }
 }

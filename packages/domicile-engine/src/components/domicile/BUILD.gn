@@ -1072,6 +1072,25 @@ source_set("pointer_hiding") {
   ]
 }
 
+# The videos in picture-in-picture, as the shell lists and shows them. Its
+# own target for :pointer_warp's reason: the list and the shown surfaces are
+# here, where a test reaches them with no browser, and Chrome's sessions are
+# in //chrome/browser/domicile.
+source_set("picture_in_picture_videos") {
+  sources = [
+    "browser/picture_in_picture_videos.cc",
+    "browser/picture_in_picture_videos.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/domicile/mojom",
+    "//components/viz/common",
+    "//mojo/public/cpp/bindings",
+    "//ui/gfx/geometry",
+  ]
+}
+
 # What the browser checks and computes for the shell's fetches with the
 # profile's cookies: the refusals and the SAPISIDHASH. Its own target for
 # :pointer_warp's reason: the decisions are here, where a test reaches them
@@ -1215,6 +1234,7 @@ source_set("unit_tests") {
     "browser/notification_window_unittest.cc",
     "browser/page_matches_unittest.cc",
     "browser/placeholder_stage_unittest.cc",
+    "browser/picture_in_picture_videos_unittest.cc",
     "browser/pointer_hiding_unittest.cc",
     "browser/pointer_warp_unittest.cc",
     "browser/portal_request_unittest.cc",
@@ -1302,6 +1322,7 @@ source_set("unit_tests") {
     ":line_framer",
     ":notification_window",
     ":page_matches",
+    ":picture_in_picture_videos",
     ":placeholder_stage",
     ":pointer_hiding",
     ":pointer_warp",

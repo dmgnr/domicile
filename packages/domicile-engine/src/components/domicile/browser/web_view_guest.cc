@@ -2775,6 +2775,13 @@ void WebViewGuest::ActivateContents(content::WebContents* contents) {
   client_->FocusRequested();
 }
 
+content::PictureInPictureResult WebViewGuest::EnterPictureInPicture(
+    content::WebContents* web_contents) {
+  LOG(INFO) << "domicile: a <webview>'s page put a video in "
+               "picture-in-picture.";
+  return content::PictureInPictureResult::kSuccess;
+}
+
 void WebViewGuest::EnableAutoResize() {
   if (!extension_popup_) {
     return;

@@ -1231,6 +1231,39 @@ describe("Shell", () => {
     });
   });
 
+  describe("picture-in-picture", () => {
+    const VIDEO = {
+      canNextTrack: false,
+      canPlay: true,
+      canPreviousTrack: false,
+      duration: 0,
+      height: 360,
+      id: "1",
+      playbackRate: 1,
+      playing: true,
+      position: 0,
+      width: 640,
+      window: "",
+    };
+
+    it("floats a page's video over the windows, but not on the lock screen", async () => {
+      const { container } = await renderShell();
+      act(() => {
+        domicile.fake.set({ pictureInPictureVideos: [VIDEO] });
+      });
+
+      expect(
+        container.querySelector('app[picture-in-picture="1"]'),
+      ).not.toBeNull();
+
+      act(() => {
+        domicile.fake.set({ locked: true });
+      });
+
+      expect(container.querySelector("app[picture-in-picture]")).toBeNull();
+    });
+  });
+
   describe("the lock screen", () => {
     it("says why the compositor refused a passphrase, and how long to wait", async () => {
       await renderShell();

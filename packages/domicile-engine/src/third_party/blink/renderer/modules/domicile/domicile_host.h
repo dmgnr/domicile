@@ -12,12 +12,14 @@
 #include "components/domicile/mojom/cast_sinks.mojom-blink.h"
 #include "components/domicile/mojom/control_channel.mojom-blink.h"
 #include "components/domicile/mojom/downloads.mojom-blink.h"
+#include "components/domicile/mojom/picture_in_picture.mojom-blink.h"
 #include "components/domicile/mojom/extension_tray.mojom-blink.h"
 #include "components/domicile/mojom/shell_fetch.mojom-blink.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_chord.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_picture_in_picture_action.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_theme.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_action.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
@@ -47,6 +49,7 @@ class DomicileBrowserWindow;
 class DomicileCastSink;
 class DomicileDisplay;
 class DomicileDownload;
+class DomicilePictureInPictureVideo;
 class DomicileClipboardEntry;
 class DomicileTrayItem;
 class DomicileNotification;
@@ -84,6 +87,7 @@ class MODULES_EXPORT DomicileHost final
       public domicile::mojom::blink::BrowserWindowsClient,
       public domicile::mojom::blink::CastSinksClient,
       public domicile::mojom::blink::DownloadsClient,
+      public domicile::mojom::blink::PictureInPictureVideosClient,
       public AppInputClient {
   DEFINE_WRAPPERTYPEINFO();
 
@@ -292,6 +296,25 @@ class MODULES_EXPORT DomicileHost final
   void cancelDownload(ScriptState*, const String& id, ExceptionState&);
   void removeDownload(ScriptState*, const String& id, ExceptionState&);
   void clearDownloads(ScriptState*, ExceptionState&);
+
+  // The videos in picture-in-picture, or null until the browser has listed
+  // them.
+  const FrozenArray<DomicilePictureInPictureVideo>* pictureInPictureVideos()
+      const {
+    return picture_in_picture_videos_.Get();
+  }
+
+  // Act on or resize a video in picture-in-picture. The next
+  // `pictureinpicturevideoschanged` reflects what changed.
+  void actOnPictureInPictureVideo(ScriptState*,
+                                  const String& id,
+                                  V8DomicilePictureInPictureAction action,
+                                  ExceptionState&);
+  void resizePictureInPictureVideo(ScriptState*,
+                                   const String& id,
+                                   uint32_t width,
+                                   uint32_t height,
+                                   ExceptionState&);
   // Sends `method` to `url` with the profile's cookies, through the browser's
   // own pipe.
   // The browser refuses what the page may not send; see the IDL.
@@ -417,6 +440,10 @@ class MODULES_EXPORT DomicileHost final
   // domicile::mojom::blink::DownloadsClient:
   void DownloadsChanged(
       Vector<domicile::mojom::blink::DownloadPtr> downloads) override;
+
+  // domicile::mojom::blink::PictureInPictureVideosClient:
+  void VideosChanged(
+      Vector<domicile::mojom::blink::PictureInPictureVideoPtr> videos) override;
 
   void Trace(Visitor*) const override;
 
@@ -611,6 +638,8 @@ class MODULES_EXPORT DomicileHost final
   Member<FrozenArray<DomicileCastSink>> cast_sinks_;
   // And `downloads_`.
   Member<FrozenArray<DomicileDownload>> downloads_;
+  // And `picture_in_picture_videos_`.
+  Member<FrozenArray<DomicilePictureInPictureVideo>> picture_in_picture_videos_;
   HeapMojoRemote<domicile::mojom::blink::ControlChannel> channel_;
   HeapMojoReceiver<domicile::mojom::blink::ControlChannelClient, DomicileHost>
       client_receiver_;
@@ -636,6 +665,13 @@ class MODULES_EXPORT DomicileHost final
   HeapMojoRemote<domicile::mojom::blink::Downloads> downloads_remote_;
   HeapMojoReceiver<domicile::mojom::blink::DownloadsClient, DomicileHost>
       downloads_receiver_;
+  // The picture-in-picture videos' pipe, the browser's own too, bound beside
+  // the downloads.
+  HeapMojoRemote<domicile::mojom::blink::PictureInPictureVideos>
+      picture_in_picture_;
+  HeapMojoReceiver<domicile::mojom::blink::PictureInPictureVideosClient,
+                   DomicileHost>
+      picture_in_picture_receiver_;
   // The fetches with the profile's cookies, the browser's own pipe too. Bound
   // on the first fetch, since nothing arrives on it unasked.
   HeapMojoRemote<domicile::mojom::blink::ShellFetch> shell_fetch_;

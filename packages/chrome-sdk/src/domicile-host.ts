@@ -70,6 +70,25 @@ export type DomicileCursorShape =
 export type DomicileDownloadState = "in-progress" | "complete" | "failed";
 
 /**
+ * A video in picture-in-picture, which the shell draws. See
+ * components/domicile/mojom/picture_in_picture.mojom.
+ *
+ * An interface for DomicileBrowserWindow's reason: these are read from the
+ * desktop's `pictureInPictureVideos` attribute.
+ *
+ * What actOnPictureInPictureVideo() asks of a video. "back-to-page" ends
+ * picture-in-picture and leaves the video playing in its page, whose window
+ * asks to come to the front; "close" ends it and pauses the video.
+ */
+export type DomicilePictureInPictureAction =
+  | "play"
+  | "pause"
+  | "previous-track"
+  | "next-track"
+  | "back-to-page"
+  | "close";
+
+/**
  * The desktop's light or dark theme.
  *
  * One of four copies of this set: `domicile_protocol::Theme`,
@@ -562,6 +581,12 @@ export type DomicileHostEventMap = {
    */
   downloadschanged: Event;
   /**
+   * Fires when a video enters or leaves picture-in-picture, plays, pauses,
+   * or changes shape or controls. Read `pictureInPictureVideos` for the
+   * current list.
+   */
+  pictureinpicturevideoschanged: Event;
+  /**
    * An answer to callSystem(), as a MessageEvent whose `data` is the
    * compositor's `system_reply`, `system_event` or `system_end` line.
    */
@@ -900,6 +925,21 @@ export type DomicileHost = {
   /** Removes every download not in progress from `downloads`. The files stay. */
   clearDownloads(): void;
   /**
+   * Acts on video `id`, as its controls do. "back-to-page" and "close" end
+   * picture-in-picture; it leaves the next `pictureinpicturevideoschanged`.
+   * An unknown id does nothing.
+   */
+  actOnPictureInPictureVideo(
+    id: string,
+    action: DomicilePictureInPictureAction,
+  ): void;
+  /**
+   * Says video `id` is shown `width` by `height` CSS pixels big; its page
+   * hears it as its PictureInPictureWindow's size. An unknown id does
+   * nothing.
+   */
+  resizePictureInPictureVideo(id: string, width: number, height: number): void;
+  /**
    * Sends `method`, "GET" or "POST", to `url` from the browser process with
    * the cookies of the profile the ordinary browser windows use, so a bar
    * item can read a site the user is signed in to. A POST sends `body`, as a
@@ -1020,6 +1060,17 @@ export type DomicileHost = {
    */
   readonly downloads: readonly DomicileDownload[] | null;
   /**
+   * The videos in picture-in-picture, oldest first: each one a page's
+   * `requestPictureInPicture()` or its video controls' button, until it
+   * leaves picture-in-picture. Null until the browser lists them, which it
+   * does as soon as this page listens. Show one with
+   * `<app picture-in-picture="id">`. No [SameObject], for `displays`'
+   * reason. See components/domicile/mojom/picture_in_picture.mojom.
+   */
+  readonly pictureInPictureVideos:
+    | readonly DomicilePictureInPictureVideo[]
+    | null;
+  /**
    * Typed by the event map rather than by inheriting `EventTarget`, whose
    * overloads take any name and type every listener's event as `Event`.
    * `dispatchEvent` is left out: a page does not dispatch to it.
@@ -1100,6 +1151,38 @@ export type DomicileNotificationAction = {
   readonly key: string;
   /** The button's label, or the reply field's. */
   readonly label: string;
+};
+
+export type DomicilePictureInPictureVideo = {
+  /**
+   * The id actOnPictureInPictureVideo(), resizePictureInPictureVideo() and
+   * `<app picture-in-picture>` take.
+   */
+  readonly id: string;
+  /**
+   * The browser window whose page plays it, as a DomicileBrowserWindow's
+   * `id`; empty for a <webview> that is not one.
+   */
+  readonly window: string;
+  /** The video's own size, in pixels: its shape. */
+  readonly width: number;
+  readonly height: number;
+  readonly playing: boolean;
+  /**
+   * Which controls the page takes: play and pause, and its media session's
+   * previous and next track.
+   */
+  readonly canPlay: boolean;
+  readonly canPreviousTrack: boolean;
+  readonly canNextTrack: boolean;
+  /**
+   * Where the video is, as its page last said: its length and position in
+   * seconds, and how fast the position moves while it plays. A `duration` of
+   * 0 is unknown, or a live stream: there is no progress to show.
+   */
+  readonly duration: number;
+  readonly position: number;
+  readonly playbackRate: number;
 };
 
 /**

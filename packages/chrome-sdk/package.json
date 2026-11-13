@@ -102,6 +102,10 @@
       "types": "./dist/desktop/notifications.d.ts",
       "default": "./dist/desktop/notifications.js"
     },
+    "./desktop/picture-in-picture": {
+      "types": "./dist/desktop/picture-in-picture.d.ts",
+      "default": "./dist/desktop/picture-in-picture.js"
+    },
     "./desktop/pointer": {
       "types": "./dist/desktop/pointer.d.ts",
       "default": "./dist/desktop/pointer.js"

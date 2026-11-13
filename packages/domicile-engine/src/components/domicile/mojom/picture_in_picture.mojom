@@ -1,0 +1,100 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+module domicile.mojom;
+
+import "services/viz/public/mojom/compositing/frame_sink_id.mojom";
+import "services/viz/public/mojom/compositing/surface_id.mojom";
+import "ui/gfx/geometry/mojom/geometry.mojom";
+
+// The videos in picture-in-picture: a page's `requestPictureInPicture()`, or
+// its video controls' button. Chrome floats each in a window of its own; here
+// the shell draws it. See docs/SHELL-BROWSER-WINDOWS.md in the Domicile
+// repository.
+//
+// - The browser lists each video and keeps its page's session. The shell
+//   places the video and draws its controls.
+// - The shell shows a video with `<app picture-in-picture="id">`, which embeds
+//   the video's own surface: the page's player keeps drawing to it.
+// - A separate pipe, as for BrowserWindows: the sessions are browser state.
+//
+// Access control is the binder's, as for BrowserWindows: the browser binds
+// this only for a document with the shell's origin.
+
+// One video in picture-in-picture.
+struct PictureInPictureVideo {
+  // The name Act, Resize, Show and `<app picture-in-picture>` use: "1", "2",
+  // ... in open order. Never reused while the browser runs.
+  string id;
+  // The browser window whose page plays it, as BrowserWindow.id names it.
+  // Empty for a page in a `<webview>` that is no browser window.
+  string window;
+  // The video's own size, in pixels. Its shape, for the shell to keep.
+  gfx.mojom.Size size;
+  // Whether it plays.
+  bool playing;
+  // Which of Act's controls the page takes: play and pause, and the media
+  // session's previous and next track.
+  bool can_play;
+  bool can_previous_track;
+  bool can_next_track;
+  // Where the video is, as its page last said: its length and position in
+  // seconds, and how fast the position moves while it plays. A length of 0 is
+  // unknown, or a live stream: there is no progress to show.
+  double duration;
+  double position;
+  double playback_rate;
+};
+
+// What the shell's controls ask of a video.
+enum PictureInPictureAction {
+  kPlay,
+  kPause,
+  kPreviousTrack,
+  kNextTrack,
+  // Ends picture-in-picture; the video plays on in its page, and its window
+  // asks the shell to come to the front.
+  kBackToPage,
+  // Ends picture-in-picture and pauses the video.
+  kClose,
+};
+
+// Renderer -> browser, bound per document.
+interface PictureInPictureVideos {
+  // Sets the list's receiver. The list is sent immediately and on every
+  // change.
+  SetClient(pending_remote<PictureInPictureVideosClient> client);
+
+  // Acts on video `id`. An unknown id is an act that raced the video's end,
+  // and does nothing.
+  Act(string id, PictureInPictureAction action);
+
+  // The shell shows video `id` `size` big, in CSS pixels; the page hears it as
+  // its PictureInPictureWindow's size. An unknown id does nothing.
+  Resize(string id, gfx.mojom.Size size);
+
+  // Shows video `id`'s surface under the page's frame sink
+  // `parent_frame_sink_id`, so the video's player gets that page's
+  // BeginFrames. `surface` hears the surface now and on every change, and is
+  // dropped when the video leaves picture-in-picture or for an unknown id.
+  //
+  // `parent_frame_sink_id` must be one of the calling renderer's frame sinks.
+  // Any other parent is a bad message.
+  Show(string id,
+       viz.mojom.FrameSinkId parent_frame_sink_id,
+       pending_remote<PictureInPictureVideoSurface> surface);
+};
+
+// Browser -> renderer.
+interface PictureInPictureVideosClient {
+  // The whole list, oldest first, on every change. Deltas would leave a page
+  // wrong for good after one missed message.
+  VideosChanged(array<PictureInPictureVideo> videos);
+};
+
+// Browser -> renderer: one shown video's surface.
+interface PictureInPictureVideoSurface {
+  // The surface the video's player draws to now. A new one follows a change
+  // of its size.
+  SurfaceChanged(viz.mojom.SurfaceId surface_id);
+};

@@ -54,6 +54,8 @@ source_set("domicile") {
     "domicile_modifier_taps.h",
     "domicile_permissions.cc",
     "domicile_permissions.h",
+    "domicile_picture_in_picture.cc",
+    "domicile_picture_in_picture.h",
     "domicile_pointer_hiding.cc",
     "domicile_pointer_hiding.h",
     "domicile_pointer_warp.cc",
@@ -107,6 +109,9 @@ source_set("domicile") {
     "//components/domicile:desk_pointer_hiding",
     # Hears a tap of Super alone for the shell, from aura's own events.
     "//components/domicile:desk_modifier_taps",
+    # Picture-in-picture videos, which the shell lists, shows and controls.
+    "//components/domicile:picture_in_picture_videos",
+    "//services/media_session/public/cpp",
     "//components/domicile:pointer_hiding",
     "//components/domicile:notification_window",
     "//components/domicile:pointer_warp",

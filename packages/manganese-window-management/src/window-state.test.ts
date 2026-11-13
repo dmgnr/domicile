@@ -16,6 +16,7 @@ import {
   currentOn,
   NO_WINDOWS,
   reduceWindows,
+  screenHolding,
   screenOfApp,
   WindowAction,
   workspaceHere,
@@ -676,6 +677,18 @@ describe("the screens", () => {
 
     expect(screenOfApp(state, "kitty")).toBe("left");
     expect(screenOfApp(state, "closed")).toBeUndefined();
+  });
+
+  it("finds the screen a window's workspace is on, shown or not, for its picture-in-picture video", () => {
+    const state = reduce(
+      desktop("kitty"),
+      WindowAction.ScreensDescribed(sideBySide("left", "right")),
+      WindowAction.WorkspaceSelected("3"),
+    );
+
+    expect(currentOn(state, "left")).toBe("3");
+    expect(screenHolding(state, APP("kitty"))).toBe("left");
+    expect(screenHolding(state, APP("closed"))).toBeUndefined();
   });
 
   it("shows a workspace nobody else is on when a monitor is plugged in", () => {

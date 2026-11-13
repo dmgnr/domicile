@@ -45,6 +45,7 @@
     "./overview/steering": "./src/overview/steering.ts",
     "./overview/useOverviewPhase": "./src/overview/useOverviewPhase.ts",
     "./panda-preset": "./src/panda-preset.ts",
+    "./picture-in-picture/PictureInPictureFloats": "./src/picture-in-picture/PictureInPictureFloats.tsx",
     "./placement": "./src/placement.ts",
     "./pointer-warp": "./src/pointer-warp.ts",
     "./rect": "./src/rect.ts",

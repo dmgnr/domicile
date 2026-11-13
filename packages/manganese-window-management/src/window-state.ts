@@ -331,6 +331,20 @@ export const screenOfApp = (
     : screenShowing(state, workspace.name);
 };
 
+/**
+ * The screen window `id`'s workspace belongs to: the one showing it, or else
+ * its home. `undefined` for a window on no workspace.
+ */
+export const screenHolding = (
+  state: Pick<WindowState, "homes" | "screens" | "workspaces">,
+  id: string,
+): string | undefined => {
+  const workspace = workspaceHolding(state, id);
+  return workspace === undefined
+    ? undefined
+    : (screenShowing(state, workspace.name) ?? state.homes[workspace.name]);
+};
+
 /** The focused window, or `undefined` on an empty workspace. */
 export const activeIdOf = (state: WindowState): string | undefined =>
   focusedOn(workspaceHere(state));

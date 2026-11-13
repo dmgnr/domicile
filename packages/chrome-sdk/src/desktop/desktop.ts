@@ -28,6 +28,8 @@ import type { Keyboard } from "./keyboard";
 import { keyboard } from "./keyboard";
 import type { Notifications } from "./notifications";
 import { notifications } from "./notifications";
+import type { PictureInPicture } from "./picture-in-picture";
+import { pictureInPicture } from "./picture-in-picture";
 import type { Pointer } from "./pointer";
 import { pointer } from "./pointer";
 import type { Portals } from "./portals";
@@ -74,6 +76,7 @@ export type Domicile = {
   readonly googleCast: GoogleCast;
   readonly keyboard: Keyboard;
   readonly notifications: Notifications;
+  readonly pictureInPicture: PictureInPicture;
   readonly pointer: Pointer;
   readonly portals: Portals;
   readonly processes: Processes;
@@ -121,6 +124,7 @@ const build = (host: DomicileHost): Domicile => {
       compositorreplaced: (listener) =>
         hostEvent(host, "compositorreplaced", () => listener()),
     }),
+    pictureInPicture: pictureInPicture(host),
     pointer: pointer(host),
     portals: portals(host),
     processes: processes(host, calls),

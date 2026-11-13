@@ -28,7 +28,6 @@ PROBE_PAGE = """<!doctype html>
       const found = new URLSearchParams({
         payment: typeof PaymentRequest,
         identity: typeof IdentityCredential,
-        pip: String(document.pictureInPictureEnabled),
         credentials: typeof navigator.credentials,
         docpip: typeof documentPictureInPicture,
       });

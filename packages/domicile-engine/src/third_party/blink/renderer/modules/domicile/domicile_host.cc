@@ -14,8 +14,10 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size.h"
 #include "components/domicile/common/cursor_shape.h"
 #include "components/domicile/common/display_transform.h"
 #include "components/domicile/common/theme.h"
@@ -48,6 +50,7 @@
 #include "third_party/blink/renderer/modules/domicile/domicile_clipboard_entry.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_browser_window.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_cast_sink.h"
+#include "third_party/blink/renderer/modules/domicile/domicile_picture_in_picture_video.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_display.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_download.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_extension.h"
@@ -266,6 +269,8 @@ DomicileHost::DomicileHost(LocalDOMWindow& window)
       cast_receiver_(this, &window),
       downloads_remote_(&window),
       downloads_receiver_(this, &window),
+      picture_in_picture_(&window),
+      picture_in_picture_receiver_(this, &window),
       shell_fetch_(&window) {}
 
 DomicileHost::~DomicileHost() = default;
@@ -320,6 +325,13 @@ bool DomicileHost::EnsureBound() {
       downloads_remote_.BindNewPipeAndPassReceiver(task_runner));
   downloads_remote_->SetClient(
       downloads_receiver_.BindNewPipeAndPassRemote(task_runner));
+
+  // The videos in picture-in-picture, bound eagerly too: a page puts one there
+  // unasked, and only the shell draws it. See picture_in_picture.mojom.
+  window_->GetBrowserInterfaceBroker().GetInterface(
+      picture_in_picture_.BindNewPipeAndPassReceiver(task_runner));
+  picture_in_picture_->SetClient(
+      picture_in_picture_receiver_.BindNewPipeAndPassRemote(task_runner));
   return true;
 }
 
@@ -2297,6 +2309,62 @@ void DomicileHost::clearDownloads(ScriptState*,
 
 namespace {
 
+// A switch rather than a wire name, as for MojoTrayAction.
+domicile::mojom::blink::PictureInPictureAction MojoPictureInPictureAction(
+    V8DomicilePictureInPictureAction action) {
+  switch (action.AsEnum()) {
+    case V8DomicilePictureInPictureAction::Enum::kPlay:
+      return domicile::mojom::blink::PictureInPictureAction::kPlay;
+    case V8DomicilePictureInPictureAction::Enum::kPause:
+      return domicile::mojom::blink::PictureInPictureAction::kPause;
+    case V8DomicilePictureInPictureAction::Enum::kPreviousTrack:
+      return domicile::mojom::blink::PictureInPictureAction::kPreviousTrack;
+    case V8DomicilePictureInPictureAction::Enum::kNextTrack:
+      return domicile::mojom::blink::PictureInPictureAction::kNextTrack;
+    case V8DomicilePictureInPictureAction::Enum::kBackToPage:
+      return domicile::mojom::blink::PictureInPictureAction::kBackToPage;
+    case V8DomicilePictureInPictureAction::Enum::kClose:
+      return domicile::mojom::blink::PictureInPictureAction::kClose;
+  }
+}
+
+}  // namespace
+
+// An empty id throws, as cancelDownload's does: it is a shell that forgot to
+// say which video, rather than one that raced the video's end.
+void DomicileHost::actOnPictureInPictureVideo(
+    ScriptState*,
+    const String& id,
+    V8DomicilePictureInPictureAction action,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a picture-in-picture video's");
+    return;
+  }
+  if (Ready(exception_state)) {
+    picture_in_picture_->Act(id, MojoPictureInPictureAction(action));
+  }
+}
+
+void DomicileHost::resizePictureInPictureVideo(
+    ScriptState*,
+    const String& id,
+    uint32_t width,
+    uint32_t height,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a picture-in-picture video's");
+    return;
+  }
+  if (Ready(exception_state)) {
+    picture_in_picture_->Resize(
+        id, gfx::Size(base::saturated_cast<int>(width),
+                      base::saturated_cast<int>(height)));
+  }
+}
+
+namespace {
+
 // The browser's answer to fetchWithCookies(): a response, or why there is
 // none.
 void Fetched(ScriptPromiseResolver<DomicileFetchResponse>* resolver,
@@ -2426,6 +2494,22 @@ void DomicileHost::DownloadsChanged(
   DispatchEvent(*Event::Create(domicile_event_names::Downloadschanged()));
 }
 
+// Stored, like WindowsChanged.
+void DomicileHost::VideosChanged(
+    Vector<domicile::mojom::blink::PictureInPictureVideoPtr> videos) {
+  HeapVector<Member<DomicilePictureInPictureVideo>> listed;
+  listed.reserve(videos.size());
+  for (const auto& video : videos) {
+    listed.push_back(
+        MakeGarbageCollected<DomicilePictureInPictureVideo>(*video));
+  }
+  picture_in_picture_videos_ =
+      MakeGarbageCollected<FrozenArray<DomicilePictureInPictureVideo>>(
+          std::move(listed));
+  DispatchEvent(*Event::Create(
+      domicile_event_names::Pictureinpicturevideoschanged()));
+}
+
 // A standard MessageEvent, so a line the page parses needs no event type of
 // its own.
 void DomicileHost::System(const String& message) {
@@ -2527,6 +2611,7 @@ void DomicileHost::Trace(Visitor* visitor) const {
   visitor->Trace(browser_windows_);
   visitor->Trace(cast_sinks_);
   visitor->Trace(downloads_);
+  visitor->Trace(picture_in_picture_videos_);
   visitor->Trace(client_windows_);
   visitor->Trace(held_);
   visitor->Trace(file_search_);
@@ -2550,6 +2635,8 @@ void DomicileHost::Trace(Visitor* visitor) const {
   visitor->Trace(cast_receiver_);
   visitor->Trace(downloads_remote_);
   visitor->Trace(downloads_receiver_);
+  visitor->Trace(picture_in_picture_);
+  visitor->Trace(picture_in_picture_receiver_);
   visitor->Trace(shell_fetch_);
   visitor->Trace(input_listeners_);
   EventTarget::Trace(visitor);

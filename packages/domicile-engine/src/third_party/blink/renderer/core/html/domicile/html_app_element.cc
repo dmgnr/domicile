@@ -14,6 +14,8 @@
 #include "base/time/time.h"
 #include "cc/layers/deadline_policy.h"
 #include "components/domicile/common/synced_frame.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/add_event_listener_options_resolved.h"
@@ -22,6 +24,7 @@
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/events/pointer_event.h"
 #include "third_party/blink/renderer/core/events/wheel_event.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/domicile/layout_app_surface.h"
 #include "third_party/blink/renderer/core/html_names.h"
@@ -82,6 +85,11 @@ int32_t RoundHalfUp(double value) {
   return base::ClampFloor<int32_t>(value + 0.5);
 }
 
+// The video in picture-in-picture an <app> shows in place of a window. Not in
+// html_attribute_names.json5, as <webview>'s `window` is not: the list is
+// Blink's, and every name in it recompiles most of Blink.
+constexpr char kPictureInPictureAttr[] = "picture-in-picture";
+
 // The app's default handler must finish before Chromium decides whether a
 // pinch wheel may zoom the shell. Only native-window regions block that ACK.
 class AppWheelListener final : public NativeEventListener {
@@ -115,7 +123,11 @@ void AppInputClient::Trace(Visitor* visitor) const {
 }
 
 HTMLAppElement::HTMLAppElement(Document& document)
-    : HTMLElement(html_names::kAppTag, document) {
+    : HTMLElement(html_names::kAppTag, document),
+      // Null for a document with no window, which HeapMojoRemote accepts, as
+      // <webview>'s do. Nothing binds before there is a frame.
+      picture_in_picture_(document.GetExecutionContext()),
+      picture_in_picture_surface_(this, document.GetExecutionContext()) {
   AddEventListenerOptionsResolved options;
   options.SetPassive(false);
   addEventListener(event_type_names::kWheel,
@@ -146,6 +158,10 @@ void HTMLAppElement::ParseAttribute(
   }
   if (params.name == html_names::kFrameAttr) {
     ShowFrame();
+    return;
+  }
+  if (params.name.LocalName() == kPictureInPictureAttr) {
+    ShowPictureInPicture();
     return;
   }
   if (params.name == html_names::kResizingAttr) {
@@ -657,7 +673,45 @@ bool HTMLAppElement::MapToContent(const MouseEvent& event,
   return std::isfinite(point.x()) && std::isfinite(point.y());
 }
 
+void HTMLAppElement::ShowPictureInPicture() {
+  // A new id, or none: the old video's surface is no longer this element's.
+  picture_in_picture_surface_.reset();
+  const AtomicString& id = getAttribute(AtomicString(kPictureInPictureAttr));
+  if (id.empty()) {
+    return;
+  }
+  ExecutionContext* context = GetExecutionContext();
+  LocalFrame* frame = GetDocument().GetFrame();
+  if (!context || !frame || !frame->GetPage()) {
+    return;
+  }
+  if (!surface_layer_bridge_ && !CreateLayer()) {
+    return;
+  }
+  const scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+      context->GetTaskRunner(TaskType::kInternalDefault);
+  if (!picture_in_picture_.is_bound()) {
+    context->GetBrowserInterfaceBroker().GetInterface(
+        picture_in_picture_.BindNewPipeAndPassReceiver(task_runner));
+  }
+  // The page's own frame sink is the video's parent while it is shown, so the
+  // video's player draws at this page's BeginFrames.
+  picture_in_picture_->Show(
+      id, frame->GetPage()->GetChromeClient().GetFrameSinkId(frame),
+      picture_in_picture_surface_.BindNewPipeAndPassRemote(task_runner));
+}
+
+// The video's player is not this page's: its surface is what its page's
+// `<video>` shows, at the video's own size. Stretched to the element's box,
+// as Chrome's window stretches it to its own; the shell keeps the shape.
+void HTMLAppElement::SurfaceChanged(const viz::SurfaceId& surface_id) {
+  surface_layer_bridge_->SetStretchContentToFillBounds(true);
+  surface_layer_bridge_->EmbedSurface(surface_id);
+}
+
 void HTMLAppElement::Trace(Visitor* visitor) const {
+  visitor->Trace(picture_in_picture_);
+  visitor->Trace(picture_in_picture_surface_);
   HTMLElement::Trace(visitor);
 }
 

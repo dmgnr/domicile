@@ -122,7 +122,7 @@ void StartDesk(Profile* profile) {
     // asked by the shell.
     UseTheShellForPrompts();
     // Any Chrome dialog left fails closed, and Chrome's payment and account
-    // sheets and picture-in-picture window are off.
+    // sheets are off.
     RefuseChromeDialogs();
     return true;
   }();

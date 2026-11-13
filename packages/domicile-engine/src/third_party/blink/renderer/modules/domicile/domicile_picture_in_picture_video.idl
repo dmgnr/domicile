@@ -1,0 +1,52 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// A video in picture-in-picture, which the shell draws. See
+// components/domicile/mojom/picture_in_picture.mojom.
+//
+// An interface for DomicileBrowserWindow's reason: these are read from the
+// desktop's `pictureInPictureVideos` attribute.
+
+// What actOnPictureInPictureVideo() asks of a video. "back-to-page" ends
+// picture-in-picture and leaves the video playing in its page, whose window
+// asks to come to the front; "close" ends it and pauses the video.
+enum DomicilePictureInPictureAction {
+  "play",
+  "pause",
+  "previous-track",
+  "next-track",
+  "back-to-page",
+  "close"
+};
+
+[
+    Exposed=Window,
+    RuntimeEnabled=DomicileControlChannel
+] interface DomicilePictureInPictureVideo {
+  // The id actOnPictureInPictureVideo(), resizePictureInPictureVideo() and
+  // `<app picture-in-picture>` take.
+  readonly attribute DOMString id;
+
+  // The browser window whose page plays it, as a DomicileBrowserWindow's
+  // `id`; empty for a <webview> that is not one.
+  readonly attribute DOMString window;
+
+  // The video's own size, in pixels: its shape.
+  readonly attribute long width;
+  readonly attribute long height;
+
+  readonly attribute boolean playing;
+
+  // Which controls the page takes: play and pause, and its media session's
+  // previous and next track.
+  readonly attribute boolean canPlay;
+  readonly attribute boolean canPreviousTrack;
+  readonly attribute boolean canNextTrack;
+
+  // Where the video is, as its page last said: its length and position in
+  // seconds, and how fast the position moves while it plays. A `duration` of
+  // 0 is unknown, or a live stream: there is no progress to show.
+  readonly attribute double duration;
+  readonly attribute double position;
+  readonly attribute double playbackRate;
+};

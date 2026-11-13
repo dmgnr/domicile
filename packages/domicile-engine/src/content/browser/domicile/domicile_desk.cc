@@ -7,9 +7,13 @@
 #include <utility>
 #include <vector>
 
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "components/domicile/browser/desk_geometry.h"
+#include "components/viz/common/surfaces/frame_sink_id.h"
+#include "components/viz/host/host_frame_sink_manager.h"
+#include "content/browser/compositor/surface_utils.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
@@ -169,6 +173,22 @@ std::optional<gfx::Rect> GetDomicileDeskPageBounds(gfx::NativeWindow window) {
     return std::nullopt;
   }
   return *bounds;
+}
+
+base::ScopedClosureRunner AddDomicileFrameSinkChild(
+    const viz::FrameSinkId& parent,
+    const viz::FrameSinkId& child) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  // Viz keeps a parent's children after the parent is invalidated, so the
+  // undo below finds this one even once the shell's renderer is gone.
+  if (!GetHostFrameSinkManager()->RegisterFrameSinkHierarchy(parent, child)) {
+    return base::ScopedClosureRunner();
+  }
+  return base::ScopedClosureRunner(base::BindOnce(
+      [](const viz::FrameSinkId& parent, const viz::FrameSinkId& child) {
+        GetHostFrameSinkManager()->UnregisterFrameSinkHierarchy(parent, child);
+      },
+      parent, child));
 }
 
 }  // namespace content

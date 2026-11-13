@@ -17,8 +17,6 @@ namespace domicile {
 // - Payment Request and FedCM ("Sign in with Google"'s account chooser) are
 //   off, as passwords and passkeys are (patch 0048): each is a Chrome sheet,
 //   and sites without them fall back to their own forms and sign-in pages.
-// - Picture-in-picture video is off (patch 0183), since Chrome floats it in a
-//   window of its own.
 //
 // Called once from StartDesk, before any page's process is started, since the
 // APIs are turned off on the command line each renderer is given.

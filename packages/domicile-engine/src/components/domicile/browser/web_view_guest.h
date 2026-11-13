@@ -800,8 +800,15 @@ class WebViewGuest : public mojom::WebViewGuest,
   void ScreenWakeLockChanged(content::WebContents* source, bool held) override;
 
   // Handles `window.focus()` or `client.focus()` (e.g. after a notification
-  // click) by asking the shell, which decides window order.
+  // click) by asking the shell, which decides window order. Picture-in-
+  // picture's "back to page" asks the same way.
   void ActivateContents(content::WebContents* contents) override;
+
+  // A video entering picture-in-picture. Content's default refuses it; here
+  // the shell draws its window (chrome/browser/domicile/
+  // domicile_picture_in_picture.h), so every page may.
+  content::PictureInPictureResult EnterPictureInPicture(
+      content::WebContents* web_contents) override;
 
   // Sizes an extension popup's page from its content, as Chrome's
   // ExtensionViewViews does: Blink's auto-resize, between Chrome's popup

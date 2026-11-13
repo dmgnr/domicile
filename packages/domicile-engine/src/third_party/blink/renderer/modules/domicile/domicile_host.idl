@@ -449,6 +449,34 @@
   // Removes every download not in progress from `downloads`. The files stay.
   [CallWith=ScriptState, RaisesException] undefined clearDownloads();
 
+  // The videos in picture-in-picture, oldest first: each one a page's
+  // `requestPictureInPicture()` or its video controls' button, until it
+  // leaves picture-in-picture. Null until the browser lists them, which it
+  // does as soon as this page listens. Show one with
+  // `<app picture-in-picture="id">`. No [SameObject], for `displays`'
+  // reason. See components/domicile/mojom/picture_in_picture.mojom.
+  readonly attribute FrozenArray<DomicilePictureInPictureVideo>? pictureInPictureVideos;
+
+  // Fires when a video enters or leaves picture-in-picture, plays, pauses,
+  // or changes shape or controls. Read `pictureInPictureVideos` for the
+  // current list.
+  attribute EventHandler onpictureinpicturevideoschanged;
+
+  // Acts on video `id`, as its controls do. "back-to-page" and "close" end
+  // picture-in-picture; it leaves the next `pictureinpicturevideoschanged`.
+  // An unknown id does nothing.
+  [CallWith=ScriptState, RaisesException] undefined
+      actOnPictureInPictureVideo(DOMString id,
+                                 DomicilePictureInPictureAction action);
+
+  // Says video `id` is shown `width` by `height` CSS pixels big; its page
+  // hears it as its PictureInPictureWindow's size. An unknown id does
+  // nothing.
+  [CallWith=ScriptState, RaisesException] undefined
+      resizePictureInPictureVideo(DOMString id,
+                                  unsigned long width,
+                                  unsigned long height);
+
   // Sends `method`, "GET" or "POST", to `url` from the browser process with
   // the cookies of the profile the ordinary browser windows use, so a bar
   // item can read a site the user is signed in to. A POST sends `body`, as a

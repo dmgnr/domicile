@@ -9,10 +9,9 @@
 # is measured in pixels, and nothing is pressed.
 #
 # Payment Request and FedCM ("Sign in with Google"'s account chooser) each ask
-# with a Chrome sheet, and picture-in-picture video floats in a Chrome window.
-# The engine turns the two APIs off and picture-in-picture with them, so a site
-# falls back to its own forms and sign-in pages, and a video has no
-# picture-in-picture button.
+# with a Chrome sheet. The engine turns both off, so a site falls back to its
+# own forms and sign-in pages. Picture-in-picture video stays on: the shell
+# draws it (guard-webview-video-picture-in-picture.sh).
 #
 # The page is guard-webview-chrome-sheets-server.py's: /probe reads what it
 # has and sends it to /report, which the server prints.
@@ -28,7 +27,6 @@
 #                                     not the probe's (the control)
 #   no Payment Request               PaymentRequest is undefined
 #   no FedCM                         IdentityCredential is undefined
-#   no picture-in-picture video      document.pictureInPictureEnabled is false
 set -u
 
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
@@ -161,12 +159,11 @@ SAW_APIS=$(grep -F "$REPORT_LINE" "$HTTP_LOG" | grep -F "credentials=object" |
   grep -qF "docpip=object" && echo 1 || echo 0)
 SAW_NO_PAYMENT=$(saw "payment=undefined")
 SAW_NO_IDENTITY=$(saw "identity=undefined")
-SAW_NO_PIP=$(saw "pip=false")
 
 echo
 grep -F "$REPORT_LINE" "$HTTP_LOG" || true
 echo "shell=$SAW_SHELL report=$SAW_REPORT apis=$SAW_APIS"
-echo "no payment=$SAW_NO_PAYMENT no identity=$SAW_NO_IDENTITY no pip=$SAW_NO_PIP"
+echo "no payment=$SAW_NO_PAYMENT no identity=$SAW_NO_IDENTITY"
 echo
 
 # The verdict: names the component to blame. Checks run in dependency order.
@@ -192,13 +189,9 @@ elif [ "$SAW_NO_IDENTITY" != "1" ]; then
   FAILURE="the page has IdentityCredential, so FedCM would ask with Chrome's \
 account chooser. RefuseChromeDialogs did not add FedCm to \
 --disable-blink-features"
-elif [ "$SAW_NO_PIP" != "1" ]; then
-  FAILURE="the page has picture-in-picture video, which Chrome floats in a \
-window of its own. OverrideWebPreferences did not turn \
-picture_in_picture_enabled off"
 else
-  PASSED="a page in a <webview> has no Payment Request, no FedCM and no \
-picture-in-picture video, and keeps the APIs around them"
+  PASSED="a page in a <webview> has no Payment Request and no FedCM, and \
+keeps the APIs around them"
 fi
 
 if [ -n "$PASSED" ]; then
