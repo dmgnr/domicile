@@ -306,6 +306,116 @@ struct WebViewPicker {
   gfx.mojom.Rect anchor;
 };
 
+// What an IdentityRequested shows: a step of a site's "Sign in with" (FedCM)
+// request. Chrome draws each as a dialog of its own; the engine draws none.
+// See //components/domicile/browser/identity_dialog.h.
+enum WebViewIdentityStep {
+  // Waiting for the providers' accounts after the page's sign-in button.
+  // kDismiss cancels.
+  kLoading,
+  // The accounts to pick from. kChoose with an index into `accounts` signs in
+  // with it. kSignInToProvider with an index into `providers` opens that
+  // provider's sign-in page, for a provider the user is signed out of or for
+  // another account. kDismiss cancels.
+  kAccounts,
+  // The user is signed out of `providers[0]`. kSignInToProvider (index 0)
+  // opens its sign-in page. kDismiss cancels.
+  kSignedOut,
+  // Signing in with `accounts[0]`. Nothing to answer: withdrawn or replaced
+  // when it ends.
+  kVerifying,
+  // The provider refused the sign-in. kMoreDetails opens its page about the
+  // error, when there is one. kDismiss closes it.
+  kError,
+};
+
+// What the site says signing in is for, which the title words. FedCM's
+// `context`.
+enum WebViewIdentityPurpose {
+  kSignIn,
+  kSignUp,
+  kUse,
+  kContinue,
+};
+
+// What signing up with an account shares with the site.
+enum WebViewIdentityField {
+  kName,
+  kEmail,
+  kUsername,
+  kPhoneNumber,
+  kPicture,
+};
+
+// An identity provider an IdentityRequested offers, such as google.com.
+struct WebViewIdentityProvider {
+  // Its site, as Chrome names it: "google.com".
+  string name;
+  // Its icon as a data: URL, or empty for none.
+  string icon;
+  // The signing-in site's privacy policy and terms of service, as the
+  // provider lists them, or empty URLs.
+  url.mojom.Url privacy_policy;
+  url.mojom.Url terms_of_service;
+  // The user is signed out of it, so it has no accounts to offer: offer to
+  // sign in to it instead.
+  bool signed_out;
+  // It can sign in another account.
+  bool add_account;
+};
+
+// An account an IdentityRequested offers.
+struct WebViewIdentityAccount {
+  // Its provider: an index into the request's `providers`.
+  int32 provider;
+  // The name the provider shows, and its email or other identifier.
+  string name;
+  string identifier;
+  // Its picture as a data: URL, or empty for none.
+  string picture;
+  // The user signed in to the site with it before.
+  bool returning;
+  // What signing in with it shares with the site, to say so; empty when
+  // there is nothing to say, as for a returning account.
+  array<WebViewIdentityField> shared;
+};
+
+// A step of a site's "Sign in with" request, for the shell to show over the
+// page.
+struct WebViewIdentityRequest {
+  WebViewIdentityStep step;
+  // The page asked from its own sign-in button (FedCM's active mode): show
+  // it over the page. Otherwise the site offers it unasked: leave the page
+  // usable.
+  bool button;
+  // The site signing in, as Chrome names it: "medium.com". `frame_site` is
+  // the frame asking when it is another site's, or empty.
+  string site;
+  string frame_site;
+  WebViewIdentityPurpose purpose;
+  array<WebViewIdentityProvider> providers;
+  // kAccounts: those to pick from. kVerifying: the one signing in.
+  array<WebViewIdentityAccount> accounts;
+  // kVerifying: signing in without the user picking, to a site they signed
+  // in to before (FedCM's auto re-authentication).
+  bool automatic;
+  // kError: the provider's error code, such as "access_denied", or empty;
+  // and its page about the error, or an empty URL.
+  string error;
+  url.mojom.Url error_url;
+};
+
+// The shell's answer to an IdentityRequested. See WebViewIdentityStep.
+enum WebViewIdentityAction {
+  // Not answered: no listener, withdrawn or replaced.
+  kNone,
+  // The user closed it.
+  kDismiss,
+  kChoose,
+  kSignInToProvider,
+  kMoreDetails,
+};
+
 enum WebViewPageFailureKind {
   // The page could not be reached: no network, no such host, refused, timed
   // out, or blocked. `error` says which.
@@ -669,6 +779,22 @@ interface WebViewGuestClient {
   // The page closed the unanswered picker, for example because the control
   // went away. Its answer, if one is sent, is ignored.
   PickerWithdrawn();
+
+  // A site in the page asked to sign in with an identity provider (FedCM's
+  // `navigator.credentials.get({identity})`), so the shell must show
+  // `request`, a step of it. See WebViewIdentityStep for what each answer
+  // means; `index` is read only for the actions that say so.
+  //
+  // An unhandled event or a closed pipe is kNone. A newer step replaces an
+  // older, unanswered one, which is answered kNone. The engine draws no
+  // dialog of its own. See //components/domicile/browser/identity_dialog.h.
+  IdentityRequested(WebViewIdentityRequest request)
+      => (WebViewIdentityAction action, int32 index);
+
+  // The browser dropped the unanswered IdentityRequested, because the
+  // request ended or the page navigated. Its answer, if one is sent, is
+  // ignored.
+  IdentityWithdrawn();
 
   // The page entered or left fullscreen, as a video's fullscreen button does.
   // The page fills the element's box; the shell decides whether the element

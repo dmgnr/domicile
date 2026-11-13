@@ -4,6 +4,7 @@ import { FilePicker } from "@domicile-desktop/component-library/FilePicker";
 import { desktopFolders } from "@domicile-desktop/component-library/folders";
 import { DeviceAsk } from "@domicile-desktop/manganese-page-requests/DeviceAsk";
 import { ExternalAppAsk } from "@domicile-desktop/manganese-page-requests/ExternalAppAsk";
+import { IdentityAsk } from "@domicile-desktop/manganese-page-requests/IdentityAsk";
 import { PageDialog } from "@domicile-desktop/manganese-page-requests/PageDialog";
 import { PickerAsk } from "@domicile-desktop/manganese-page-requests/PickerAsk";
 import { PromptAsk } from "@domicile-desktop/manganese-page-requests/PromptAsk";
@@ -11,6 +12,7 @@ import { SignInAsk } from "@domicile-desktop/manganese-page-requests/SignInAsk";
 import { useDeviceRequest } from "@domicile-desktop/manganese-page-requests/useDeviceRequest";
 import { useDialogRequest } from "@domicile-desktop/manganese-page-requests/useDialogRequest";
 import { useExternalAppRequest } from "@domicile-desktop/manganese-page-requests/useExternalAppRequest";
+import { useIdentityRequest } from "@domicile-desktop/manganese-page-requests/useIdentityRequest";
 import { useLinkOpener } from "@domicile-desktop/manganese-page-requests/useLinkOpener";
 import { usePermissionRequest } from "@domicile-desktop/manganese-page-requests/usePermissionRequest";
 import { usePickerRequest } from "@domicile-desktop/manganese-page-requests/usePickerRequest";
@@ -352,6 +354,10 @@ export const BrowserWindow = ({
   // permissions, and the element to focus. The engine draws no dialog.
   const prompt = usePromptRequest(view);
   const [promptBox, setPromptBox] = useState<HTMLElement | null>(null);
+  // The "Sign in with" step the site's sign-in is on, and the answer to
+  // focus when it asks over the page. The engine draws no account chooser.
+  const identity = useIdentityRequest(view);
+  const [identityBox, setIdentityBox] = useState<HTMLElement | null>(null);
   // The color, date or list picker a form control in the page opened, and
   // the element in it to focus. The engine draws no picker.
   const pagePicker = usePickerRequest(view);
@@ -366,6 +372,7 @@ export const BrowserWindow = ({
     dialogBox ??
     signInBox ??
     promptBox ??
+    identityBox ??
     appAskBox ??
     pagePickerBox ??
     problemBox;
@@ -597,6 +604,16 @@ export const BrowserWindow = ({
       throw new Error("browser window: no view to drive");
     } else {
       command(view);
+    }
+  };
+
+  // Opens a link from the page in another browser window, private when this
+  // one is.
+  const openWindow = (url: string): void => {
+    if (isPrivate) {
+      domicile.browser.openPrivate(url);
+    } else {
+      domicile.browser.open(url);
     }
   };
 
@@ -849,13 +866,7 @@ export const BrowserWindow = ({
               onChoose={(command) => {
                 choosePageCommand(command, menu.context, {
                   browse: run,
-                  openWindow: (url) => {
-                    if (isPrivate) {
-                      domicile.browser.openPrivate(url);
-                    } else {
-                      domicile.browser.open(url);
-                    }
-                  },
+                  openWindow,
                 });
               }}
               onClose={dismissMenu}
@@ -882,6 +893,18 @@ export const BrowserWindow = ({
                 )}
                 ref={setPromptBox}
                 request={prompt}
+              />
+            )}
+          {dialogRequest === undefined &&
+            signIn === undefined &&
+            prompt === undefined &&
+            identity !== undefined && (
+              <IdentityAsk
+                // A new card per step, so each starts unanswered.
+                key={identity.step}
+                onOpenLink={openWindow}
+                ref={setIdentityBox}
+                request={identity}
               />
             )}
           {dialogRequest === undefined &&

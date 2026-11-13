@@ -8,9 +8,11 @@ type Props = {
   /** The question, which names the dialog. */
   title: ReactNode;
   /** The text under it, which describes the dialog. */
-  message: ReactNode;
+  message?: ReactNode;
   /** Anything between the text and the buttons. */
   children?: ReactNode;
+  /** Small print over the buttons. */
+  note?: ReactNode;
   /** The buttons; a `submit` one answers yes. */
   footer: ReactNode;
   /** Escape, as Cancel. */
@@ -31,6 +33,7 @@ export const PageModal = ({
   children,
   footer,
   message,
+  note,
   onDismiss,
   onSubmit,
   title,
@@ -41,7 +44,7 @@ export const PageModal = ({
     <div className={scrimStyles}>
       {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: Escape cancels the dialog wherever focus is in it, as base-ui's dialogs do */}
       <form
-        aria-describedby={messageId}
+        aria-describedby={message === undefined ? undefined : messageId}
         aria-labelledby={titleId}
         aria-modal="true"
         className={popupStyles}
@@ -60,10 +63,13 @@ export const PageModal = ({
         <h2 className={titleStyles} id={titleId}>
           {title}
         </h2>
-        <p className={messageStyles} id={messageId}>
-          {message}
-        </p>
+        {message !== undefined && (
+          <p className={messageStyles} id={messageId}>
+            {message}
+          </p>
+        )}
         {children}
+        {note !== undefined && <p className={noteStyles}>{note}</p>}
         <footer className={footerStyles}>{footer}</footer>
       </form>
     </div>
@@ -125,6 +131,12 @@ const messageStyles = css({
   overflowWrap: "anywhere",
   overflowY: "auto",
   whiteSpace: "pre-wrap",
+});
+
+const noteStyles = css({
+  color: "muted",
+  fontSize: "xs",
+  margin: 0,
 });
 
 const footerStyles = flex({

@@ -30,6 +30,7 @@
 #include "third_party/blink/renderer/core/html/domicile/domicile_dialog_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_external_app_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_file_chooser_event.h"
+#include "third_party/blink/renderer/core/html/domicile/domicile_identity_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_permission_request_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_picker_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_prompt_event.h"
@@ -145,6 +146,11 @@ constexpr char kPromptEvent[] = "domicile-prompt";
 constexpr char kPickerEvent[] = "domicile-picker";
 constexpr char kPickerWithdrawnEvent[] = "domicile-picker-withdrawn";
 constexpr char kPromptWithdrawnEvent[] = "domicile-prompt-withdrawn";
+
+// A step of a site's "Sign in with" request, which the shell answers on the
+// event, and its withdrawal. See domicile_identity_event.h.
+constexpr char kIdentityEvent[] = "domicile-identity";
+constexpr char kIdentityWithdrawnEvent[] = "domicile-identity-withdrawn";
 
 // The values of a site permission's setting. Strings, as for `security`.
 constexpr char kSettingAsk[] = "ask";
@@ -312,6 +318,7 @@ void HTMLWebViewElement::Trace(Visitor* visitor) const {
   visitor->Trace(external_app_);
   visitor->Trace(sign_in_);
   visitor->Trace(prompt_);
+  visitor->Trace(identity_);
   visitor->Trace(picker_);
   visitor->Trace(pointer_listener_);
   HTMLFrameElementBase::Trace(visitor);
@@ -1162,6 +1169,39 @@ void HTMLWebViewElement::PromptWithdrawn() {
 void HTMLWebViewElement::PromptAnswered(DomicilePromptEvent& event) {
   if (prompt_ == &event) {
     prompt_ = nullptr;
+  }
+}
+
+// Held in `identity_` until answered. The next step replaces the one shown,
+// which is answered as unanswered and withdrawn from the shell first.
+void HTMLWebViewElement::IdentityRequested(
+    domicile::mojom::blink::WebViewIdentityRequestPtr request,
+    IdentityRequestedCallback callback) {
+  if (identity_) {
+    identity_->NoneIfUnanswered();
+    DispatchEvent(*Event::CreateBubble(AtomicString(kIdentityWithdrawnEvent)));
+  }
+  auto* event = MakeGarbageCollected<DomicileIdentityEvent>(
+      AtomicString(kIdentityEvent), std::move(request), std::move(callback),
+      *this);
+  identity_ = event;
+  DispatchEvent(*event);
+  if (!event->defaultPrevented()) {
+    event->NoneIfUnanswered();
+  }
+}
+
+// Only for a step still held: one the shell answered is already gone.
+void HTMLWebViewElement::IdentityWithdrawn() {
+  if (identity_) {
+    identity_->NoneIfUnanswered();
+    DispatchEvent(*Event::CreateBubble(AtomicString(kIdentityWithdrawnEvent)));
+  }
+}
+
+void HTMLWebViewElement::IdentityAnswered(DomicileIdentityEvent& event) {
+  if (identity_ == &event) {
+    identity_ = nullptr;
   }
 }
 

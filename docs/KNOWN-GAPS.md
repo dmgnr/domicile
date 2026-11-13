@@ -56,9 +56,8 @@ the detail, when there is one. Remove a gap when it's fixed.
   [EXTENSIONS.md](/docs/architecture/EXTENSIONS.md).
 - **A browser window attached while hidden is visible for a moment,** so the
   page sees `visibilitychange` twice (`WebViewGuest::AttachWindowTo`).
-- **No picture-in-picture video, payments, or "Sign in with" account
-  sheets.** Chrome draws these itself, so they are turned off until the shell
-  has its own.
+- **No picture-in-picture video or payments.** Chrome draws these itself, so
+  they are turned off until the shell has its own.
   [ENGINE-BROWSER-BEHAVIOR.md](/docs/architecture/ENGINE-BROWSER-BEHAVIOR.md#chromes-dialogs-sheets-and-floating-windows).
 - **Resize cost is unmeasured.**
   [ENGINE-FORK.md](/docs/architecture/ENGINE-FORK.md#embed-deadlines).

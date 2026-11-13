@@ -133,10 +133,10 @@ class DeskWindows final : public base::SupportsUserData::Data,
 
   // Opens a window at `url` as a tab of the desk's own window, or a private
   // window in the off-the-record profile, in `partition` when there is one.
-  // Returns false and opens nothing when the profile has no shell to own it.
-  bool Open(const GURL& url,
-            bool private_browsing,
-            const std::optional<WebViewPartition>& partition) {
+  // Returns it, or null when the profile has no shell to own it.
+  WebViewGuest* Open(const GURL& url,
+                     bool private_browsing,
+                     const std::optional<WebViewPartition>& partition) {
     return Make([&](WebViewGuest& guest) { guest.Navigate(url); },
                 /*popup_window=*/std::nullopt, 0, 0, private_browsing,
                 /*app=*/false, partition);
@@ -152,7 +152,7 @@ class DeskWindows final : public base::SupportsUserData::Data,
     return Make(
         [&](WebViewGuest& guest) { guest.TakeHistoryStep(source, step); },
         /*popup_window=*/std::nullopt, 0, 0, private_browsing,
-        /*app=*/false, partition);
+        /*app=*/false, partition) != nullptr;
   }
 
   // Opens an app window at `url`: a window of the desk's own window that the
@@ -179,7 +179,8 @@ class DeskWindows final : public base::SupportsUserData::Data,
     return Make([&](WebViewGuest& guest) { guest.Navigate(url); },
                 /*popup_window=*/std::nullopt, 0, 0,
                 /*private_browsing=*/false, /*app=*/true,
-                /*partition=*/std::nullopt, /*app_host=*/std::string(), app_id);
+                /*partition=*/std::nullopt, /*app_host=*/std::string(),
+                app_id) != nullptr;
   }
 
   // Opens an app window at an app module's `url`, pinned to `app_host`. See
@@ -188,7 +189,7 @@ class DeskWindows final : public base::SupportsUserData::Data,
     return Make([&](WebViewGuest& guest) { guest.Navigate(url); },
                 /*popup_window=*/std::nullopt, 0, 0,
                 /*private_browsing=*/false, /*app=*/true,
-                /*partition=*/std::nullopt, app_host);
+                /*partition=*/std::nullopt, app_host) != nullptr;
   }
 
   // Makes the page of a window a page opened, for content to hold until
@@ -225,7 +226,7 @@ class DeskWindows final : public base::SupportsUserData::Data,
   bool OpenPopupWindow(int window_id, const GURL& url, int width, int height) {
     return Make([&](WebViewGuest& guest) { guest.Navigate(url); }, window_id,
                 width, height, /*private_browsing=*/false,
-                /*app=*/false, /*partition=*/std::nullopt);
+                /*app=*/false, /*partition=*/std::nullopt) != nullptr;
   }
 
   // The off-the-record profile a new private page lives in, made on first
@@ -400,8 +401,9 @@ class DeskWindows final : public base::SupportsUserData::Data,
     int captures = 0;
   };
 
-  // Makes a window and gives it its first page with `load`.
-  bool Make(base::FunctionRef<void(WebViewGuest&)> load,
+  // Makes a window and gives it its first page with `load`. Returns it, or
+  // null when the profile has no shell to own it.
+  WebViewGuest* Make(base::FunctionRef<void(WebViewGuest&)> load,
             std::optional<int> popup_window,
             int width,
             int height,
@@ -416,7 +418,7 @@ class DeskWindows final : public base::SupportsUserData::Data,
     content::WebContents* shell = ShellContentsIn(profile_);
     if (shell == nullptr) {
       LOG(WARNING) << "domicile: no shell to open a browser window in.";
-      return false;
+      return nullptr;
     }
     const std::string id = base::NumberToString(next_id_++);
     std::unique_ptr<WebViewGuest> guest = WebViewGuest::MakeWindow(
@@ -430,10 +432,11 @@ class DeskWindows final : public base::SupportsUserData::Data,
       guest->PinToApp(app_host);
     }
     load(*guest);
+    WebViewGuest* made = guest.get();
     windows_.push_back(Window{id, std::move(guest), std::move(watch), width,
                               height, app, app_id});
     Changed();
-    return true;
+    return made;
   }
 
   // Destroys a closed window's page once its linger is over. A profile
@@ -553,10 +556,11 @@ class DeskWindows final : public base::SupportsUserData::Data,
 class Host final : public BrowserWindowHost {
  public:
   // A private page's new window is private too.
-  void Open(content::BrowserContext& context,
-            const GURL& url,
-            const std::optional<WebViewPartition>& partition) override {
-    Windows(context).Open(url, context.IsOffTheRecord(), partition);
+  WebViewGuest* Open(
+      content::BrowserContext& context,
+      const GURL& url,
+      const std::optional<WebViewPartition>& partition) override {
+    return Windows(context).Open(url, context.IsOffTheRecord(), partition);
   }
 
   // As Open, in `source`'s context and partition.
@@ -766,7 +770,8 @@ bool OpenBrowserWindow(const GURL& url) {
   }
   return DeskWindows::For(
              Profile::FromBrowserContext(shell->GetBrowserContext()))
-      .Open(url, /*private_browsing=*/false, /*partition=*/std::nullopt);
+             .Open(url, /*private_browsing=*/false,
+                   /*partition=*/std::nullopt) != nullptr;
 }
 
 bool OpenAppWindow(const GURL& url,

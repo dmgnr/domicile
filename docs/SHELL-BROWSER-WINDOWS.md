@@ -1006,6 +1006,69 @@ frame.addEventListener(WEBVIEW_PICKER_EVENT, (event) => {
 
 Manganese draws them over the page (`manganese-page-requests/PickerAsk.tsx`).
 
+## "Sign in with"
+
+A site that signs in with an identity provider ("Sign in with Google",
+FedCM) fires `domicile-identity` for each step of it, instead of Chrome's
+account chooser:
+
+<!-- tab: React -->
+
+```tsx
+import { WEBVIEW_IDENTITY_EVENT } from "@domicile-desktop/sdk/webview-element";
+
+useEffect(() => {
+  const frame = frameRef.current; // the browser window's element
+  const asked = (event) => {
+    event.preventDefault(); // claim it
+    show(event.step, event.site, event.providers(), event.accounts()).then(
+      (account) => event.choose(account),
+      () => event.dismiss(),
+    );
+  };
+  frame?.addEventListener(WEBVIEW_IDENTITY_EVENT, asked);
+  return () => frame?.removeEventListener(WEBVIEW_IDENTITY_EVENT, asked);
+}, []);
+```
+
+<!-- tab: JavaScript -->
+
+```js
+import { WEBVIEW_IDENTITY_EVENT } from "@domicile-desktop/sdk/webview-element";
+
+frame.addEventListener(WEBVIEW_IDENTITY_EVENT, (event) => {
+  event.preventDefault(); // claim it
+  show(event.step, event.site, event.providers(), event.accounts()).then(
+    (account) => event.choose(account),
+    () => event.dismiss(),
+  );
+});
+```
+
+<!-- /tabs -->
+
+- **`preventDefault()`:** claims it. Unclaimed, the request fails.
+- **`step`:** `loading`, `accounts`, `signed-out`, `verifying` or `error`;
+  `WEBVIEW_IDENTITY_STEPS` gives what each shows and takes.
+- **`button`:** the page asked from its own sign-in button, so show it over
+  the page. False when the site offers it unasked, as many do on load: leave
+  the page usable.
+- **`site`**, **`purpose`:** the site signing in and what for (`sign-in`,
+  `sign-up`, `use`, `continue`), to title it.
+- **`providers()`**, **`accounts()`:** each account names its provider and
+  what signing in with it `shared`s with the site the first time. A
+  provider lists the site's privacy policy and terms of service.
+- **`choose(account)`:** signs in. **`signInToProvider(provider)`:** opens
+  the provider's sign-in page in a browser window, when signed out or for
+  another account. **`moreDetails()`:** opens an `error`'s page.
+  **`dismiss()`:** the user's close, which quiets the site's unasked offers
+  for a while, as Chrome's ✕ does.
+- **One step at a time.** The next step replaces the open one, which fires
+  `domicile-identity-withdrawn`, as does one the browser drops.
+
+Manganese asks over the page after the site's button, and in the page's
+corner otherwise (`manganese-page-requests/IdentityAsk.tsx`).
+
 ## Error, warning and crashed pages
 
 The engine draws no error page, certificate or Safe Browsing warning, or

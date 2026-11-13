@@ -28,6 +28,7 @@
   "exports": {
     "./DeviceAsk": "./src/DeviceAsk.tsx",
     "./ExternalAppAsk": "./src/ExternalAppAsk.tsx",
+    "./IdentityAsk": "./src/IdentityAsk.tsx",
     "./PageDialog": "./src/PageDialog.tsx",
     "./PermissionAsk": "./src/PermissionAsk.tsx",
     "./PickerAsk": "./src/PickerAsk.tsx",
@@ -38,6 +39,7 @@
     "./useDeviceRequest": "./src/useDeviceRequest.ts",
     "./useDialogRequest": "./src/useDialogRequest.ts",
     "./useExternalAppRequest": "./src/useExternalAppRequest.ts",
+    "./useIdentityRequest": "./src/useIdentityRequest.ts",
     "./useLinkOpener": "./src/useLinkOpener.ts",
     "./usePermissionRequest": "./src/usePermissionRequest.ts",
     "./usePickerRequest": "./src/usePickerRequest.ts",

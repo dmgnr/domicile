@@ -88,6 +88,7 @@ TOGETHER=(
   guard-webview-resend-form
   guard-webview-page-picker
   guard-webview-chrome-sheets
+  guard-webview-sign-in-with
   guard-webview-print
   guard-webview-context-menu
   guard-webview-upload

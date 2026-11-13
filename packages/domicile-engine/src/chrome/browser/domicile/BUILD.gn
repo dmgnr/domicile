@@ -4,7 +4,8 @@
 # The fork's browser-side code that needs //chrome: the command socket, the
 # desk, browser windows, extensions, history, site data, file dialogs,
 # permission prompts, device choosers, links for applications, sign-ins,
-# other prompts, refusing Chrome's own dialogs, printing and pointer warps.
+# "Sign in with" dialogs, other prompts, refusing Chrome's own dialogs,
+# printing and pointer warps.
 #
 # A separate target because //chrome/browser:browser accepts no new sources,
 # and it keeps the fork to one added dependency in a Chromium-owned file.
@@ -48,6 +49,8 @@ source_set("domicile") {
     "domicile_file_dialogs.h",
     "domicile_history.cc",
     "domicile_history.h",
+    "domicile_identity_dialog.cc",
+    "domicile_identity_dialog.h",
     "domicile_media_devices.cc",
     "domicile_media_devices.h",
     "domicile_modifier_taps.cc",
@@ -154,6 +157,8 @@ source_set("domicile") {
     "//chrome/common/extensions/api",
     "//components/domicile:desk_tabs",
     "//components/domicile:web_view_guest",
+    # A site's "Sign in with" dialogs, asked of the guest's element.
+    "//components/domicile:identity_dialog",
     "//components/sessions",
     "//components/sessions:session_id",
     # File dialogs, answered by the shell.

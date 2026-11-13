@@ -1197,6 +1197,50 @@ void WebViewGuest::WithdrawPrompt(int id) {
   client_->PromptWithdrawn();
 }
 
+int WebViewGuest::AskIdentity(mojom::WebViewIdentityRequestPtr request,
+                              IdentityAnswered answered) {
+  const int id = ++last_identity_;
+  open_identity_ = id;
+  // Logged before asking; the sign-in-with guard greps for it.
+  LOG(INFO) << "domicile: a <webview>'s page signs in with an identity "
+               "provider; asking the shell to show its "
+            << request->step << " step.";
+  // Wrapped, as in AskPrompt: unanswered is kNone.
+  client_->IdentityRequested(
+      std::move(request),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(
+              [](base::WeakPtr<WebViewGuest> guest, int id,
+                 IdentityAnswered answered,
+                 mojom::WebViewIdentityAction action, int32_t index) {
+                if (guest && guest->open_identity_ == id) {
+                  guest->open_identity_ = 0;
+                }
+                // Logged for the sign-in-with guard.
+                LOG(INFO) << "domicile: a <webview>'s sign-in step was "
+                             "answered: "
+                          << action << ".";
+                std::move(answered).Run(action, index);
+              },
+              weak_factory_.GetWeakPtr(), id, std::move(answered)),
+          mojom::WebViewIdentityAction::kNone, 0));
+  return id;
+}
+
+void WebViewGuest::WithdrawIdentity(int id) {
+  if (open_identity_ != id || id == 0) {
+    return;
+  }
+  open_identity_ = 0;
+  // The sign-in-with guard greps for it.
+  LOG(INFO) << "domicile: a <webview>'s sign-in step was withdrawn.";
+  client_->IdentityWithdrawn();
+}
+
+WebViewGuest* WebViewGuest::OpenWindowAt(const GURL& url) {
+  return Host().Open(*guest_contents_->GetBrowserContext(), url, partition());
+}
+
 void WebViewGuest::BindPagePicker(
     content::RenderFrameHost& frame,
     mojo::PendingReceiver<mojom::PagePicker> receiver) {
@@ -2684,7 +2728,7 @@ void WebViewGuest::ReportNewWindow(const GURL& target_url) {
   LOG(INFO) << "domicile: opened a browser window at "
             << target_url.possibly_invalid_spec() << " with no opener.";
 
-  Host().Open(*guest_contents_->GetBrowserContext(), target_url, partition());
+  OpenWindowAt(target_url);
 }
 
 void WebViewGuest::CloseContents(content::WebContents* source) {

@@ -625,6 +625,120 @@ export const WEBVIEW_PICKER_KINDS = [
 /** One of {@link WEBVIEW_PICKER_KINDS}. */
 export type WebViewPickerKind = (typeof WEBVIEW_PICKER_KINDS)[number];
 
+/**
+ * Fired when the page signs in with an identity provider ("Sign in with",
+ * FedCM), once for each step of it: see {@link WEBVIEW_IDENTITY_STEPS}. Each
+ * step replaces the last, and the request waits on each until it is answered.
+ * Bubbles.
+ *
+ * The browser draws no account chooser. Call `preventDefault()` to handle it,
+ * then answer with {@link DomicileIdentityEvent.choose},
+ * {@link DomicileIdentityEvent.signInToProvider},
+ * {@link DomicileIdentityEvent.moreDetails} or
+ * {@link DomicileIdentityEvent.dismiss}. If no listener calls
+ * `preventDefault()`, the request fails, without the quiet period a dismissal
+ * starts.
+ */
+export const WEBVIEW_IDENTITY_EVENT = "domicile-identity";
+
+/**
+ * Fired when the browser drops the unanswered {@link WEBVIEW_IDENTITY_EVENT},
+ * for example because the page navigated or gave up, the request ended, or
+ * a newer step replaces it. Answering it afterward throws.
+ * Carries no payload. Bubbles.
+ */
+export const WEBVIEW_IDENTITY_WITHDRAWN_EVENT = "domicile-identity-withdrawn";
+
+/**
+ * The steps of a {@link WEBVIEW_IDENTITY_EVENT}, as
+ * {@link DomicileIdentityEvent.step}:
+ *
+ * - `loading`: the browser is fetching the accounts. Only after the page's own
+ *   sign-in button (`button`).
+ * - `accounts`: pick one of `accounts()` with `choose`, or sign in another
+ *   with `signInToProvider` where its provider has `addAccount`.
+ * - `signed-out`: the user is signed out of `providers()[0]`;
+ *   `signInToProvider(0)` opens its sign-in page.
+ * - `verifying`: signing in with `accounts()[0]`. Takes no answer; the next
+ *   step or the withdrawal ends it. `automatic` when the user picked nothing.
+ * - `error`: signing in failed. `error` and `errorUrl` say why;
+ *   `moreDetails()` opens `errorUrl`.
+ */
+export const WEBVIEW_IDENTITY_STEPS = [
+  "loading",
+  "accounts",
+  "signed-out",
+  "verifying",
+  "error",
+] as const;
+
+/** One of {@link WEBVIEW_IDENTITY_STEPS}. */
+export type WebViewIdentityStep = (typeof WEBVIEW_IDENTITY_STEPS)[number];
+
+/**
+ * What signing in is for, as {@link DomicileIdentityEvent.purpose}, to title a
+ * step: "Sign in to", "Sign up to", "Use" or "Continue to" the site.
+ */
+export const WEBVIEW_IDENTITY_PURPOSES = [
+  "sign-in",
+  "sign-up",
+  "use",
+  "continue",
+] as const;
+
+/** One of {@link WEBVIEW_IDENTITY_PURPOSES}. */
+export type WebViewIdentityPurpose = (typeof WEBVIEW_IDENTITY_PURPOSES)[number];
+
+/**
+ * What signing in with an account shares with the site, as
+ * {@link WebViewIdentityAccount.shared}.
+ */
+export const WEBVIEW_IDENTITY_FIELDS = [
+  "name",
+  "email",
+  "username",
+  "phone-number",
+  "picture",
+] as const;
+
+/** One of {@link WEBVIEW_IDENTITY_FIELDS}. */
+export type WebViewIdentityField = (typeof WEBVIEW_IDENTITY_FIELDS)[number];
+
+/** An identity provider, as {@link DomicileIdentityEvent.providers} lists it. */
+export type WebViewIdentityProvider = {
+  /** Its site, as the browser names it, such as `google.com`. */
+  readonly name: string;
+  /** Its icon as a `data:` URL, or `""`. */
+  readonly icon: string;
+  /** The signing-in site's privacy policy, as the provider lists it, or `""`. */
+  readonly privacyPolicy: string;
+  /** The signing-in site's terms of service, as the provider lists them, or `""`. */
+  readonly termsOfService: string;
+  /** The user is signed out of it, so it offers no accounts. */
+  readonly signedOut: boolean;
+  /** It can sign in another account, with `signInToProvider`. */
+  readonly addAccount: boolean;
+};
+
+/** An account, as {@link DomicileIdentityEvent.accounts} lists it. */
+export type WebViewIdentityAccount = {
+  /** Its provider: an index into {@link DomicileIdentityEvent.providers}. */
+  readonly provider: number;
+  /** The name the provider shows. */
+  readonly name: string;
+  /** Its email or other identifier. */
+  readonly identifier: string;
+  /** Its picture as a `data:` URL, or `""`. */
+  readonly picture: string;
+  /** The user signed in to the site with it before. */
+  readonly returning: boolean;
+  /**
+   * What signing in with it shares with the site, to say so. Empty when
+   * there is nothing to say, as for a returning account.
+   */
+  readonly shared: readonly WebViewIdentityField[];
+};
+
 /** The dialogs a page can open, as {@link DomicileDialogEvent.dialogType}. */
 export const WEBVIEW_DIALOG_TYPES = [
   "alert",
@@ -1175,6 +1289,52 @@ declare global {
   }
 
   /**
+   * The {@link WEBVIEW_IDENTITY_EVENT} event. The engine defines it in
+   * `domicile_identity_event.idl`.
+   */
+  interface DomicileIdentityEvent extends Event {
+    /** Which step to show: one of {@link WEBVIEW_IDENTITY_STEPS}. */
+    readonly step: WebViewIdentityStep;
+    /**
+     * The page asked from its own sign-in button, so show the step over the
+     * page. Otherwise the site offers it unasked: leave the page usable.
+     */
+    readonly button: boolean;
+    /** The site signing in, as the browser names it, such as `medium.com`. */
+    readonly site: string;
+    /** The frame asking, when that is another site's, or `""`. */
+    readonly frameSite: string;
+    /** What signing in is for: one of {@link WEBVIEW_IDENTITY_PURPOSES}. */
+    readonly purpose: WebViewIdentityPurpose;
+    /** On `verifying`: signing in without the user picking. */
+    readonly automatic: boolean;
+    /** On `error`: the provider's error code, such as `access_denied`, or `""`. */
+    readonly error: string;
+    /** On `error`: the provider's page about it, or `""`. */
+    readonly errorUrl: string;
+    /** The providers. */
+    providers(): WebViewIdentityProvider[];
+    /** On `accounts`, those to pick from; on `verifying`, the one signing in. */
+    accounts(): WebViewIdentityAccount[];
+    /**
+     * Sign in with `accounts()[account]`, on `accounts`. Answering twice,
+     * after {@link WEBVIEW_IDENTITY_WITHDRAWN_EVENT}, or on a step that does
+     * not take it throws an `InvalidStateError`; an index out of range throws
+     * a `TypeError`.
+     */
+    choose(account: number): void;
+    /**
+     * Open `providers()[provider]`'s sign-in page in a browser window, on
+     * `accounts` and `signed-out`.
+     */
+    signInToProvider(provider: number): void;
+    /** Open `errorUrl` in a browser window, on an `error` that has one. */
+    moreDetails(): void;
+    /** Close the step, as the user's close. */
+    dismiss(): void;
+  }
+
+  /**
    * The {@link WEBVIEW_WILL_NAVIGATE_EVENT} event. The engine defines it in
    * `domicile_will_navigate_event.idl`.
    */
@@ -1197,6 +1357,7 @@ declare global {
     "domicile-device-request": DomicileDeviceRequestEvent;
     "domicile-dialog": DomicileDialogEvent;
     "domicile-external-app": DomicileExternalAppEvent;
+    "domicile-identity": DomicileIdentityEvent;
     "domicile-picker": DomicilePickerEvent;
     "domicile-prompt": DomicilePromptEvent;
     "domicile-sign-in": DomicileSignInEvent;

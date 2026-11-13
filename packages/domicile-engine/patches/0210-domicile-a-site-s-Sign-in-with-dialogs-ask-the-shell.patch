@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 18:30:00 +0000
+Subject: [PATCH] domicile: a site's "Sign in with" dialogs ask the shell
+
+FedCM ("Sign in with Google"'s account chooser) was off, since Chrome
+draws its dialogs over the outermost window, which for a <webview> is
+the shell's (#1985). Its dialogs now ask the page's element instead.
+
+- `chrome_content_browser_client.cc`:
+  CreateIdentityRequestDialogController returns
+  `domicile::MakeIdentityDialog`
+  (`chrome/browser/domicile/domicile_identity_dialog.h`), which asks
+  the guest's element for each step and opens the provider's own pages
+  as browser windows.
+- Blink build lists: DomicileIdentityEvent and its two dictionaries.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ chrome/browser/chrome_content_browser_client.cc           | 5 ++++-
+ third_party/blink/renderer/bindings/generated_in_core.gni | 6 ++++++
+ third_party/blink/renderer/bindings/idl_in_core.gni       | 3 +++
+ third_party/blink/renderer/core/html/build.gni            | 2 ++
+ 4 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 3fbbe3d..1ddec54 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/chrome_content_browser_client.h"
+ 
++#include "chrome/browser/domicile/domicile_identity_dialog.h"
+ #include "components/domicile/browser/force_dark.h"
+ #include "components/domicile/browser/shell_source.h"
+ #include "components/domicile/browser/shell_url_loader_factory.h"
+@@ -8959,7 +8960,9 @@ bool ChromeContentBrowserClient::HasErrorPage(int http_status_code) {
+ std::unique_ptr<content::IdentityRequestDialogController>
+ ChromeContentBrowserClient::CreateIdentityRequestDialogController(
+     content::WebContents* web_contents) {
+-  return std::make_unique<IdentityDialogController>(web_contents);
++  // Domicile's engine fork: the shell shows a site's "Sign in with" dialogs,
++  // not Chrome. See chrome/browser/domicile/domicile_identity_dialog.h.
++  return domicile::MakeIdentityDialog(web_contents);
+ }
+ 
+ std::unique_ptr<content::DigitalIdentityProvider>
+diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
+index d2b0111..c408664 100644
+--- a/third_party/blink/renderer/bindings/generated_in_core.gni
++++ b/third_party/blink/renderer/bindings/generated_in_core.gni
+@@ -210,6 +210,10 @@ generated_dictionary_sources_in_core = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_dom_rect_init.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_device.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_device.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_identity_account.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_identity_account.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_identity_provider.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_identity_provider.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_media_device.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_media_device.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_media_devices.cc",
+@@ -1234,6 +1238,8 @@ generated_interface_sources_in_core = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_picker_event.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_prompt_event.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_prompt_event.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_identity_event.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_identity_event.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
+index b884524..5c3af5e 100644
+--- a/third_party/blink/renderer/bindings/idl_in_core.gni
++++ b/third_party/blink/renderer/bindings/idl_in_core.gni
+@@ -475,6 +475,9 @@ static_idl_files_in_core = [
+   "//third_party/blink/renderer/core/html/domicile/domicile_sign_in_event.idl",
+   "//third_party/blink/renderer/core/html/domicile/domicile_picker_event.idl",
+   "//third_party/blink/renderer/core/html/domicile/domicile_prompt_event.idl",
++  "//third_party/blink/renderer/core/html/domicile/domicile_identity_account.idl",
++  "//third_party/blink/renderer/core/html/domicile/domicile_identity_event.idl",
++  "//third_party/blink/renderer/core/html/domicile/domicile_identity_provider.idl",
+   "//third_party/blink/renderer/core/html/html_geolocation_element.idl",
+   "//third_party/blink/renderer/core/html/html_head_element.idl",
+   "//third_party/blink/renderer/core/html/html_heading_element.idl",
+diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
+index 6d60d43..c30c7d6 100644
+--- a/third_party/blink/renderer/core/html/build.gni
++++ b/third_party/blink/renderer/core/html/build.gni
+@@ -120,6 +120,8 @@ blink_core_sources_html = [
+   "domicile/domicile_picker_event.h",
+   "domicile/domicile_prompt_event.cc",
+   "domicile/domicile_prompt_event.h",
++  "domicile/domicile_identity_event.cc",
++  "domicile/domicile_identity_event.h",
+   "domicile/html_app_element.cc",
+   "domicile/html_app_element.h",
+   "domicile/html_web_view_element.cc",

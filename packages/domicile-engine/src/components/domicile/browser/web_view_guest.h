@@ -87,10 +87,12 @@ class BrowserWindowHost {
   virtual ~BrowserWindowHost() = default;
 
   // Opens a browser window at `url` in `context`'s desk and `partition`, for a
-  // page's new window or an extension's tabs.create.
-  virtual void Open(content::BrowserContext& context,
-                    const GURL& url,
-                    const std::optional<WebViewPartition>& partition) = 0;
+  // page's new window or an extension's tabs.create. Returns it, or null when
+  // there is no shell to own it.
+  virtual WebViewGuest* Open(
+      content::BrowserContext& context,
+      const GURL& url,
+      const std::optional<WebViewPartition>& partition) = 0;
 
   // Opens a browser window with a copy of `source`'s history, in its context
   // and partition, and takes `step` there. See
@@ -449,6 +451,27 @@ class WebViewGuest : public mojom::WebViewGuest,
   // Tells the shell to stop asking prompt `id`. Does nothing once it was
   // answered or a newer prompt replaced it.
   void WithdrawPrompt(int id);
+
+  // Asks the shell to show `request`, a step of a site's "Sign in with"
+  // request. See IdentityRequested in the mojom and
+  // components/domicile/browser/identity_dialog.h.
+  //
+  // `answered` gets the shell's answer: kNone if it ignored the step or the
+  // element went away. Returns the step's number, for WithdrawIdentity.
+  using IdentityAnswered =
+      base::OnceCallback<void(mojom::WebViewIdentityAction action,
+                              int32_t index)>;
+  int AskIdentity(mojom::WebViewIdentityRequestPtr request,
+                  IdentityAnswered answered);
+
+  // Tells the shell to stop showing step `id`. Does nothing once it was
+  // answered or a newer step replaced it.
+  void WithdrawIdentity(int id);
+
+  // Opens a browser window at `url` in this page's profile and partition, as
+  // a window its page opened with no opener. Returns it, or null when there
+  // is no shell to own it.
+  WebViewGuest* OpenWindowAt(const GURL& url);
 
   // Binds a picker for `frame`, a frame of this guest's page. See
   // mojom::PagePicker and PopulateChromeFrameBinders.
@@ -1136,6 +1159,9 @@ class WebViewGuest : public mojom::WebViewGuest,
   // The same for AskPrompt.
   int last_prompt_ = 0;
   int open_prompt_ = 0;
+  // The same for AskIdentity.
+  int last_identity_ = 0;
+  int open_identity_ = 0;
   // The page's pickers, each with the frame that asked, and the one the
   // shell is asked now, or none. See Pick.
   mojo::ReceiverSet<mojom::PagePicker, content::GlobalRenderFrameHostId>

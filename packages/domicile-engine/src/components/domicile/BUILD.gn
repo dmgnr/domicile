@@ -649,6 +649,30 @@ source_set("guest_dialogs") {
   deps = [ "//base" ]
 }
 
+# A site's "Sign in with" (FedCM) dialogs, asked of the shell. Its own target
+# for the reason :file_choice is one: it needs no guest, which is where its
+# tests are. //chrome/browser/domicile gives it the guest to ask.
+source_set("identity_dialog") {
+  sources = [
+    "browser/identity_dialog.cc",
+    "browser/identity_dialog.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/domicile/mojom",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//skia",
+    "//ui/gfx",
+    # The provider's icon and an account's picture, sent as PNG data: URLs.
+    "//ui/gfx/codec",
+    "//url",
+  ]
+}
+
 # Ids for the devices a <webview>'s device chooser offers. Its own target for
 # the reason :file_choice is one: it needs no browser, which is where its tests
 # are.
@@ -1210,6 +1234,7 @@ source_set("unit_tests") {
     "browser/file_choice_unittest.cc",
     "browser/frame_sink_broker_unittest.cc",
     "browser/guest_dialogs_unittest.cc",
+    "browser/identity_dialog_unittest.cc",
     "browser/input_method_lines_unittest.cc",
     "browser/line_framer_unittest.cc",
     "browser/notification_window_unittest.cc",
@@ -1297,6 +1322,7 @@ source_set("unit_tests") {
     ":forwarded_keys",
     ":guest_dialogs",
     ":held_chords",
+    ":identity_dialog",
     ":input_method_lines",
     ":keyboard_layout",
     ":line_framer",
@@ -1374,6 +1400,9 @@ source_set("unit_tests") {
     "//ui/events:event_constants",
     "//ui/events/keycodes:xkb",
     "//ui/events/ozone/layout",
+    # The provider data :identity_dialog's tests build.
+    "//ui/gfx",
+    "//url",
     "//ui/gfx/geometry",
     # The pointer's colors are views' and live beside it, not here: //ui may
     # not depend on //components. Its tests run with the fork's anyway.

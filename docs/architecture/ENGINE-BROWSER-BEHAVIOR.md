@@ -204,6 +204,26 @@ Patch `0110`:
 - A crashed page was already reported (`renderProcessGone`); the shell now
   draws it too.
 
+## "Sign in with" (FedCM)
+
+- A site's "Sign in with" request (`navigator.credentials.get({identity})`)
+  asks the element as `domicile-identity`, one step at a time: loading, the
+  accounts, signed out of the provider, verifying, and an error. The shell
+  draws each, and each replaces the last. Patch `0210` has
+  `CreateIdentityRequestDialogController` make `IdentityDialog`
+  (`components/domicile/browser/identity_dialog.h`) in place of Chrome's
+  account chooser.
+- The step open when the request ends (the page navigated, or the request
+  was aborted) is withdrawn (`domicile-identity-withdrawn`).
+- Only the shell's dismissal counts as the user's close, which embargoes the
+  site's quiet requests as Chrome's close button does. A step the shell
+  ignores is dismissed without the embargo.
+- The provider's own pages (its sign-in page, a continuation, an error's
+  details) open as browser windows in the page's profile. The provider closes
+  one with `IdentityProvider.close()`.
+- A page outside any `<webview>` has every step refused, as Chrome does with
+  no dialog to show.
+
 ## Chrome's dialogs, sheets and floating windows
 
 No Chrome dialog is drawn. Chrome draws a page's dialogs over the outermost
@@ -214,12 +234,9 @@ asks the shell instead (the sections above). `RefuseChromeDialogs`
 - Patch `0183`: any Chrome dialog left is closed as it is shown, as a cancel,
   and logged at ERROR (`domicile: refused a Chrome dialog for ...`). A gap
   fails closed and shows in the log.
-- Payment Request and FedCM ("Sign in with Google"'s account chooser) are off
-  (FedCM by `--disable-blink-features=FedCm`, added for every renderer;
-  Payment Request by `payment_request_enabled` in patch `0183`'s
-  `OverrideWebPreferences`, which Blink reads over that switch).
-  Each asks with a Chrome sheet. A site falls back to its own checkout form or
-  sign-in page, as it does without passwords and passkeys.
+- Payment Request is off (`payment_request_enabled` in patch `0183`'s
+  `OverrideWebPreferences`), since it asks with a Chrome sheet. A site falls
+  back to its own checkout form.
 - Patch `0183`: picture-in-picture video is off
   (`picture_in_picture_enabled`), since Chrome floats it in a window of its
   own. A video has no picture-in-picture button and
@@ -283,7 +300,8 @@ The engine leaves out Chrome's own UI, which the shell replaces.
 - `guard-webview-page-failure.sh`: error pages.
 - `guard-webview-resend-form.sh`: sending a form again.
 - `guard-webview-page-picker.sh`: pickers.
-- `guard-webview-chrome-sheets.sh`: Payment Request, FedCM and
-  picture-in-picture are off.
+- `guard-webview-sign-in-with.sh`: "Sign in with" asks the shell.
+- `guard-webview-chrome-sheets.sh`: Payment Request and picture-in-picture
+  are off.
 - `guard-browser-brand.sh`: the Google Chrome brand.
 - No guard reads the browser's offers.

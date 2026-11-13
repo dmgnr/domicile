@@ -28,6 +28,7 @@ class DomicileDeviceRequestEvent;
 class DomicileDialogEvent;
 class DomicileExternalAppEvent;
 class DomicilePickerEvent;
+class DomicileIdentityEvent;
 class DomicilePromptEvent;
 class DomicileSignInEvent;
 class DomicileFileChooserEvent;
@@ -218,6 +219,8 @@ class CORE_EXPORT HTMLWebViewElement final
 
   // Releases the prompt once answered. See `prompt_`.
   void PromptAnswered(DomicilePromptEvent&);
+  // Releases the sign-in step once answered. See `identity_`.
+  void IdentityAnswered(DomicileIdentityEvent&);
   // Releases the picker once answered. See `picker_`.
   void PickerAnswered(DomicilePickerEvent&);
 
@@ -422,6 +425,16 @@ class CORE_EXPORT HTMLWebViewElement final
   // Dismisses the held prompt and dispatches `domicile-prompt-withdrawn`, so
   // the shell stops showing it.
   void PromptWithdrawn() override;
+  // Dispatches `domicile-identity`. If no listener calls `preventDefault()`,
+  // it is answered as unanswered after dispatch. See
+  // domicile_identity_event.h.
+  void IdentityRequested(
+      domicile::mojom::blink::WebViewIdentityRequestPtr request,
+      IdentityRequestedCallback callback) override;
+
+  // Answers the held sign-in step as unanswered and dispatches
+  // `domicile-identity-withdrawn`, so the shell stops showing it.
+  void IdentityWithdrawn() override;
   void PickerRequested(domicile::mojom::blink::WebViewPickerPtr picker,
                        PickerRequestedCallback callback) override;
   void PickerWithdrawn() override;
@@ -535,6 +548,8 @@ class CORE_EXPORT HTMLWebViewElement final
   Member<DomicilePromptEvent> prompt_;
   // The open picker, held as `prompt_` is.
   Member<DomicilePickerEvent> picker_;
+  // The sign-in step the shell shows, held as `prompt_` is.
+  Member<DomicileIdentityEvent> identity_;
 
   // See sitePermissions().
   Vector<std::pair<String, String>> site_permissions_;

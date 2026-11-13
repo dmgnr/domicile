@@ -1,0 +1,23 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// An account a DomicileIdentityEvent offers.
+dictionary DomicileIdentityAccount {
+  // Its provider: an index into the event's `providers()`.
+  required long provider;
+
+  // The name the provider shows, and its email or other identifier.
+  required DOMString name;
+  required DOMString identifier;
+
+  // Its picture as a data: URL, or "" for none.
+  required USVString picture;
+
+  // The user signed in to the site with it before.
+  required boolean returning;
+
+  // What signing in with it shares with the site, to say so: "name",
+  // "email", "username", "phone-number" or "picture". Empty when there is
+  // nothing to say, as for a returning account.
+  required sequence<DOMString> shared;
+};

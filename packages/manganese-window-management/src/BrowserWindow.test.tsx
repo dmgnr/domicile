@@ -12,6 +12,7 @@ import {
   WEBVIEW_GUEST_FOCUS_EVENT,
   WEBVIEW_GUEST_KEYDOWN_EVENT,
   WEBVIEW_HISTORY_CHANGE_EVENT,
+  WEBVIEW_IDENTITY_EVENT,
   WEBVIEW_LOAD_PROGRESS_CHANGE_EVENT,
   WEBVIEW_LOADING_CHANGE_EVENT,
   WEBVIEW_PAGE_CHANGE_EVENT,
@@ -2170,6 +2171,129 @@ describe("BrowserWindow", () => {
 
       expect(answers).toStrictEqual(["sign in admin hunter2"]);
       expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+  });
+
+  // The engine draws no "Sign in with" account chooser.
+  describe("a provider its site signs in with", () => {
+    const renderWindow = (opens: (url: string) => void = () => undefined) =>
+      render(
+        <BrowserWindow
+          behindPanel={false}
+          clickThrough={false}
+          covered={false}
+          depth={0}
+          domicile={{
+            ...silentDomicile,
+            browser: { ...silentDomicile.browser, open: opens },
+          }}
+          dragging={false}
+          focused
+          frame={FRAME}
+          fullscreen={false}
+          motion="resting"
+          onDescription={noDescription}
+          onFocusRequest={() => undefined}
+          onIcon={noIcon}
+          onMotionEnded={nothingEnded}
+          onPageFullscreen={noFullscreen}
+          onReach={() => undefined}
+          rect={ON_SCREEN}
+          resizing={false}
+          url="https://news.example"
+          window="1"
+        />,
+      );
+
+    /** The accounts step, from the site's button or offered unasked. */
+    const asksWithAccounts = (
+      element: HTMLElement,
+      button: boolean,
+      answers: string[],
+    ) => {
+      fireEvent(
+        element,
+        Object.assign(new Event(WEBVIEW_IDENTITY_EVENT, { cancelable: true }), {
+          accounts: () => [
+            {
+              identifier: "alex@idp.example",
+              name: "Alex Rivera",
+              picture: "",
+              provider: 0,
+              returning: false,
+              shared: ["name"],
+            },
+          ],
+          automatic: false,
+          button,
+          choose: (account: number) => {
+            answers.push(`choose ${account}`);
+          },
+          dismiss: () => undefined,
+          error: "",
+          errorUrl: "",
+          frameSite: "",
+          moreDetails: () => undefined,
+          providers: () => [
+            {
+              addAccount: false,
+              icon: "",
+              name: "idp.example",
+              privacyPolicy: "https://news.example/privacy",
+              signedOut: false,
+              termsOfService: "",
+            },
+          ],
+          purpose: "sign-in",
+          signInToProvider: () => undefined,
+          site: "news.example",
+          step: "accounts",
+        }),
+      );
+    };
+
+    it("asks over the page after the site's button, with the keyboard", async () => {
+      const answers: string[] = [];
+      const { container } = renderWindow();
+      asksWithAccounts(view(container), true, answers);
+
+      const dialog = await screen.findByRole("alertdialog", {
+        name: "Sign in to news.example with idp.example",
+      });
+      const continuing = within(dialog).getByRole("button", {
+        name: "Continue as Alex",
+      });
+      // The page waits on it, so a focused window gives it the keyboard.
+      await waitFor(() => {
+        expect(continuing).toHaveFocus();
+      });
+      await userEvent.keyboard("{Enter}");
+
+      expect(answers).toStrictEqual(["choose 0"]);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("leaves the page the keyboard when the site offers it unasked", async () => {
+      const { container } = renderWindow();
+      asksWithAccounts(view(container), false, []);
+
+      const card = await screen.findByRole("dialog", {
+        name: "Sign in to news.example with idp.example",
+      });
+
+      expect(card.contains(document.activeElement)).toBe(false);
+    });
+
+    it("opens the site's privacy policy in a browser window", async () => {
+      const opened = Promise.withResolvers<string>();
+      const { container } = renderWindow(opened.resolve);
+      asksWithAccounts(view(container), true, []);
+
+      await userEvent.click(
+        await screen.findByRole("link", { name: "privacy policy" }),
+      );
+
+      expect(await opened.promise).toBe("https://news.example/privacy");
     });
   });
 
