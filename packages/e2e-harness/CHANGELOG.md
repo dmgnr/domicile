@@ -1,5 +1,34 @@
 # @domicile-desktop/e2e-harness
 
+## 0.1.0
+
+### Minor Changes
+
+- 81215c5: A shell can name any window to a capture tool. Each window's `toplevelId` and each browser window's `toplevelId` is its identifier on `ext-foreign-toplevel-list-v1`, so a shell can hand it to a tool such as `grim -T` instead of matching by title. The compositor sends a native window's on `app_appeared` and the browser windows' on `browser_toplevel_ids`.
+
+### Patch Changes
+
+- 996cc29: A shell can hear when nobody has been at the desk for a time it chooses (`session.idleAfter`), or a time before the screens blank (`session.idleBeforeBlanking`). These replace `session.idleWarnings` and the `idle.warn_before_seconds` setting, which are gone.
+- 8ff882e: Extensions can run in private windows. Each extension's chrome://extensions settings are now yours to set: whether it runs in private windows and on local files, whether it may run user scripts, and which sites it runs on (when you click it, on specific sites, or on all sites). Set them in the config's `extensions.settings`, by extension id, or in the Settings app, which shows the ones an extension can use while it is on and moves Options and Uninstall to the bottom of its row. A setting the config drops goes back to Chrome's default.
+- Updated dependencies [d0fbc5b]
+- Updated dependencies [d566f68]
+- Updated dependencies [87ac040]
+- Updated dependencies [24b88fb]
+- Updated dependencies [81215c5]
+- Updated dependencies [3e37020]
+- Updated dependencies [3bdac3b]
+- Updated dependencies [2a1913f]
+- Updated dependencies [da632d6]
+- Updated dependencies [a5ade39]
+- Updated dependencies [8c477cc]
+- Updated dependencies [996cc29]
+- Updated dependencies [9bd54ab]
+- Updated dependencies [8ff882e]
+- Updated dependencies [25522ef]
+- Updated dependencies [e821d1f]
+- Updated dependencies [19cc2c5]
+  - @domicile-desktop/sdk@2.3.0
+
 ## 0.0.4
 
 ### Patch Changes

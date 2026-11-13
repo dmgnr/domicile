@@ -1,5 +1,85 @@
 # @domicile-desktop/manganese
 
+## 1.3.0
+
+### Minor Changes
+
+- 24b88fb: Dragging the title bar or edge an app draws itself, such as a GNOME app's header bar or Firefox's tab strip, moves or resizes its window. The compositor checks the press is still held, takes it from the app, and reports `WindowRequest.Move` or `WindowRequest.Resize` (with a `ResizeEdge`); Manganese runs the drag as it does a Meta drag.
+- da632d6: A shell can give you a way back from a VM or remote desktop viewer that holds your shortcuts. A chord bound `--inhibited Meta+Escape` stays the shell's while that window has the keyboard, and `keyboard.switchShortcutsInhibitor` turns the window's hold off and on. Manganese has a `shortcuts-inhibitor toggle` command to bind to it.
+- a5ade39: Games and VM viewers can lock the pointer (`zwp_pointer_constraints_v1`). The compositor offers the lock to the shell for the window under the pointer as `pointerConstraint`, and tells the client only once the shell holds a pointer lock on the window's `<app>` and reports it with `windows.pointerConstrained()`. The engine grants a shell's pointer lock with no click first and no browser bubble. Manganese locks for the focused window and lets go when the keyboard moves away. Confining the pointer to a window is offered but not taken yet.
+
+### Patch Changes
+
+- eaa92c7: Showing a background app's window, such as Messages, plays the opening animation.
+- 1209f22: Firefox and Tor Browser windows slide, open, close and ease with the rest of the desktop. A client's popups are drawn with its window and play its motion.
+- 4b7a878: The overview opens and closes more smoothly: the engine no longer waits for hidden workspaces' windows to draw, and opening or closing no longer restyles every part of every window.
+- 9ea68bf: A window dropped on the side of a nested group's window splits beside the group, as the overlay shows, instead of joining the outer strip.
+- 5090cbd: The drop target and the selection tint draw over Firefox and Tor Browser windows.
+- Updated dependencies [d0fbc5b]
+- Updated dependencies [c70a16a]
+- Updated dependencies [d566f68]
+- Updated dependencies [87ac040]
+- Updated dependencies [24b88fb]
+- Updated dependencies [81215c5]
+- Updated dependencies [3e37020]
+- Updated dependencies [3bdac3b]
+- Updated dependencies [2a1913f]
+- Updated dependencies [eaa92c7]
+- Updated dependencies [1209f22]
+- Updated dependencies [da632d6]
+- Updated dependencies [a5ade39]
+- Updated dependencies [6a0772b]
+- Updated dependencies [b5edfcd]
+- Updated dependencies [8c477cc]
+- Updated dependencies [0ee4ce8]
+- Updated dependencies [637cc16]
+- Updated dependencies [996cc29]
+- Updated dependencies [a9b83d4]
+- Updated dependencies [9bd54ab]
+- Updated dependencies [8ff882e]
+- Updated dependencies [25522ef]
+- Updated dependencies [e821d1f]
+- Updated dependencies [19cc2c5]
+- Updated dependencies [64bda78]
+- Updated dependencies [4b7a878]
+- Updated dependencies [9ea68bf]
+- Updated dependencies [5090cbd]
+  - @domicile-desktop/sdk@2.3.0
+  - @domicile-desktop/manganese-lock@1.0.4
+  - @domicile-desktop/manganese-window-management@1.4.0
+  - @domicile-desktop/manganese-launcher@1.2.0
+  - @domicile-desktop/system-apps@1.3.0
+  - @domicile-desktop/component-library@2.1.1
+  - @domicile-desktop/manganese-bar-module-battery@1.1.3
+  - @domicile-desktop/manganese-bar-module-bluetooth@1.1.3
+  - @domicile-desktop/manganese-bar-module-brightness@2.0.3
+  - @domicile-desktop/manganese-bar-module-cast@0.1.3
+  - @domicile-desktop/manganese-bar-module-downloads@0.1.3
+  - @domicile-desktop/manganese-bar-module-gmail@2.0.3
+  - @domicile-desktop/manganese-bar-module-google-messages@1.0.3
+  - @domicile-desktop/manganese-bar-module-idle-inhibitor@1.1.3
+  - @domicile-desktop/manganese-bar-module-keymap@0.1.3
+  - @domicile-desktop/manganese-bar-module-network@1.1.3
+  - @domicile-desktop/manganese-bar-module-sharing@1.1.3
+  - @domicile-desktop/manganese-bar-module-tray@1.1.3
+  - @domicile-desktop/manganese-bar-module-volume@2.0.3
+  - @domicile-desktop/manganese-clipboard@1.1.3
+  - @domicile-desktop/manganese-host@2.0.3
+  - @domicile-desktop/manganese-inbox-gmail@0.1.3
+  - @domicile-desktop/manganese-notifications@2.0.1
+  - @domicile-desktop/manganese-wallpaper@1.1.3
+  - @domicile-desktop/react@0.1.3
+  - @domicile-desktop/system-audio@1.1.3
+  - @domicile-desktop/system-backlight@1.1.3
+  - @domicile-desktop/manganese-bar-module-workspace-switcher@1.2.1
+  - @domicile-desktop/manganese-bar-module-launcher-button@1.1.1
+  - @domicile-desktop/manganese-bar@1.1.3
+  - @domicile-desktop/manganese-bar-module-clock@1.0.4
+  - @domicile-desktop/manganese-bar-module-notifications@2.0.1
+  - @domicile-desktop/manganese-bar-module-theme-switch@1.1.3
+  - @domicile-desktop/manganese-quick-settings@1.0.3
+  - @domicile-desktop/manganese-inbox-google-messages@0.1.3
+
 ## 1.2.0
 
 ### Minor Changes

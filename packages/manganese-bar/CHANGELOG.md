@@ -1,5 +1,12 @@
 # @domicile-desktop/manganese-bar
 
+## 1.1.3
+
+### Patch Changes
+
+- @domicile-desktop/component-library@2.1.1
+  - @domicile-desktop/manganese-host@2.0.3
+
 ## 1.1.2
 
 ### Patch Changes

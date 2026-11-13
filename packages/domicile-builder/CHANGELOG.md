@@ -1,5 +1,11 @@
 # @domicile-desktop/builder
 
+## 0.1.3
+
+### Patch Changes
+
+- @domicile-desktop/component-library@2.1.1
+
 ## 0.1.2
 
 ### Patch Changes

@@ -1,5 +1,54 @@
 # @domicile-desktop/manganese-window-management
 
+## 1.4.0
+
+### Minor Changes
+
+- d566f68: A cursor an app draws itself, such as a game's, an image editor's brush or a VM viewer's, now shows in place of the arrow. The compositor sends each image the app commits as a PNG on `app_cursor`, and `DomicileWindow.cursorImage` gives it to the shell as a CSS `cursor` value. Manganese sets it on the window's element.
+- 24b88fb: Dragging the title bar or edge an app draws itself, such as a GNOME app's header bar or Firefox's tab strip, moves or resizes its window. The compositor checks the press is still held, takes it from the app, and reports `WindowRequest.Move` or `WindowRequest.Resize` (with a `ResizeEdge`); Manganese runs the drag as it does a Meta drag.
+- da632d6: A shell can give you a way back from a VM or remote desktop viewer that holds your shortcuts. A chord bound `--inhibited Meta+Escape` stays the shell's while that window has the keyboard, and `keyboard.switchShortcutsInhibitor` turns the window's hold off and on. Manganese has a `shortcuts-inhibitor toggle` command to bind to it.
+- a5ade39: Games and VM viewers can lock the pointer (`zwp_pointer_constraints_v1`). The compositor offers the lock to the shell for the window under the pointer as `pointerConstraint`, and tells the client only once the shell holds a pointer lock on the window's `<app>` and reports it with `windows.pointerConstrained()`. The engine grants a shell's pointer lock with no click first and no browser bubble. Manganese locks for the focused window and lets go when the keyboard moves away. Confining the pointer to a window is offered but not taken yet.
+- 9bd54ab: The config can name a terminal with `terminal`, such as `["kitty"]`. When it does, applications that run in a terminal, such as htop and vim, show up in the launcher and under "Open with", and `domicile open` runs them in it. Meta+Return opens it in Manganese. Without one, nothing changes: Domicile still has no default terminal.
+- 19cc2c5: Tapping Super on its own opens and closes the overview, as it does on GNOME and KDE. Holding Super for a shortcut, a drag or a scroll still works as before. Shells can bind a tap of any modifier alone by writing just its name, such as `Meta` or `Alt`, in their keybindings.
+
+### Patch Changes
+
+- 3e37020: A client asking to be minimized now reaches the shell as `WindowRequest.Minimize`. The shell can also set `WindowState.Resizing` on a window while it resizes it, and the client sees `resizing` in its configure.
+- eaa92c7: Showing a background app's window, such as Messages, plays the opening animation.
+- 1209f22: Firefox and Tor Browser windows slide, open, close and ease with the rest of the desktop. A client's popups are drawn with its window and play its motion.
+- 6a0772b: A tab dragged out of a nested group drops before or after the group's own tab, including past it when the group is the last tab.
+- b5edfcd: A tab opening or closing keeps an edge and shadow while it moves, so it shows over a tab that looks like it.
+- 0ee4ce8: The cursor changes over links and text in Firefox and Tor Browser. Both shells show the cursor a client asks for over its popups and bubbles.
+- 637cc16: Pages take the mouse right after a window is resized by its edge. A fast resize released over a browser window no longer leaves the resize cursor over its page or sends the next clicks to the desktop.
+- 64bda78: Hiding a background app's window, such as Messages, plays the same closing animation as closing any other window.
+- 4b7a878: The overview opens and closes more smoothly: the engine no longer waits for hidden workspaces' windows to draw, and opening or closing no longer restyles every part of every window.
+- 9ea68bf: A window dropped on the side of a nested group's window splits beside the group, as the overlay shows, instead of joining the outer strip.
+- 5090cbd: The drop target and the selection tint draw over Firefox and Tor Browser windows.
+- Updated dependencies [d0fbc5b]
+- Updated dependencies [d566f68]
+- Updated dependencies [87ac040]
+- Updated dependencies [24b88fb]
+- Updated dependencies [81215c5]
+- Updated dependencies [3e37020]
+- Updated dependencies [3bdac3b]
+- Updated dependencies [2a1913f]
+- Updated dependencies [da632d6]
+- Updated dependencies [a5ade39]
+- Updated dependencies [8c477cc]
+- Updated dependencies [996cc29]
+- Updated dependencies [9bd54ab]
+- Updated dependencies [8ff882e]
+- Updated dependencies [25522ef]
+- Updated dependencies [e821d1f]
+- Updated dependencies [19cc2c5]
+  - @domicile-desktop/sdk@2.3.0
+  - @domicile-desktop/system-apps@1.3.0
+  - @domicile-desktop/component-library@2.1.1
+  - @domicile-desktop/manganese-address@1.0.4
+  - @domicile-desktop/manganese-host@2.0.3
+  - @domicile-desktop/manganese-page-requests@1.2.1
+  - @domicile-desktop/manganese-bar@1.1.3
+
 ## 1.3.0
 
 ### Minor Changes

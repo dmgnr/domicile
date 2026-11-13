@@ -1,5 +1,11 @@
 # @domicile-desktop/manganese-bar-module-theme-switch
 
+## 1.1.3
+
+### Patch Changes
+
+- @domicile-desktop/component-library@2.1.1
+
 ## 1.1.2
 
 ### Patch Changes

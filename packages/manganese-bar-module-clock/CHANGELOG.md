@@ -1,5 +1,11 @@
 # @domicile-desktop/manganese-bar-module-clock
 
+## 1.0.4
+
+### Patch Changes
+
+- @domicile-desktop/component-library@2.1.1
+
 ## 1.0.3
 
 ### Patch Changes
