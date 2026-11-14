@@ -1,0 +1,33 @@
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
+index cb6991d..0236577 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
+@@ -169,22 +169,13 @@ BrowserViewAppLayoutImpl::CalculateProposedLayout(
+                            top_container_layout.bounds.bottom()));
+   }
+ 
+-  // Lay out infobar container if present.
++  // DOMICILE: never lay out the infobar container. An app window here is a
++  // shell, and its page is the desktop. An infobar -- "unsupported
++  // command-line flag", say -- would take its height off the top of the
++  // desktop, and the bar would be Chrome's drawn over a desktop that is the
++  // shell's to draw.
+   if (IsParentedTo(views().infobar_container, views().browser_view)) {
+-    gfx::Rect infobar_bounds;
+-    const bool infobar_visible = delegate().IsInfobarVisible();
+-    if (infobar_visible) {
+-      infobar_bounds = gfx::Rect(
+-          params.visual_client_area.x(),
+-          // Infobar needs to get down out of the way of immersive mode elements
+-          // in some cases.
+-          params.visual_client_area.y() + delegate().GetExtraInfobarOffset(),
+-          params.visual_client_area.width(),
+-          // This returns zero for empty infobar.
+-          views().infobar_container->GetPreferredSize().height());
+-      params.SetTop(infobar_bounds.bottom());
+-    }
+-    layout.AddChild(views().infobar_container, infobar_bounds, infobar_visible);
++    layout.AddChild(views().infobar_container, gfx::Rect(), false);
+   }
+ 
+   params.visual_client_area =

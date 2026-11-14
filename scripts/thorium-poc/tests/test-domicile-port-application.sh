@@ -150,4 +150,87 @@ fi
 grep -q 'if (tab->GetContents()) callback.Run' "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" || fail "Thorium Android nullability handling was lost"
 grep -q 'domicile_desk::ForEachTab(callback)' "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" || fail "Domicile webview enumeration was lost"
 
+mkdir -p "$TMP/layout-series" "$TMP/layout-overrides" "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout"
+git -C "$TMP/layout-chromium" init -q
+git -C "$TMP/layout-chromium" config user.email fixture@example.invalid
+git -C "$TMP/layout-chromium" config user.name Fixture
+cat > "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" <<'EOF'
+  // Maybe lay out the titlebar.
+  if (IsParentedTo(views().web_app_frame_toolbar, views().browser_view)) {
+    CalculateTitlebarLayout(layout, params);
+  }
+
+  // Lay out the top container if it's in the browser (even if it's empty).
+  // This is required for certain things like hit-testing.
+  if (IsParentedTo(views().top_container, views().browser_view)) {
+    auto& top_container_layout =
+        layout.AddChild(views().top_container, gfx::Rect());
+    const gfx::Rect top_container_local_bounds = CalculateTopContainerLayout(
+        top_container_layout,
+        params.InLocalCoordinates(params.visual_client_area),
+        /*needs_exclusion=*/false);
+    top_container_layout.bounds =
+        GetTopContainerBoundsInParent(top_container_local_bounds, params);
+    // In cases where the top container is nonzero size, need to move everything
+    // else down.
+    params.SetTop(std::max(params.visual_client_area.y(),
+                           top_container_layout.bounds.bottom()));
+  }
+
+  // Lay out infobar container if present.
+  if (IsParentedTo(views().infobar_container, views().browser_view)) {
+    gfx::Rect infobar_bounds;
+    const bool infobar_visible = delegate().IsInfobarVisible();
+    if (infobar_visible) {
+      infobar_bounds = gfx::Rect(
+          params.visual_client_area.x(),
+          // Infobar needs to get down out of the way of immersive mode elements
+          // in some cases.
+          params.visual_client_area.y() + delegate().GetExtraInfobarOffset(),
+          params.visual_client_area.width(),
+          // This returns zero for empty infobar.
+          views().infobar_container->GetPreferredSize().height());
+      params.SetTop(infobar_bounds.bottom());
+    }
+    layout.AddChild(views().infobar_container, infobar_bounds, infobar_visible);
+  }
+
+  // Lay out contents container.
+  CHECK(IsParentedToAndVisible(views().multi_contents_view,
+                               views().browser_view));
+  gfx::Rect contents_bounds = params.visual_client_area;
+  contents_bounds.set_height(std::max(contents_bounds.height(), 1));
+  layout.AddChild(views().multi_contents_view, contents_bounds);
+
+  return layout;
+EOF
+git -C "$TMP/layout-chromium" add .
+git -C "$TMP/layout-chromium" commit -qm chromium-base
+LAYOUT_BASE="$(git -C "$TMP/layout-chromium" rev-parse HEAD)"
+git -C "$TMP/layout-chromium" apply "$ROOT/packages/domicile-engine/patches/0095-domicile-a-shell-window-lays-out-no-infobar.patch"
+git -C "$TMP/layout-chromium" add .
+git -C "$TMP/layout-chromium" commit -qm domicile-no-infobar
+git -C "$TMP/layout-chromium" format-patch -1 --stdout > "$TMP/layout-series/0095-domicile-a-shell-window-lays-out-no-infobar.patch"
+cp "$ROOT/scripts/thorium-poc/patches/0095-domicile-a-shell-window-lays-out-no-infobar.patch" "$TMP/layout-overrides/0095-domicile-a-shell-window-lays-out-no-infobar.patch"
+git -C "$TMP/layout-chromium" reset --hard -q "$LAYOUT_BASE"
+python3 - "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text().replace(
+    "  // Lay out contents container.\n",
+    "  params.visual_client_area =\n      LayoutDownloadShelf(layout, params.visual_client_area);\n\n"
+    "  // Lay out contents container.\n",
+)
+path.write_text(text)
+PY
+
+if "$SCRIPT" --root "$TMP/layout-chromium" --series "$TMP/layout-series" --overrides "$TMP/layout-overrides" >"$TMP/layout.log" 2>&1; then
+  :
+else
+  fail "Domicile no-infobar change did not compose with Thorium's download shelf: $(cat "$TMP/layout.log")"
+fi
+grep -q 'layout.AddChild(views().infobar_container, gfx::Rect(), false);' "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" || fail "Domicile infobar remained visible in app layout"
+grep -q 'LayoutDownloadShelf(layout, params.visual_client_area)' "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" || fail "Thorium download shelf layout was lost"
+
 echo "Domicile port application tests passed"
