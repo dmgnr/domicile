@@ -78,4 +78,76 @@ fi
 grep -q '^ported$' "$TMP/series-chromium/override.txt" || fail "matching override was not selected"
 grep -q '^fallback-applied$' "$TMP/series-chromium/fallback.txt" || fail "unported original patch was skipped"
 
+mkdir -p "$TMP/tab-series" "$TMP/tab-overrides" "$TMP/tab-chromium/chrome/browser/extensions"
+git -C "$TMP/tab-chromium" init -q
+git -C "$TMP/tab-chromium" config user.email fixture@example.invalid
+git -C "$TMP/tab-chromium" config user.name Fixture
+cat > "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" <<'EOF'
+void ExtensionTabUtil::ForEachTab(
+    Callback callback) {
+  tabs::ForEachTabInterface([&callback](Tab* tab) {
+    callback.Run(tab->GetContents());
+    return true;
+  });
+}
+EOF
+git -C "$TMP/tab-chromium" add .
+git -C "$TMP/tab-chromium" commit -qm base
+TAB_BASE="$(git -C "$TMP/tab-chromium" rev-parse HEAD)"
+
+python3 - "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace(
+    "    callback.Run(tab->GetContents());\n",
+    "#if BUILDFLAG(IS_ANDROID)\n    if (tab->GetContents()) callback.Run(tab->GetContents());\n#else\n    callback.Run(tab->GetContents());\n#endif\n",
+)
+path.write_text(text)
+PY
+git -C "$TMP/tab-chromium" add .
+git -C "$TMP/tab-chromium" commit -qm thorium-android-tab-nullability
+THORIUM_TAB="$(git -C "$TMP/tab-chromium" rev-parse HEAD)"
+git -C "$TMP/tab-chromium" reset --hard -q "$TAB_BASE"
+python3 - "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text().replace(
+    "  });\n}\n",
+    "  });\n  domicile_desk::ForEachTab(callback);\n}\n",
+)
+path.write_text(text)
+PY
+git -C "$TMP/tab-chromium" add .
+git -C "$TMP/tab-chromium" commit -qm domicile-tab-hook
+DOMICILE_TAB="$(git -C "$TMP/tab-chromium" rev-parse HEAD)"
+git -C "$TMP/tab-chromium" format-patch -1 --stdout > "$TMP/tab-series/0057-domicile-every-webview-is-a-tab-of-one-window-to-chrome-tabs.patch"
+git -C "$TMP/tab-chromium" diff -U1 "$TAB_BASE" "$DOMICILE_TAB" -- chrome/browser/extensions/extension_tab_util.cc > "$TMP/tab-overrides/0057-domicile-every-webview-is-a-tab-of-one-window-to-chrome-tabs.patch"
+git -C "$TMP/tab-chromium" reset --hard -q "$THORIUM_TAB"
+git -C "$TMP/tab-chromium" reset --hard -q "$TAB_BASE"
+
+python3 - "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text().replace(
+    "    callback.Run(tab->GetContents());\n",
+    "#if BUILDFLAG(IS_ANDROID)\n    if (tab->GetContents()) callback.Run(tab->GetContents());\n#else\n    callback.Run(tab->GetContents());\n#endif\n",
+)
+path.write_text(text)
+PY
+git -C "$TMP/tab-chromium" add .
+git -C "$TMP/tab-chromium" commit -qm thorium-android-tab-nullability
+git -C "$TMP/tab-chromium" reset --hard -q "$THORIUM_TAB"
+
+if "$SCRIPT" --root "$TMP/tab-chromium" --series "$TMP/tab-series" --overrides "$TMP/tab-overrides" >"$TMP/tab.log" 2>&1; then
+  :
+else
+  fail "Domicile tab hook did not apply around Thorium's Android tab handling: $(cat "$TMP/tab.log")"
+fi
+grep -q 'if (tab->GetContents()) callback.Run' "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" || fail "Thorium Android nullability handling was lost"
+grep -q 'domicile_desk::ForEachTab(callback)' "$TMP/tab-chromium/chrome/browser/extensions/extension_tab_util.cc" || fail "Domicile webview enumeration was lost"
+
 echo "Domicile port application tests passed"

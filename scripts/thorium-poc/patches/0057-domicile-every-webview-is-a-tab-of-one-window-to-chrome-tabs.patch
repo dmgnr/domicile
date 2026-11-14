@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Tue, 29 Sep 2026 12:00:00 +0000
+Subject: [PATCH] domicile: every webview is a tab of one window, to
+ chrome.tabs
+
+docs/architecture/EXTENSIONS.md's slice 2 needs Chrome's own tab lookups
+to find a <webview>, which is in no tab strip. One call each, into
+//chrome/browser/extensions/domicile_desk_hooks.h -- a seam the desk in
+//chrome/browser/domicile installs itself into, because that target
+depends on this one:
+
+- ExtensionTabUtil::GetTabById finds a desk tab, with the desk's window
+  controller and its index, so tabs.get, reload, sendMessage,
+  scripting.executeScript and every other lookup by id reach a guest.
+- ExtensionTabUtil::CreateTabObject takes the desk's index and active
+  state, which a tab object built with no tab strip gets wrong.
+- ExtensionTabUtil::ForEachTab walks the desk's tabs too.
+- ChromeExtensionFunctionDetails::GetCurrentWindowController answers the
+  desk: the shell's own window is not one, and its active tab is the
+  shell -- a tabs.reload() with no id would otherwise reload it.
+
+The seam's two files are added to //chrome/browser/extensions's sources,
+and ChromeBrowserMainParts::PostProfileInit starts the desk:
+`domicile::StartDesk`, which installs the hooks, registers the desk's
+chrome.tabs and chrome.windows functions over Chrome's by name, and
+makes the profile's window.
+
+Everything else is new files under src/.
+
+WRITTEN BY HAND, AGAINST THE SERIES RATHER THAN IN A CHECKOUT: the file
+each hunk applies to was rebuilt from the pin and the patches before it,
+and both blobs are that file's.
+---
+ chrome/browser/chrome_browser_main.cc               |  4 ++++
+ chrome/browser/extensions/BUILD.gn                  |  2 ++
+ .../extensions/chrome_extension_function_details.cc |  8 ++++++++
+ chrome/browser/extensions/extension_tab_util.cc     | 13 +++++++++++++
+ 4 files changed, 27 insertions(+)
+
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+index d7ab847..8b14a84 100644
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/chrome_browser_main.h"
+ 
+ #include "chrome/browser/domicile/domicile_command_socket.h"
++#include "chrome/browser/domicile/domicile_desk.h"
+ #include "chrome/browser/domicile/domicile_shell_windows.h"
+ #include "components/domicile/browser/desktop_prefs.h"
+ 
+@@ -1642,6 +1643,9 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
+   // download saved to a folder nobody chose is a file the user never sees
+   // arrive -- this desktop has no download shelf to show it on.
+   profile->GetPrefs()->SetBoolean(prefs::kPromptForDownload, true);
++  // And every <webview> a tab of one window, to chrome.tabs, before an
++  // extension's first call can ask.
++  domicile::StartDesk(profile);
+ 
+   for (auto& chrome_extra_part : chrome_extra_parts_) {
+     chrome_extra_part->PostProfileInit(profile, is_initial_profile);
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+index 6f01913..55769ad 100644
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -275,6 +275,8 @@ source_set("extensions") {
+     "data_deleter.h",
+     "devtools_util.cc",
+     "devtools_util.h",
++    "domicile_desk_hooks.cc",
++    "domicile_desk_hooks.h",
+     "error_console/error_console.cc",
+     "error_console/error_console.h",
+     "error_console/error_console_factory.cc",
+diff --git a/chrome/browser/extensions/chrome_extension_function_details.cc b/chrome/browser/extensions/chrome_extension_function_details.cc
+index 1e1d95c..dfedf25 100644
+--- a/chrome/browser/extensions/chrome_extension_function_details.cc
++++ b/chrome/browser/extensions/chrome_extension_function_details.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/extensions/chrome_extension_function_details.h"
+ 
+ #include "chrome/browser/extensions/browser_extension_window_controller.h"
++#include "chrome/browser/extensions/domicile_desk_hooks.h"
+ #include "chrome/browser/extensions/window_controller.h"
+ #include "chrome/browser/extensions/window_controller_list.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -37,6 +38,13 @@ ChromeExtensionFunctionDetails::~ChromeExtensionFunctionDetails() = default;
+ 
+ WindowController* ChromeExtensionFunctionDetails::GetCurrentWindowController()
+     const {
++  // Domicile's engine fork: on a desk, the desk is the window. The shell's own
++  // window is not one, and its active tab is the shell.
++  if (WindowController* desk =
++          domicile_desk::WindowFor(function_->browser_context())) {
++    return desk;
++  }
++
+   // If the delegate has an associated window controller, return it.
+   if (function_->dispatcher()) {
+     if (WindowController* window_controller =
+diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
+index 91501be..27caa63 100644
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -24,6 +24,7 @@
+ #include "chrome/browser/extensions/browser_extension_window_controller.h"
+ #include "chrome/browser/extensions/browser_window_util.h"
+ #include "chrome/browser/extensions/chrome_extension_function_details.h"
++#include "chrome/browser/extensions/domicile_desk_hooks.h"
+ #include "chrome/browser/extensions/extension_management.h"
+ #include "chrome/browser/extensions/window_controller_list.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -465,6 +466,10 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
+     }
+   }
+ 
++  // Domicile's engine fork: a <webview> is in no tab strip, and the desk knows
++  // its index and whether it is active.
++  domicile_desk::AmendTab(*contents, tab_object);
++
+   ScrubTabForExtension(extension, contents, &tab_object, scrub_tab_behavior);
+   return tab_object;
+ }
+@@ -672,6 +677,12 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
+     }
+   }
+ 
++  // Domicile's engine fork: a <webview> is a tab of the desk's one window.
++  if (domicile_desk::FindTab(tab_id, browser_context, out_window, out_contents,
++                             out_tab_index)) {
++    return true;
++  }
++
+   // Prerendering tab is not visible and it cannot be in `TabStripModel`, if the
+   // tab id exists as a prerendering tab, and the API will returns
+   // `api::tabs::TAB_INDEX_NONE` for `out_tab_index` and a valid `WebContents`.
+@@ -1210,3 +1221,5 @@ void ExtensionTabUtil::ForEachTab(
+     return true;
+   });
++  // Domicile's engine fork: and every <webview>.
++  domicile_desk::ForEachTab(callback);
+ }
+ 
+ // static
