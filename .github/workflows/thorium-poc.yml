@@ -33,6 +33,9 @@ jobs:
       - name: Test Thorium security exclusions
         run: scripts/thorium-poc/tests/test-thorium-series-policy.sh
 
+      - name: Validate applied Domicile source contracts
+        run: scripts/thorium-poc/tests/test-applied-contracts.sh
+
       - name: Apply the Domicile patch series to pinned Chromium 156
         id: preflight
         continue-on-error: true

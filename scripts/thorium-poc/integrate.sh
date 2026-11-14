@@ -123,6 +123,7 @@ fi
 if [[ "$FIXTURE" == true ]]; then
   [[ ${#REQUIRED_GRD[@]} -eq 0 ]] || { echo "required GRD stage inputs are missing: ${REQUIRED_GRD[*]}" >&2; exit 1; }
 else
+  python3 "$ROOT/scripts/thorium-poc/validate-domicile-contracts.py" --root "$CHROMIUM_SRC"
   GRD="$THORIUM_ROOT/patch_scripts/grd_rebase"
   for input in sync_grd_strings.py merge_thorium_xtb.py config/file_allowlist.csv config/message_allowlist.csv config/feature_patch_message_ownership.csv; do
     [[ -f "$GRD/$input" ]] || { echo "required GRD stage input is missing: $GRD/$input" >&2; exit 1; }
