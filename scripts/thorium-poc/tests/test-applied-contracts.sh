@@ -58,7 +58,7 @@ return origin.scheme() == kDomicileScheme &&
        origin.host() == kDomicileShellHost;
 SOURCE
   cat > "$source_root/third_party/blink/renderer/platform/runtime_enabled_features.json5" <<'SOURCE'
-{ name: "DomicileExternalSurface", status: "stable" }
+{ name: "DomicileExternalSurface", origin_trial_feature_name: "DomicileExternalSurface" }
 { name: "DomicileControlChannel", status: "stable" }
 SOURCE
   cat > "$source_root/third_party/blink/renderer/core/html/html_tag_names.json5" <<'SOURCE'
@@ -123,7 +123,15 @@ expect_invalid "$TMP/missing-control-channel" "missing stable DomicileControlCha
 
 cp -a "$TMP/valid" "$TMP/missing-external-surface"
 sed -i '/DomicileExternalSurface/d' "$TMP/missing-external-surface/third_party/blink/renderer/platform/runtime_enabled_features.json5"
-expect_invalid "$TMP/missing-external-surface" "missing stable DomicileExternalSurface feature"
+expect_invalid "$TMP/missing-external-surface" "DomicileExternalSurface must be an origin-trial-only feature"
+
+cp -a "$TMP/valid" "$TMP/stable-external-surface"
+sed -i 's/origin_trial_feature_name: "DomicileExternalSurface"/status: "stable"/' "$TMP/stable-external-surface/third_party/blink/renderer/platform/runtime_enabled_features.json5"
+expect_invalid "$TMP/stable-external-surface" "DomicileExternalSurface must be an origin-trial-only feature"
+
+cp -a "$TMP/valid" "$TMP/wrong-external-surface-origin-trial"
+sed -i 's/origin_trial_feature_name: "DomicileExternalSurface"/origin_trial_feature_name: "OtherFeature"/' "$TMP/wrong-external-surface-origin-trial/third_party/blink/renderer/platform/runtime_enabled_features.json5"
+expect_invalid "$TMP/wrong-external-surface-origin-trial" "DomicileExternalSurface must be an origin-trial-only feature"
 
 cp -a "$TMP/valid" "$TMP/missing-elements"
 sed -i '/name: "webview"/d' "$TMP/missing-elements/third_party/blink/renderer/core/html/html_tag_names.json5"

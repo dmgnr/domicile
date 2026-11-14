@@ -91,12 +91,28 @@ def validate(root: Path) -> None:
     features = require_file(
         root, "third_party/blink/renderer/platform/runtime_enabled_features.json5"
     )
-    for name in ("DomicileExternalSurface", "DomicileControlChannel"):
-        require_match(
-            features,
-            rf'name:\s*"{name}"[^}}]*status:\s*"stable"',
-            f"missing stable {name} feature",
+    external_surface = re.search(
+        r'name:\s*"DomicileExternalSurface"(?P<properties>[^}]*)\}',
+        features,
+        re.DOTALL,
+    )
+    if (
+        external_surface is None
+        or re.search(
+            r'origin_trial_feature_name:\s*"DomicileExternalSurface"',
+            external_surface.group("properties"),
         )
+        is None
+        or re.search(r"\bstatus\s*:", external_surface.group("properties"))
+        is not None
+    ):
+        raise SystemExit("DomicileExternalSurface must be an origin-trial-only feature")
+
+    require_match(
+        features,
+        r'name:\s*"DomicileControlChannel"[^}]*status:\s*"stable"',
+        "missing stable DomicileControlChannel feature",
+    )
 
     tags = require_file(root, "third_party/blink/renderer/core/html/html_tag_names.json5")
     for name, interface in (("app", "HTMLAppElement"), ("webview", "HTMLWebViewElement")):
