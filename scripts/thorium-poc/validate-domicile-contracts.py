@@ -40,7 +40,7 @@ def validate(root: Path) -> None:
     startup = require_file(root, "chrome/browser/ui/startup/startup_browser_creator.cc")
     require_match(
         startup,
-        r"MaybeLaunchAppShortcutWindow[\s\S]*?ChildProcessSecurityPolicy::IsWebSafeScheme\(url\.scheme\(\)\)[\s\S]*?url\.SchemeIs\(domicile::kDomicileScheme\)",
+        r"MaybeLaunchAppShortcutWindow[\s\S]*?policy->IsWebSafeScheme\(url\.GetScheme\(\)\)[\s\S]*?url\.SchemeIs\(url::kFileScheme\)[\s\S]*?url\.SchemeIs\(domicile::kDomicileScheme\)",
         "missing trusted command-line domicile launch exception",
     )
     url_util = require_file(root, "chrome/browser/ui/startup/url_util.cc")

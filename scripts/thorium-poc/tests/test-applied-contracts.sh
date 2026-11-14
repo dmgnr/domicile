@@ -24,7 +24,8 @@ schemes->secure_schemes.push_back(domicile::kDomicileScheme);
 SOURCE
   cat > "$source_root/chrome/browser/ui/startup/startup_browser_creator.cc" <<'SOURCE'
 bool MaybeLaunchAppShortcutWindow() {
-if (ChildProcessSecurityPolicy::IsWebSafeScheme(url.scheme()) ||
+if (policy->IsWebSafeScheme(url.GetScheme()) ||
+    url.SchemeIs(url::kFileScheme) ||
     url.SchemeIs(domicile::kDomicileScheme)) {
   return true;
 }
