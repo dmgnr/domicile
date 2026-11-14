@@ -1,3 +1,12 @@
+From 30e8fac86650182d191c5652cfea9b152f33cfcc Mon Sep 17 00:00:00 2001
+From: Fixture <fixture@example.invalid>
+Date: Sun, 15 Nov 2026 00:01:52 +0700
+Subject: [PATCH] Port Domicile no-infobar layout after Thorium download shelf
+
+---
+ .../layout/browser_view_app_layout_impl.cc    | 21 ++++++-------------
+ 1 file changed, 6 insertions(+), 15 deletions(-)
+
 diff --git a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
 index cb6991d..0236577 100644
 --- a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc

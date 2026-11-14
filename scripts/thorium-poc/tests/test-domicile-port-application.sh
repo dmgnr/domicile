@@ -212,6 +212,7 @@ git -C "$TMP/layout-chromium" add .
 git -C "$TMP/layout-chromium" commit -qm domicile-no-infobar
 git -C "$TMP/layout-chromium" format-patch -1 --stdout > "$TMP/layout-series/0095-domicile-a-shell-window-lays-out-no-infobar.patch"
 cp "$ROOT/scripts/thorium-poc/patches/0095-domicile-a-shell-window-lays-out-no-infobar.patch" "$TMP/layout-overrides/0095-domicile-a-shell-window-lays-out-no-infobar.patch"
+grep -q '^From ' "$TMP/layout-overrides/0095-domicile-a-shell-window-lays-out-no-infobar.patch" || fail "layout override is not a git-am patch"
 git -C "$TMP/layout-chromium" reset --hard -q "$LAYOUT_BASE"
 python3 - "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" <<'PY'
 from pathlib import Path
