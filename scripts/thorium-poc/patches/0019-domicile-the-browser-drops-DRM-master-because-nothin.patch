@@ -1,0 +1,379 @@
+From 388e6aa8e4788fd938873a8f7bd9107f9ec14023 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:30:09 +0700
+Subject: [PATCH] domicile: port VT switch handoff to Chromium 156
+
+---
+ ui/ozone/platform/drm/BUILD.gn                |  3 +
+ ui/ozone/platform/drm/common/drm_wrapper.cc   |  6 ++
+ ui/ozone/platform/drm/common/drm_wrapper.h    | 14 +++++
+ .../drm/gpu/drm_gpu_display_manager.cc        | 55 +++++++++++------
+ .../gpu/drm_gpu_display_manager_unittest.cc   | 40 -------------
+ ui/ozone/platform/drm/gpu/fake_drm_device.cc  |  4 ++
+ ui/ozone/platform/drm/gpu/fake_drm_device.h   |  1 +
+ .../drm/host/drm_display_host_manager.cc      | 60 +++++++++++++++----
+ .../drm/host/drm_display_host_manager.h       |  8 +++
+ 9 files changed, 122 insertions(+), 69 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index a16ef6c5..54fcfd4c 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -122,6 +122,8 @@ source_set("gbm") {
+     "host/drm_window_host_manager.cc",
+     "domicile/drm_fullscreen.cc",
+     "domicile/drm_fullscreen.h",
++    "domicile/drm_master.cc",
++    "domicile/drm_master.h",
+     "domicile/drm_modeset.cc",
+     "domicile/drm_modeset.h",
+     "domicile/drm_screen.cc",
+@@ -239,6 +241,7 @@ source_set("gbm_unittests") {
+     "gpu/mock_drm_modifiers_filter.h",
+     "gpu/proxy_helpers_unittest.cc",
+     "domicile/drm_fullscreen_unittest.cc",
++    "domicile/drm_master_unittest.cc",
+     "domicile/drm_modeset_unittest.cc",
+     "domicile/drm_screen_unittest.cc",
+     "domicile/drm_vt_switcher_unittest.cc",
+diff --git a/ui/ozone/platform/drm/common/drm_wrapper.cc b/ui/ozone/platform/drm/common/drm_wrapper.cc
+index 5da3eaf2..dd243f4f 100644
+--- a/ui/ozone/platform/drm/common/drm_wrapper.cc
++++ b/ui/ozone/platform/drm/common/drm_wrapper.cc
+@@ -217,6 +217,12 @@ bool DrmWrapper::DropMaster() {
+   return drop_master_result;
+ }
+ 
++void DrmWrapper::AssumeMaster(bool has_master) {
++  TRACE_EVENT2("drm", "DrmWrapper::AssumeMaster", "path", device_path_.value(),
++               "has_master", has_master);
++  has_master_ = has_master;
++}
++
+ bool DrmWrapper::has_master() const {
+   return has_master_;
+ }
+diff --git a/ui/ozone/platform/drm/common/drm_wrapper.h b/ui/ozone/platform/drm/common/drm_wrapper.h
+index 0f1e022f..1d5c1b3d 100644
+--- a/ui/ozone/platform/drm/common/drm_wrapper.h
++++ b/ui/ozone/platform/drm/common/drm_wrapper.h
+@@ -134,6 +134,20 @@ class DrmWrapper {
+ 
+   virtual bool SetMaster();
+   virtual bool DropMaster();
++
++  // Records that master changed hands WITHOUT asking the kernel, because on a
++  // tty this process is not allowed to ask: the browser opened the card, the
++  // kernel froze the permitted pid as the browser's, and `SCM_RIGHTS` handed
++  // this process the same `struct drm_file` rather than a new one -- so the
++  // transition is decided in `DrmDisplayHostManager` and this is that
++  // decision arriving. See `ui/ozone/platform/drm/domicile/drm_master.h`.
++  //
++  // IT IS NOT COSMETIC. `DrmWindow::SchedulePageFlip` and
++  // `ScreenManager::UpdateControllerToWindowMapping` both read `has_master()`,
++  // and a flip committed into a card this process no longer masters fails,
++  // arms `PageFlipWatchdog` and kills the GPU process fifteen seconds later.
++  virtual void AssumeMaster(bool has_master);
++
+   virtual bool has_master() const;
+ 
+   /**************
+diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
+index a8994855..d2a5d657 100644
+--- a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
++++ b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
+@@ -401,25 +401,33 @@ MovableDisplaySnapshots DrmGpuDisplayManager::GetDisplays() {
+ }
+ 
+ bool DrmGpuDisplayManager::TakeDisplayControl() {
++  // THE SYSCALL IS NOT HERE ANY MORE AND NEVER COULD HAVE BEEN. `drmSetMaster`
++  // runs `drm_master_check_perm` against a pid the kernel froze as the
++  // browser's when the browser opened the card, and `SCM_RIGHTS` handed this
++  // process the same `struct drm_file` rather than a new one -- so it is
++  // -EACCES here however it is spelled, including before its already-master
++  // early-out. `DrmDisplayHostManager` keeps a `dup` and takes master through
++  // that, and has already succeeded by the time this runs; see
++  // `ui/ozone/platform/drm/domicile/drm_master.h`.
++  //
++  // WHAT IS LEFT IS THE BOOKKEEPING, AND IT IS LOAD-BEARING. `has_master()`
++  // is what `DrmWindow::SchedulePageFlip` reads to decide whether a frame is
++  // worth committing; left saying no, nothing would ever reach the screen
++  // again.
+   const DrmDeviceVector& devices = drm_device_manager_->GetDrmDevices();
+-  bool status = true;
+   for (const auto& drm : devices) {
+-    const bool set_master_status = drm->SetMaster();
+-    if (!set_master_status) {
+-      LOG(ERROR) << __func__ << "Drm set master failed for: "  // nocheck
+-                 << drm->device_path().value();
+-    }
+-
+-    status &= set_master_status;
++    drm->AssumeMaster(true);
+   }
+ 
+-  // Roll-back any successful operation.
+-  if (!status) {
+-    LOG(ERROR) << "Failed to take control of the display";
+-    RelinquishDisplayControl();
+-  }
++  // Unconditionally, unlike the relinquish's own call: this rebuilds a mapping
++  // that `IsFastDrmMasterDropEnabled()` tore down on the way out, and is a
++  // no-op when it did not. Nothing else would rebuild it --
++  // `DrmVtSwitcher` calls `NativeDisplayDelegate::TakeDisplayControl`
++  // directly rather than through `DisplayConfigurator`, so no reconfiguration
++  // follows a VT switch back.
++  screen_manager_->UpdateControllerToWindowMapping();
+ 
+-  return status;
++  return true;
+ }
+ 
+ bool DrmGpuDisplayManager::RelinquishDisplayControl() {
+@@ -432,13 +440,22 @@ bool DrmGpuDisplayManager::RelinquishDisplayControl() {
+     return false;
+   }
+ 
++  // THE DROP ITSELF IS THE BROWSER'S, for the reason `TakeDisplayControl`
++  // above gives, and it happens AFTER this returns: the detach above is
++  // bookkeeping over a card this process still holds master on, and
++  // `DrmDisplayHostManager::GpuRelinquishedDisplayControl` drops only once it
++  // has been told this half succeeded.
++  //
++  // RECORDING IT HERE ANYWAY IS THE DIFFERENCE BETWEEN A DARK SCREEN AND A
++  // DEAD GPU PROCESS. Left saying yes, `DrmWindow::SchedulePageFlip` goes on
++  // committing frames into a card the browser is about to stop mastering;
++  // the atomic plane manager has no EACCES exemption, a failed commit arms
++  // `PageFlipWatchdog`, and nothing modesets on the way back from a VT switch
++  // -- so fifteen seconds on another console is `LOG(FATAL) << "Failed to
++  // modeset ... Crashing GPU process."`
+   const DrmDeviceVector& devices = drm_device_manager_->GetDrmDevices();
+   for (const auto& drm : devices) {
+-    if (!drm->DropMaster()) {
+-      LOG(ERROR) << __func__ << "Drm drop master failed for: "  // nocheck
+-                 << drm->device_path().value();
+-      return false;
+-    }
++    drm->AssumeMaster(false);
+   }
+ 
+   // Dissociate controllers from windows so that subsequent pageflips fail
+diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc
+index fb8b56e6..f726c770 100644
+--- a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc
++++ b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc
+@@ -2044,46 +2044,6 @@ TEST_F(DrmGpuDisplayManagerTest, RelinquishDisplayControl) {
+   EXPECT_FALSE(drm->has_master());
+ }
+ 
+-TEST_F(DrmGpuDisplayManagerTest, RelinquishDisplayControlFail) {
+-  base::test::ScopedFeatureList feature_list;
+-  feature_list.InitAndDisableFeature(display::features::kFastDrmMasterDrop);
+-  ASSERT_FALSE(display::features::IsFastDrmMasterDropEnabled());
+-
+-  auto drm = AddDrmDevice();
+-  drm->ResetStateWithAllProperties();
+-
+-  // Add 2 connectors, each with one active display.
+-  for (size_t i = 0; i < 2; ++i) {
+-    drm->AddCrtcWithPrimaryAndCursorPlanes();
+-
+-    auto& encoder = drm->AddEncoder();
+-    encoder.possible_crtcs = 1 << i;
+-
+-    auto& connector = drm->AddConnector();
+-    connector.connection = true;
+-    connector.modes = std::vector<ResolutionAndRefreshRate>{
+-        kStandardModes[i % kStandardModes.size()]};
+-    connector.encoders = std::vector<uint32_t>{encoder.id};
+-    connector.edid_blob =
+-        std::vector<uint8_t>(kHPz32x, UNSAFE_TODO(kHPz32x + kHPz32xLength));
+-  }
+-  drm->InitializeState(/* use_atomic */ true);
+-
+-  MovableDisplaySnapshots display_snapshots =
+-      drm_gpu_display_manager_->GetDisplays();
+-  ASSERT_EQ(display_snapshots.size(), 2u);
+-
+-  // Make sure configuration on the returned snapshots is possible.
+-  ASSERT_TRUE(ConfigureDisplays(display_snapshots,
+-                                {display::ModesetFlag::kTestModeset,
+-                                 display::ModesetFlag::kCommitModeset}));
+-
+-  EXPECT_TRUE(drm->has_master());
+-  drm->set_succeed_drm_master_drop(false);
+-  EXPECT_FALSE(drm_gpu_display_manager_->RelinquishDisplayControl());
+-  EXPECT_TRUE(drm->has_master());
+-}
+-
+ TEST_F(DrmGpuDisplayManagerTest, RelinquishDisplayControlFastDrop) {
+   base::test::ScopedFeatureList feature_list;
+   feature_list.InitAndEnableFeature(display::features::kFastDrmMasterDrop);
+diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.cc b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
+index cb25829b..184700ec 100644
+--- a/ui/ozone/platform/drm/gpu/fake_drm_device.cc
++++ b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
+@@ -975,6 +975,10 @@ bool FakeDrmDevice::DropMaster() {
+   return succeed_drm_master_drop_;
+ }
+ 
++void FakeDrmDevice::AssumeMaster(bool has_master) {
++  has_master_ = has_master;
++}
++
+ bool FakeDrmDevice::has_master() const {
+   return has_master_;
+ }
+diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.h b/ui/ozone/platform/drm/gpu/fake_drm_device.h
+index 5e8719e5..51af3eaf 100644
+--- a/ui/ozone/platform/drm/gpu/fake_drm_device.h
++++ b/ui/ozone/platform/drm/gpu/fake_drm_device.h
+@@ -405,6 +405,7 @@ class FakeDrmDevice : public DrmDevice {
+ 
+   bool SetMaster() override;
+   bool DropMaster() override;
++  void AssumeMaster(bool has_master) override;
+   bool has_master() const override;
+ 
+   // There is a circular reference between DrmDevice and
+diff --git a/ui/ozone/platform/drm/host/drm_display_host_manager.cc b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
+index d3941b32..b60e40c0 100644
+--- a/ui/ozone/platform/drm/host/drm_display_host_manager.cc
++++ b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
+@@ -200,6 +200,15 @@ void OpenDeviceAsync(const base::FilePath& device_path,
+                                 std::move(drm)));
+ }
+ 
++// The browser's own copy of a card it is about to hand to the GPU process,
++// taken BEFORE the move that hands it over. A `dup` shares the one
++// `struct drm_file`, so master dropped through this is dropped for the GPU's
++// copy too, while a fresh `open` would be a different file and not master at
++// all. See `DrmMaster`.
++base::ScopedFD DupForMaster(const base::ScopedFD& fd) {
++  return base::ScopedFD(HANDLE_EINTR(dup(fd.get())));
++}
++
+ struct DisplayCard {
+   base::FilePath path;
+   std::optional<std::string> driver;
+@@ -394,6 +403,18 @@ void DrmDisplayHostManager::TakeDisplayControl(
+   take_display_control_callback_ = std::move(callback);
+   display_control_change_pending_ = true;
+ 
++  // OUR SET FIRST, AND THE GPU IS NOT ASKED IF IT FAILS. `drmSetMaster` is
++  // only legal in the process that opened the card, so it happens here or
++  // nowhere; and a GPU process told it has the display back while the kernel
++  // says otherwise goes on submitting flips that cannot land, which arms
++  // `PageFlipWatchdog` and kills it fifteen seconds later. Reporting the
++  // failure is what keeps `DrmVtSwitcher` in the one state that leaves a way
++  // off the console.
++  if (!drm_master_.Take()) {
++    GpuTookDisplayControl(false);
++    return;
++  }
++
+   if (!proxy_->GpuTakeDisplayControl())
+     GpuTookDisplayControl(false);
+ }
+@@ -509,8 +530,9 @@ void DrmDisplayHostManager::OnAddGraphicsDevice(
+     std::unique_ptr<DrmWrapper> drm) {
+   if (drm) {
+     drm_devices_[dev_path] = sys_path;
+-    proxy_->GpuAddGraphicsDevice(sys_path,
+-                                 DrmWrapper::ToScopedFD(std::move(drm)));
++    base::ScopedFD fd = DrmWrapper::ToScopedFD(std::move(drm));
++    drm_master_.Add(sys_path, DupForMaster(fd));
++    proxy_->GpuAddGraphicsDevice(sys_path, std::move(fd));
+     NotifyDisplayDelegate();
+   }
+ 
+@@ -525,6 +547,7 @@ void DrmDisplayHostManager::OnUpdateGraphicsDevice(
+ 
+ void DrmDisplayHostManager::OnRemoveGraphicsDevice(
+     const base::FilePath& sys_path) {
++  drm_master_.Forget(sys_path);
+   proxy_->GpuRemoveGraphicsDevice(sys_path);
+   NotifyDisplayDelegate();
+   task_pending_ = false;
+@@ -554,9 +577,11 @@ void DrmDisplayHostManager::OnGpuProcessLaunched() {
+ 
+   // Send the primary device first since this is used to initialize graphics
+   // state.
+-  proxy_->GpuAddGraphicsDevice(
+-      drm_devices_[primary_graphics_card_path_],
+-      DrmWrapper::ToScopedFD(std::move(primary_drm_device)));
++  const base::FilePath& primary_sys_path =
++      drm_devices_[primary_graphics_card_path_];
++  base::ScopedFD fd = DrmWrapper::ToScopedFD(std::move(primary_drm_device));
++  drm_master_.Add(primary_sys_path, DupForMaster(fd));
++  proxy_->GpuAddGraphicsDevice(primary_sys_path, std::move(fd));
+ }
+ 
+ void DrmDisplayHostManager::OnGpuThreadReady() {
+@@ -678,17 +703,32 @@ void DrmDisplayHostManager::GpuRelinquishedDisplayControl(bool status) {
+     return;
+   }
+ 
+-  DCHECK(!display_externally_controlled_);
+-  DCHECK(display_control_change_pending_);
+-
+-  if (status) {
++  CHECK(!display_externally_controlled_, base::NotFatalUntil::M163);
++  CHECK(display_control_change_pending_, base::NotFatalUntil::M163);
++
++  // OUR DROP LAST, AND ONLY IF THE GPU GOT THERE. `status` says the GPU
++  // process finished its half -- planes detached, `has_master()` recorded so
++  // that nothing flips into a card that is about to stop being ours -- and
++  // master is the last thing to go, because all of that is bookkeeping over a
++  // card we still hold. A GPU half that failed leaves us master on purpose:
++  // releasing a display it could not stand down from is the two-owner bug
++  // arriving by the other door.
++  //
++  // A DROP THAT FAILS MAKES THE WHOLE RELINQUISH FAIL, even though the GPU
++  // succeeded. `DrmVtSwitcher` answers `VT_RELDISP(0)` to that and the switch
++  // is refused, which is correct: the console would otherwise go to the kernel
++  // while Chromium is still scanning out on it.
++  const bool relinquished = status && drm_master_.Drop();
++
++  if (relinquished) {
+     scoped_input_devices_disabler_ = input_controller_->DisableInputDevices();
+     display_externally_controlled_ = true;
+   }
+ 
+   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+       FROM_HERE,
+-      base::BindOnce(std::move(relinquish_display_control_callback_), status));
++      base::BindOnce(std::move(relinquish_display_control_callback_),
++                     relinquished));
+   relinquish_display_control_callback_.Reset();
+   display_control_change_pending_ = false;
+ }
+diff --git a/ui/ozone/platform/drm/host/drm_display_host_manager.h b/ui/ozone/platform/drm/host/drm_display_host_manager.h
+index 6d3f4a3e..184eb2c4 100644
+--- a/ui/ozone/platform/drm/host/drm_display_host_manager.h
++++ b/ui/ozone/platform/drm/host/drm_display_host_manager.h
+@@ -18,6 +18,7 @@
+ #include "ui/events/ozone/device/device_event_observer.h"
+ #include "ui/events/ozone/evdev/event_factory_evdev.h"
+ #include "ui/ozone/platform/drm/common/display_types.h"
++#include "ui/ozone/platform/drm/domicile/drm_master.h"
+ #include "ui/ozone/platform/drm/host/gpu_thread_observer.h"
+ #include "ui/ozone/public/ozone_platform.h"
+ 
+@@ -146,6 +147,13 @@ class DrmDisplayHostManager : public DeviceEventObserver, GpuThreadObserver {
+   // value is the sysfs path which has been resolved from the device path.
+   std::map<base::FilePath, base::FilePath> drm_devices_;
+ 
++  // A `dup` of the descriptor this process opened for each of those, keyed by
++  // the sysfs path rather than the device path because that is what a removal
++  // carries. THE ONLY PLACE MASTER CAN BE DROPPED FROM: the GPU process holds
++  // the same `struct drm_file` and the kernel refuses it there forever. See
++  // `DrmMaster`.
++  DrmMaster drm_master_;
++
+   // This is used to cache the primary DRM device until the channel is
+   // established.
+   std::unique_ptr<DrmWrapper> primary_drm_device_;
+-- 
+2.56.0
+

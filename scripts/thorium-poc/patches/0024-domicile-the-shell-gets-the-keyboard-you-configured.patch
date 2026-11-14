@@ -1,0 +1,70 @@
+From 172e3217aa411eb55c6bbe13107948e963449215 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:42:27 +0700
+Subject: [PATCH] domicile: carry the shell keymap to the compositor
+
+---
+ chrome/browser/BUILD.gn                       |  3 ++-
+ .../chrome_browser_interface_binders.cc       | 21 +++++++++++++++++--
+ 2 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 3bad3961..d46fab1f 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2407,9 +2407,10 @@ source_set("browser") {
+     "//components/dom_distiller/content/browser",
+     "//components/domain_reliability",
+ 
+-    # Domicile engine fork: shell serving, control channel, and command socket.
++    # Domicile engine fork: shell serving, control channel, keymap, and socket.
+     "//chrome/browser/domicile",
+     "//components/domicile:control_channel",
++    "//components/domicile:keyboard_layout",
+     "//components/domicile:shell_scheme",
+     "//components/domicile:web_view_guest",
+     "//components/download/content/factory",
+diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
+index e634598d..08c18dd9 100644
+--- a/chrome/browser/chrome_browser_interface_binders.cc
++++ b/chrome/browser/chrome_browser_interface_binders.cc
+@@ -4,7 +4,9 @@
+ 
+ #include "chrome/browser/chrome_browser_interface_binders.h"
+ 
++#include "base/task/bind_post_task.h"
+ #include "components/domicile/browser/control_channel.h"
++#include "components/domicile/browser/keyboard_layout.h"
+ #include "components/domicile/browser/web_view_guest.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "mojo/public/cpp/bindings/message.h"
+@@ -496,9 +498,24 @@ void PopulateChromeFrameBinders(
+         // On the IO thread: the channel talks to a unix socket through
+         // net::SocketPosix, which DCHECKs that it is on a thread with an IO
+         // message pump. Binders run on the UI thread, so this has to hop.
++        //
++        // AND ONE MESSAGE ON THAT SOCKET HAS TO HOP BACK. The compositor's
++        // keymap is not the page's business and never reaches it: what it is
++        // for is this process's own KeyboardLayoutEngine, which off ChromeOS
++        // nothing else ever gives a keymap at all -- see
++        // components/domicile/browser/keyboard_layout.h for what that costs.
++        // That engine belongs to the UI thread, along with every evdev key
++        // dispatched through it, so the return trip is bound HERE, where the
++        // UI thread is already the current one. Reaching for it out there
++        // would work and would put //content into
++        // //components/domicile:control_channel, which deliberately has none.
+         content::GetIOThreadTaskRunner({})->PostTask(
+-            FROM_HERE, base::BindOnce(&domicile::BindControlChannel,
+-                                      std::move(receiver)));
++            FROM_HERE,
++            base::BindOnce(
++                &domicile::BindControlChannel, std::move(receiver),
++                base::BindPostTask(
++                    content::GetUIThreadTaskRunner({}),
++                    base::BindRepeating(&domicile::SetProcessKeymap))));
+       }));
+ 
+   // Domicile's engine fork: a <webview> asking for a guest to put behind it.
+-- 
+2.56.0
+

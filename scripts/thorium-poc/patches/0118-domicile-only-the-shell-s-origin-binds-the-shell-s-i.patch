@@ -1,0 +1,201 @@
+From 82f70bec356982b52b8951410fbcd4910a9efa3f Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:41:14 +0700
+Subject: [PATCH] domicile: bind app modules only in their own windows
+
+---
+ chrome/browser/BUILD.gn                       |  5 +-
+ .../chrome_browser_interface_binders.cc       | 60 +++++++++++++------
+ .../bindings/generated_in_modules.gni         |  2 +
+ .../renderer/bindings/idl_in_modules.gni      |  1 +
+ .../renderer/modules/modules_initializer.cc   |  2 +
+ 5 files changed, 52 insertions(+), 18 deletions(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index d7b3f6e2..d82739dd 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2409,12 +2409,15 @@ source_set("browser") {
+     "//components/domain_reliability",
+ 
+     # Domicile engine fork: shell serving, control channel, keymap, color
+-    # scheme, socket, and browser offers turned off.
++    # scheme, socket, browser offers turned off, and app modules' channels.
+     "//chrome/browser/domicile",
++    "//components/domicile:app_channel",
++    "//components/domicile:app_roots",
+     "//components/domicile:color_scheme",
+     "//components/domicile:control_channel",
+     "//components/domicile:desktop_prefs",
+     "//components/domicile:keyboard_layout",
++    "//components/domicile:shell_origin",
+     "//components/domicile:shell_scheme",
+     "//components/domicile:web_view_guest",
+     "//components/download/content/factory",
+diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
+index f855cca0..eb09f245 100644
+--- a/chrome/browser/chrome_browser_interface_binders.cc
++++ b/chrome/browser/chrome_browser_interface_binders.cc
+@@ -10,9 +10,12 @@
+ #include "chrome/browser/domicile/domicile_extension_tray.h"
+ #include "chrome/browser/domicile/domicile_pointer_warp.h"
+ #include "chrome/browser/domicile/domicile_tab_helpers.h"
++#include "components/domicile/browser/app_channel.h"
++#include "components/domicile/browser/app_roots.h"
+ #include "components/domicile/browser/color_scheme.h"
+ #include "components/domicile/browser/control_channel.h"
+ #include "components/domicile/browser/keyboard_layout.h"
++#include "components/domicile/browser/shell_origin.h"
+ #include "components/domicile/browser/web_view_guest.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "mojo/public/cpp/bindings/message.h"
+@@ -484,21 +487,21 @@ void PopulateChromeFrameBinders(
+   //
+   // THE CHECK IN THE CALLBACK IS THE WHOLE OF THE ACCESS CONTROL. It works
+   // because domicile:// is registered neither web-safe nor CORS-enabled, so no
+-  // ordinary web content can hold that origin, and because a document's
+-  // committed origin is fixed by the time it can ask for anything. If it is
++  // ordinary web content can hold the shell's origin, because no <webview> may
++  // show domicile://shell (MayShowInWebView), and because a document's
++  // committed origin is fixed by the time it can ask for anything. The shell's
++  // origin and not the scheme: an app module is domicile:// too. If it is
+   // ever loosened, this is worse than the loopback TCP port it replaced,
+   // because it looks safe.
+   map->Add<domicile::mojom::ControlChannel>(base::BindRepeating(
+       [](content::RenderFrameHost* frame,
+          mojo::PendingReceiver<domicile::mojom::ControlChannel> receiver) {
+-        if (frame->GetLastCommittedOrigin().scheme() !=
+-            domicile::kDomicileScheme) {
++        if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
+           // Not the shell. Reporting it rather than dropping quietly: a
+           // document that is not the shell asking for the desktop's control
+           // plane is not a mistake to absorb.
+           mojo::ReportBadMessage(
+-              "domicile: only a domicile:// document may control the "
+-              "compositor.");
++              "domicile: only the shell may control the compositor.");
+           return;
+         }
+         // On the IO thread: the channel talks to a unix socket through
+@@ -572,10 +575,9 @@ void PopulateChromeFrameBinders(
+   map->Add<domicile::mojom::WebViewGuestHost>(base::BindRepeating(
+       [](content::RenderFrameHost* frame,
+          mojo::PendingReceiver<domicile::mojom::WebViewGuestHost> receiver) {
+-        if (frame->GetLastCommittedOrigin().scheme() !=
+-            domicile::kDomicileScheme) {
++        if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
+           mojo::ReportBadMessage(
+-              "domicile: only a domicile:// document may ask for a guest.");
++              "domicile: only the shell may ask for a guest.");
+           return;
+         }
+         // AND EVERY GUEST IS A TAB. The helpers an extension finds a tab by
+@@ -596,11 +598,9 @@ void PopulateChromeFrameBinders(
+   map->Add<domicile::mojom::ExtensionTray>(base::BindRepeating(
+       [](content::RenderFrameHost* frame,
+          mojo::PendingReceiver<domicile::mojom::ExtensionTray> receiver) {
+-        if (frame->GetLastCommittedOrigin().scheme() !=
+-            domicile::kDomicileScheme) {
++        if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
+           mojo::ReportBadMessage(
+-              "domicile: only a domicile:// document may hold the extension "
+-              "tray.");
++              "domicile: only the shell may hold the extension tray.");
+           return;
+         }
+         domicile::BindExtensionTray(frame, std::move(receiver));
+@@ -613,16 +613,42 @@ void PopulateChromeFrameBinders(
+   map->Add<domicile::mojom::BrowserWindows>(base::BindRepeating(
+       [](content::RenderFrameHost* frame,
+          mojo::PendingReceiver<domicile::mojom::BrowserWindows> receiver) {
+-        if (frame->GetLastCommittedOrigin().scheme() !=
+-            domicile::kDomicileScheme) {
++        if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
+           mojo::ReportBadMessage(
+-              "domicile: only a domicile:// document may hold the browser "
+-              "windows.");
++              "domicile: only the shell may hold the browser windows.");
+           return;
+         }
+         domicile::BindBrowserWindows(frame, std::move(receiver));
+       }));
+ 
++  // Domicile's engine fork: an app module's channel to the compositor, system
++  // calls only. See docs/architecture/APP-MODULES.md.
++  //
++  // Gated at BIND time like the shell's channel. Both conditions are the
++  // access control: the document is on an app's origin, and its window was
++  // opened for that app (WebViewGuest::PinToApp). An app's host follows from
++  // its path, so the origin alone could be any directory's.
++  map->Add<domicile::mojom::AppChannel>(base::BindRepeating(
++      [](content::RenderFrameHost* frame,
++         mojo::PendingReceiver<domicile::mojom::AppChannel> receiver) {
++        const url::Origin& origin = frame->GetLastCommittedOrigin();
++        const domicile::WebViewGuest* guest =
++            domicile::WebViewGuest::FromWebContents(
++                content::WebContents::FromRenderFrameHost(frame));
++        if (origin.scheme() != domicile::kDomicileScheme ||
++            !domicile::IsAppHost(origin.host()) || guest == nullptr ||
++            guest->app_host() != origin.host()) {
++          mojo::ReportBadMessage(
++              "domicile: only an app's own document, in its own window, may "
++              "hold an app channel.");
++          return;
++        }
++        // On the IO thread, for the shell's channel's reason.
++        content::GetIOThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&domicile::BindAppChannel, std::move(receiver)));
++      }));
++
+   map->Add<image_annotation::mojom::Annotator>(&BindImageAnnotator);
+ 
+   map->Add<blink::mojom::ScriptToolHost>(
+diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
+index 20dcf776..507317da 100644
+--- a/third_party/blink/renderer/bindings/generated_in_modules.gni
++++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
+@@ -2395,6 +2395,8 @@ generated_interface_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification_action.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification_action.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_app_host.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_app_host.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_host.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_host.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_eye_dropper.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
+index db1f3862..47de6af3 100644
+--- a/third_party/blink/renderer/bindings/idl_in_modules.gni
++++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
+@@ -280,6 +280,7 @@ static_idl_files_in_modules = [
+   "//third_party/blink/renderer/modules/eventsource/event_source_init.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_app_event.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_app_event_init.idl",
++  "//third_party/blink/renderer/modules/domicile/domicile_app_host.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_cursor_shape.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_clipboard_entry.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_extension.idl",
+diff --git a/third_party/blink/renderer/modules/modules_initializer.cc b/third_party/blink/renderer/modules/modules_initializer.cc
+index a5762bfe..967180bd 100644
+--- a/third_party/blink/renderer/modules/modules_initializer.cc
++++ b/third_party/blink/renderer/modules/modules_initializer.cc
+@@ -59,6 +59,7 @@
+ #include "third_party/blink/renderer/modules/device_orientation/device_orientation_inspector_agent.h"
+ #include "third_party/blink/renderer/modules/document_metadata/document_metadata_server.h"
+ #include "third_party/blink/renderer/modules/document_picture_in_picture/picture_in_picture_controller_impl.h"
++#include "third_party/blink/renderer/modules/domicile/domicile_app.h"
+ #include "third_party/blink/renderer/modules/domicile/domicile_shell.h"
+ #include "third_party/blink/renderer/modules/encryptedmedia/html_media_element_encrypted_media.h"
+ #include "third_party/blink/renderer/modules/event_interface_modules_names.h"
+@@ -337,6 +338,7 @@ void ModulesInitializer::OnClearWindowObjectInMainWorld(
+   }
+   ManifestManager::From(window);
+   DomicileShell::Install(window);
++  DomicileApp::Install(window);
+ 
+ #if BUILDFLAG(IS_ANDROID)
+   LocalFrame* frame = window.GetFrame();
+-- 
+2.56.0
+

@@ -1,0 +1,155 @@
+From d0710dccabc6a4193a77c8afce391e6bd50f73d1 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:56:01 +0700
+Subject: [PATCH] domicile: port Wayland shortcut inhibition to Chromium 156
+
+---
+ .../wayland/host/wayland_toplevel_window.cc   | 69 +++++++++++++++++++
+ .../wayland/host/wayland_toplevel_window.h    | 13 ++++
+ 2 files changed, 82 insertions(+)
+
+diff --git a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+index 8fbac8ac..2c3d5d32 100644
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <string>
+ 
++#include "base/command_line.h"
+ #include "base/logging.h"
+ #include "base/nix/xdg_util.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -28,9 +29,11 @@
+ #include "ui/ozone/platform/wayland/host/wayland_data_drag_controller.h"
+ #include "ui/ozone/platform/wayland/host/wayland_event_source.h"
+ #include "ui/ozone/platform/wayland/host/wayland_frame_manager.h"
++#include "ui/ozone/platform/wayland/host/wayland_keyboard.h"
+ #include "ui/ozone/platform/wayland/host/wayland_output.h"
+ #include "ui/ozone/platform/wayland/host/wayland_output_manager.h"
+ #include "ui/ozone/platform/wayland/host/wayland_popup.h"
++#include "ui/ozone/platform/wayland/host/wayland_seat.h"
+ #include "ui/ozone/platform/wayland/host/wayland_window.h"
+ #include "ui/ozone/platform/wayland/host/wayland_window_drag_controller.h"
+ #include "ui/ozone/platform/wayland/host/wayland_zwp_pointer_constraints.h"
+@@ -46,6 +49,18 @@ namespace ui {
+ 
+ namespace {
+ 
++// Domicile: the launcher passes this when, and only when, this engine is a
++// window inside somebody else's Wayland session; see
++// packages/domicile-launch/src/spawn.rs for why the decision is made out there
++// rather than inferred from the ozone platform in here.
++//
++// Spelled again rather than shared with the fork's other switches in
++// components/domicile/common/domicile_scheme.h: //components sits on top of
++// //ui, so an ozone platform that included that header would invert the
++// dependency. One more string literal is the cheaper of the two prices.
++constexpr char kInhibitHostShortcutsSwitch[] =
++    "domicile-inhibit-host-shortcuts";
++
+ bool ShouldSetBounds(PlatformWindowState state) {
+   return state == PlatformWindowState::kNormal;
+ }
+@@ -189,6 +204,9 @@ void WaylandToplevelWindow::Hide() {
+   xdg_toplevel_.reset();
+   toplevel_session_.reset();
+   appmenu_.reset();
++  // Domicile: an unmapped window holds nobody's keyboard, and the next Show()
++  // makes a new one. See InhibitHostKeyboardShortcuts().
++  shortcuts_inhibitor_.reset();
+ 
+   WaylandWindow::Hide();
+   ClearInFlightRequestsSerial();
+@@ -1029,6 +1047,57 @@ void WaylandToplevelWindow::SetUpShellIntegration() {
+   // This method should be called after the XDG surface is initialized.
+   DCHECK(xdg_toplevel_);
+   TryAnnounceAppmenu();
++  InhibitHostKeyboardShortcuts();
++}
++
++// Domicile: a desktop nested in somebody else's Wayland session has no Meta
++// key, and nothing anywhere says so.
++//
++// Every binding the shell claims is a Meta chord -- see
++// packages/shell-manganese/src/keyboard/bindings.ts -- and it claims them
++// through the fork's own shortcut registry, which reaches no further than this
++// browser process. A host compositor matches its bindings BEFORE it sends a key
++// to the focused client, and does not forward what it took, so under sway
++// Mod4+Return opened sway's terminal and this engine was never told a key had
++// been pressed at all. Nothing failed, nothing logged, and the shell looked
++// broken.
++//
++// zwp_keyboard_shortcuts_inhibit_unstable_v1 is the protocol for saying "not
++// while this surface has the keyboard", and the compositor scopes it exactly
++// that way: sway activates the inhibitor when the surface takes keyboard focus
++// and deactivates it when focus leaves, so a user's bindings come back the
++// moment they click away. What they have while the desktop IS focused is
++// `bindsym --inhibited`, and docs/RUNNING-A-DESKTOP.md says so -- a keymap that
++// goes dead with no way out is a worse desktop than one with no Meta key.
++//
++// UPSTREAM HAS THE CALL AND NO PATH TO IT. WaylandConnection already binds
++// zwp_keyboard_shortcuts_inhibit_manager_v1, and
++// WaylandKeyboard::CreateShortcutsInhibitor is upstream's own request against
++// it -- which is what this drives, rather than issuing inhibit_shortcuts a
++// second time from here. Its only caller is WaylandKeyboard::CreateKeyboardHook,
++// reached from OzonePlatformWayland::CreateKeyboardHook, which is the Keyboard
++// Lock API. A nested desktop is deliberately not fullscreen; --start-fullscreen
++// belongs to the drm platform. The desktop is not asking to lock keys for a
++// page. It is saying that it is the desktop.
++void WaylandToplevelWindow::InhibitHostKeyboardShortcuts() {
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kInhibitHostShortcutsSwitch)) {
++    return;
++  }
++
++  auto* seat = connection()->seat();
++  if (!seat || !seat->keyboard()) {
++    LOG(ERROR) << "domicile: no keyboard on the seat, so the host compositor "
++                  "keeps its shortcuts and the shell's Meta bindings will not "
++                  "arrive";
++    return;
++  }
++  shortcuts_inhibitor_ = seat->keyboard()->CreateShortcutsInhibitor(this);
++  if (!shortcuts_inhibitor_) {
++    LOG(ERROR) << "domicile: the host compositor offers no "
++                  "zwp_keyboard_shortcuts_inhibit_manager_v1, so it keeps its "
++                  "shortcuts and the shell's Meta bindings will not arrive";
++  }
+ }
+ 
+ void WaylandToplevelWindow::OnDecorationModeChanged() {
+diff --git a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
+index 15cc9a2d..060ff00f 100644
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
+@@ -209,6 +209,11 @@ class WaylandToplevelWindow : public WaylandWindow,
+   // available.
+   void SetUpShellIntegration();
+ 
++  // Domicile: asks the host compositor to stop matching its own keyboard
++  // shortcuts while this window has the keyboard. The definition carries the
++  // whole argument, including why it is a command-line switch.
++  void InhibitHostKeyboardShortcuts();
++
+   // Sets decoration mode for a window.
+   void OnDecorationModeChanged();
+ 
+@@ -281,6 +286,14 @@ class WaylandToplevelWindow : public WaylandWindow,
+   std::string appmenu_service_name_;
+   std::string appmenu_object_path_;
+ 
++  // Domicile: held for exactly as long as this window is mapped. Destroying it
++  // is what hands the host compositor its shortcuts back, so it is reset in
++  // Hide() beside appmenu_ above -- Show() builds a fresh xdg_toplevel and runs
++  // SetUpShellIntegration() again, and a second inhibitor for a surface and
++  // seat that already have one is a protocol error the compositor answers by
++  // dropping the connection.
++  wl::Object<zwp_keyboard_shortcuts_inhibitor_v1> shortcuts_inhibitor_;
++
+   base::WeakPtrFactory<WaylandToplevelWindow> weak_ptr_factory_{this};
+ };
+ 
+-- 
+2.56.0
+

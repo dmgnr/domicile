@@ -1,0 +1,109 @@
+From d9c4be5e853545237db62a34187fc8d75d68ea5a Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:05:33 +0700
+Subject: [PATCH] domicile: route file dialogs through the shell
+
+---
+ chrome/browser/chrome_browser_main.cc                  |  7 +++++++
+ .../ui/select_file_policy/chrome_select_file_policy.cc |  4 ++++
+ .../ui/select_file_policy/chrome_select_file_policy.h  |  1 +
+ ui/shell_dialogs/select_file_policy.cc                 |  4 ++++
+ ui/shell_dialogs/select_file_policy.h                  | 10 ++++++++++
+ 5 files changed, 26 insertions(+)
+
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+index 85cc7ef7..97592295 100644
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "chrome/browser/domicile/domicile_command_socket.h"
+ #include "chrome/browser/domicile/domicile_desk.h"
++#include "chrome/browser/domicile/domicile_file_dialogs.h"
+ #include "chrome/browser/domicile/domicile_shell_windows.h"
+ #include "components/domicile/browser/desktop_prefs.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+@@ -1730,6 +1731,12 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
+ 
+ void ChromeBrowserMainParts::PreBrowserStart() {
+   TRACE_EVENT0("startup", "ChromeBrowserMainParts::PreBrowserStart");
++
++  // Domicile's engine fork: every file dialog asks the shell rather than
++  // drawing over the desk -- whose input it would stop. Before the first
++  // window, so no page ever had Chrome's.
++  domicile::UseTheShellForFileDialogs();
++
+   for (auto& chrome_extra_part : chrome_extra_parts_) {
+     chrome_extra_part->PreBrowserStart();
+   }
+diff --git a/chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc b/chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc
+index be4b9162..d4eaae7f 100644
+--- a/chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc
++++ b/chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc
+@@ -68,6 +68,10 @@ void ChromeSelectFilePolicy::SelectFileDenied() {
+   }
+ }
+ 
++content::WebContents* ChromeSelectFilePolicy::GetSourceContents() {
++  return source_contents_;
++}
++
+ // static
+ bool ChromeSelectFilePolicy::FileSelectDialogsAllowed() {
+   DCHECK(g_browser_process);
+diff --git a/chrome/browser/ui/select_file_policy/chrome_select_file_policy.h b/chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
+index 993b89dc..0e1ed519 100644
+--- a/chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
++++ b/chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
+@@ -26,6 +26,7 @@ class ChromeSelectFilePolicy : public ui::SelectFilePolicy {
+   // Overridden from ui::SelectFilePolicy:
+   bool CanOpenSelectFileDialog() override;
+   void SelectFileDenied() override;
++  content::WebContents* GetSourceContents() override;
+ 
+   // Returns true if local state allows showing file pickers.
+   static bool FileSelectDialogsAllowed();
+diff --git a/ui/shell_dialogs/select_file_policy.cc b/ui/shell_dialogs/select_file_policy.cc
+index 14bc3349..eb39dfbd 100644
+--- a/ui/shell_dialogs/select_file_policy.cc
++++ b/ui/shell_dialogs/select_file_policy.cc
+@@ -8,4 +8,8 @@ namespace ui {
+ 
+ SelectFilePolicy::~SelectFilePolicy() = default;
+ 
++content::WebContents* SelectFilePolicy::GetSourceContents() {
++  return nullptr;
++}
++
+ }  // namespace ui
+diff --git a/ui/shell_dialogs/select_file_policy.h b/ui/shell_dialogs/select_file_policy.h
+index 2d0f1f6d..226f766d 100644
+--- a/ui/shell_dialogs/select_file_policy.h
++++ b/ui/shell_dialogs/select_file_policy.h
+@@ -7,6 +7,10 @@
+ 
+ #include "ui/shell_dialogs/shell_dialogs_export.h"
+ 
++namespace content {
++class WebContents;
++}
++
+ namespace ui {
+ 
+ // An optional policy class that provides decisions on whether to allow showing
+@@ -20,6 +24,12 @@ class SHELL_DIALOGS_EXPORT SelectFilePolicy {
+ 
+   // Called from the SelectFileDialog when we've denied a request.
+   virtual void SelectFileDenied() = 0;
++
++  // Domicile's engine fork: the page this dialog is for, where the policy was
++  // made with one. A desk draws no dialog; it asks that page's shell -- see
++  // //chrome/browser/domicile/domicile_file_dialogs.h. Null here, because this
++  // layer knows no pages: ChromeSelectFilePolicy answers it.
++  virtual content::WebContents* GetSourceContents();
+ };
+ 
+ }  // namespace ui
+-- 
+2.56.0
+

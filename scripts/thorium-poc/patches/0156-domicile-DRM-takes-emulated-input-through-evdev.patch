@@ -1,0 +1,111 @@
+From 6031cdf15efef4fb89b98919c175c54f0afca169 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 17:43:50 +0700
+Subject: [PATCH] domicile: route emulated input through DRM evdev
+
+---
+ ui/ozone/platform/drm/BUILD.gn              |  5 +++++
+ ui/ozone/platform/drm/ozone_platform_drm.cc | 13 +++++++++++++
+ ui/ozone/public/ozone_platform.h            |  4 ++--
+ 3 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 279ee8ac..ffa3cc06 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -124,6 +124,8 @@ source_set("gbm") {
+     "domicile/connector_name.h",
+     "domicile/drm_cursor_factory.cc",
+     "domicile/drm_cursor_factory.h",
++    "domicile/drm_desk_input.cc",
++    "domicile/drm_desk_input.h",
+     "domicile/drm_fullscreen.cc",
+     "domicile/drm_fullscreen.h",
+     "domicile/drm_input_devices.cc",
+@@ -198,6 +200,7 @@ source_set("gbm") {
+     "//ui/display/types",
+     "//ui/display/util",
+     "//ui/events",
++    "//ui/events:dom_keycode_converter",
+     "//ui/events/devices",
+     "//ui/events/ozone",
+     "//ui/events/ozone/evdev",
+@@ -279,6 +282,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_canvas_unittest.cc",
+     "domicile/drm_no_gbm_modeset_unittest.cc",
+     "domicile/drm_cursor_factory_unittest.cc",
++    "domicile/drm_desk_input_unittest.cc",
+     "domicile/drm_fullscreen_unittest.cc",
+     "domicile/drm_input_controller_unittest.cc",
+     "domicile/drm_input_devices_unittest.cc",
+@@ -345,6 +349,7 @@ source_set("gbm_unittests") {
+     # this target includes a `//ui/events` header directly rather than only
+     # through `:gbm`, and `gn check` wants the edge said out loud.
+     "//ui/events",
++    "//ui/events:dom_keycode_converter",
+ 
+     # `DrmInputControllerTest` builds the evdev input controller this
+     # platform's evdev thread reports to, and the stub layout its keyboard
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index 4a6e57b3..cbd8126f 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -51,6 +51,7 @@
+ #include "ui/ozone/platform/drm/host/drm_window_host.h"
+ #include "ui/ozone/platform/drm/domicile/drm_clipboard.h"
+ #include "ui/ozone/platform/drm/domicile/drm_cursor_factory.h"
++#include "ui/ozone/platform/drm/domicile/drm_desk_input.h"
+ #include "ui/ozone/platform/drm/domicile/drm_logind_input.h"
+ #include "ui/ozone/platform/drm/domicile/drm_logind_session.h"
+ #include "ui/ozone/platform/drm/domicile/drm_modeset.h"
+@@ -64,6 +65,7 @@
+ #include "ui/ozone/public/gpu_platform_support_host.h"
+ #include "ui/ozone/public/ozone_platform.h"
+ #include "ui/ozone/public/platform_screen.h"
++#include "ui/ozone/public/system_input_injector.h"
+ #include "ui/platform_window/platform_window_init_properties.h"
+ 
+ #if BUILDFLAG(USE_XKBCOMMON)
+@@ -268,6 +270,15 @@ class OzonePlatformDrm : public OzonePlatform {
+     return event_factory_ozone_->CreateSystemInputInjector();
+   }
+ 
++  // DOMICILE: an EIS client's input, down evdev's own path. See
++  // ui/ozone/platform/drm/domicile/drm_desk_input.h.
++  void InjectDomicileInput(const DomicileDeskInput& input) override {
++    if (!desk_injector_) {
++      desk_injector_ = event_factory_ozone_->CreateSystemInputInjector();
++    }
++    InjectDeskInput(*desk_injector_, input);
++  }
++
+   // In multi-process mode, this function must be executed in Viz as it sets up
+   // the callbacks needed for Mojo receivers. In single process mode, it may be
+   // called on any thread. It must follow one of |InitializeUI| or
+@@ -582,6 +593,8 @@ class OzonePlatformDrm : public OzonePlatform {
+   // devices from it, so it is destroyed after them.
+   std::unique_ptr<DrmLogindSession> logind_;
+   std::unique_ptr<EventFactoryEvdev> event_factory_ozone_;
++  // DOMICILE: emulated input's injector, made at its first event.
++  std::unique_ptr<SystemInputInjector> desk_injector_;
+   std::unique_ptr<DrmDisplayHostManager> display_manager_;
+   // DOMICILE: the desktop's clipboards. A plain member rather than a
+   // `unique_ptr`, because it holds two strings and two callbacks and needs
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index 7bdde5bc..a10a3e03 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -448,8 +448,8 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // the host session's.
+   virtual void SetDomicileWhitePoint(const DomicileWhitePoint& white_point) {}
+   // DOMICILE: emulated input for the desk host, which it hears as it hears
+-  // the platform's own devices. A headless desk only: it has no devices, and
+-  // DRM's EIS input still goes to the compositor's seat.
++  // the platform's own devices. A headless desk and DRM: a nested desktop's
++  // input is the host session's.
+   virtual void InjectDomicileInput(const DomicileDeskInput& input) {}
+   // DOMICILE: what the compositor says is on one of the desktop's clipboards.
+   //
+-- 
+2.56.0
+

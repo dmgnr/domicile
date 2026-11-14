@@ -1,0 +1,188 @@
+From 2725701d593e65f66090e9d089e7852ecd49dc2f Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:33:30 +0700
+Subject: [PATCH] domicile: gate embedded windows to the shell in Chromium 156
+
+---
+ content/browser/browser_interface_binders.cc  |  6 ++++
+ ...der_process_host_impl_receiver_bindings.cc | 12 -------
+ .../core/html/canvas/html_canvas_element.cc   |  3 +-
+ .../core/html/html_frame_element_base.h       |  9 +++--
+ .../renderer/core/html/html_tag_names.json5   |  5 +++
+ .../platform/runtime_enabled_features.json5   | 34 ++++++++-----------
+ 6 files changed, 34 insertions(+), 35 deletions(-)
+
+diff --git a/content/browser/browser_interface_binders.cc b/content/browser/browser_interface_binders.cc
+index 68a1a2fc..94be996e 100644
+--- a/content/browser/browser_interface_binders.cc
++++ b/content/browser/browser_interface_binders.cc
+@@ -32,6 +32,7 @@
+ #include "content/browser/cookie_store/cookie_store_manager.h"
+ #include "content/browser/declarative_performance_observer/declarative_performance_observer.h"
+ #include "content/browser/device_posture/device_posture_provider_impl.h"
++#include "content/browser/domicile/domicile_frame_sink_broker.h"
+ #include "content/browser/eye_dropper_chooser_impl.h"
+ #include "content/browser/handwriting/handwriting_recognition_service_factory.h"
+ #include "content/browser/haptics/haptics_service_impl.h"
+@@ -1507,6 +1508,11 @@ void PopulateBinderMapWithContext(
+   map->Add<optimization_guide::mojom::ModelBroker>(
+       &EmptyBinderForFrame<optimization_guide::mojom::ModelBroker>);
+ 
++  // Domicile: embeds a client's window in an <app>. A frame binder rather than
++  // a process one, so the binder can refuse every frame but the shell.
++  map->Add<domicile::mojom::ExternalSurfaceProvider>(
++      &BindDomicileExternalSurfaceProvider);
++
+   // This should be last to allow overrides of any interface.
+   GetContentClient()->browser()->RegisterBrowserInterfaceBindersForFrame(host,
+                                                                          map);
+diff --git a/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc b/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
+index bf855c9a..eab79a9d 100644
+--- a/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
++++ b/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
+@@ -8,7 +8,6 @@
+ #include "content/browser/renderer_host/render_process_host_impl.h"
+ // clang-format on
+ 
+-#include "base/numerics/safe_conversions.h"
+ #include "components/discardable_memory/public/mojom/discardable_shared_memory_manager.mojom.h"
+ #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
+ #include "components/metrics/single_sample_metrics.h"
+@@ -16,7 +15,6 @@
+ #include "content/browser/blob_storage/blob_registry_wrapper.h"
+ #include "content/browser/blob_storage/chrome_blob_storage_context.h"
+ #include "content/browser/compositor/surface_utils.h"
+-#include "content/browser/domicile/domicile_frame_sink_broker.h"
+ #include "content/browser/field_trial_recorder.h"
+ #include "content/browser/file_system/file_system_manager_impl.h"
+ #include "content/browser/gpu/gpu_data_manager_impl.h"
+@@ -178,16 +176,6 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
+           &RenderProcessHostImpl::CreateEmbeddedFrameSinkProvider,
+           instance_weak_factory_.GetWeakPtr()));
+ 
+-  // Domicile's counterpart of the line above. What the renderer gets here is
+-  // only the embedding half — see components/domicile/mojom/external_surface.mojom.
+-  // It takes the renderer's frame sink client id, the same one
+-  // CreateEmbeddedFrameSinkProvider uses, to refuse a parent frame sink in
+-  // another renderer.
+-  AddUIThreadInterface(
+-      registry.get(),
+-      base::BindRepeating(&BindDomicileExternalSurfaceProvider,
+-                          base::checked_cast<uint32_t>(id_.GetUnsafeValue())));
+-
+   AddUIThreadInterface(
+       registry.get(),
+       base::BindRepeating(&RenderProcessHostImpl::BindCompositingModeReporter,
+diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+index f02004d2..b949cd52 100644
+--- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
++++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+@@ -2167,7 +2167,8 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
+ 
+   const bool reconfiguring = !!external_surface_embedder_;
+   if (!reconfiguring) {
+-    external_surface_embedder_ = std::make_unique<ExternalSurfaceEmbedder>();
++    external_surface_embedder_ = std::make_unique<ExternalSurfaceEmbedder>(
++        frame->GetBrowserInterfaceBroker());
+   }
+   external_surface_embedder_->Embed(
+       app_id,
+diff --git a/third_party/blink/renderer/core/html/html_frame_element_base.h b/third_party/blink/renderer/core/html/html_frame_element_base.h
+index a2144301..4b2c6015 100644
+--- a/third_party/blink/renderer/core/html/html_frame_element_base.h
++++ b/third_party/blink/renderer/core/html/html_frame_element_base.h
+@@ -110,9 +110,12 @@ struct DowncastTraits<HTMLFrameElementBase> {
+     return html_element && AllowFrom(*html_element);
+   }
+   static bool AllowFrom(const HTMLElement& html_element) {
+-    return html_element.HasTagName(html_names::kFrameTag) ||
+-           html_element.HasTagName(html_names::kIFrameTag) ||
+-           html_element.HasTagName(html_names::kWebViewTag);
++    // Check the frame-owner type as well as the tag. An origin-trial-gated
++    // <webview> outside the shell is an HTMLUnknownElement with this tag.
++    return IsA<HTMLFrameOwnerElement>(html_element) &&
++           (html_element.HasTagName(html_names::kFrameTag) ||
++            html_element.HasTagName(html_names::kIFrameTag) ||
++            html_element.HasTagName(html_names::kWebViewTag));
+   }
+ };
+ 
+diff --git a/third_party/blink/renderer/core/html/html_tag_names.json5 b/third_party/blink/renderer/core/html/html_tag_names.json5
+index aee1a736..19dfb383 100644
+--- a/third_party/blink/renderer/core/html/html_tag_names.json5
++++ b/third_party/blink/renderer/core/html/html_tag_names.json5
+@@ -46,6 +46,9 @@
+       interfaceName: "HTMLAppElement",
+       interfaceHeaderDir: "third_party/blink/renderer/core/html/domicile",
+       runtimeEnabled: "DomicileExternalSurface",
++      // On only in the shell's document. The type helpers stay: they match
++      // GetElementType(), which an HTMLUnknownElement <app> does not.
++      runtimeFlagHasOriginTrial: true,
+     },
+     {
+       name: "applet",
+@@ -627,6 +630,8 @@
+       interfaceName: "HTMLWebViewElement",
+       interfaceHeaderDir: "third_party/blink/renderer/core/html/domicile",
+       runtimeEnabled: "DomicileExternalSurface",
++      // As for <app>.
++      runtimeFlagHasOriginTrial: true,
+     },
+     {
+       name: "xmp",
+diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+index 762d50ee..3ebd6c96 100644
+--- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
++++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+@@ -2582,33 +2582,29 @@
+       name: "DocumentPolicyJSProfilingMode",
+       status: "experimental",
+     },
+-    // Domicile's engine fork: canvas.embedExternalSurface(), which points a
+-    // <canvas>'s cc::SurfaceLayer at a viz surface the browser brokered to a
+-    // compositing producer outside this renderer.
++    // Domicile's engine fork: <app>, <webview>, their events, and
++    // canvas.embedExternalSurface().
+     //
+-    // Stable, so it is on in every configuration of this fork and needs no
+-    // command-line flag. That is the whole reason it is stable rather than
+-    // statusless: reaching it with --enable-blink-features made Chromium paint
+-    // the "You are using an unsupported command-line flag" banner across the
+-    // top of the desktop, and the desktop is the whole screen, so the banner
+-    // was the shell's own chrome. Upstream would not take a feature to stable
+-    // on those grounds; this is a fork, and the only configuration that has a
+-    // browser-side broker for the method to talk to.
++    // On only in the shell's document, domicile://shell/. DomicileShell turns
++    // it on there with OriginTrialContext::AddFeature, so it needs no token and
++    // no command-line flag (which draws an unsupported-flag banner across the
++    // desktop). Everywhere else <app> is an HTMLUnknownElement: a page that
++    // embedded a window would take its pixels from the shell. The browser
++    // refuses the embed from any other frame too.
+     // See docs/architecture/ENGINE-FORK.md in the Domicile repository.
+     {
+       name: "DomicileExternalSurface",
+-      status: "stable",
++      origin_trial_feature_name: "DomicileExternalSurface",
+     },
+     // Domicile's engine fork: navigator.domicile, the shell's control channel
+     // to the compositor.
+     //
+-    // Stable, like DomicileExternalSurface above and for the same reason: the
+-    // desktop needs it on every launch, and a statusless feature is reachable
+-    // only with --enable-blink-features, which draws a yellow unsupported-flag
+-    // bar across the top of the desktop. That bar is the first thing a user
+-    // sees and reads as broken, so `spawn::engine` passes no such flag and has
+-    // a test saying it never will. A feature this fork's own desktop cannot
+-    // start without belongs on by default.
++    // Stable, because the desktop needs it on every launch, and a statusless
++    // feature is reachable only with --enable-blink-features, which draws a
++    // yellow unsupported-flag bar across the top of the desktop. That bar is
++    // the first thing a user sees and reads as broken, so `spawn::engine`
++    // passes no such flag and has a test saying it never will. A feature this
++    // fork's own desktop cannot start without belongs on by default.
+     //
+     // It was statusless while the channel was a vertical slice of two members,
+     // on the stated condition that it went stable with the other twenty-seven.
+-- 
+2.56.0
+

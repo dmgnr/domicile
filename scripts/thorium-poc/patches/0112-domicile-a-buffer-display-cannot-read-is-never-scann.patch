@@ -1,0 +1,95 @@
+From 55b8f17f89631a738ed2e9c7fa008b5d6a5726f4 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:26:01 +0700
+Subject: [PATCH] domicile: skip buffers the display cannot scan out
+
+---
+ ui/ozone/platform/drm/BUILD.gn          |  1 +
+ ui/ozone/platform/drm/gpu/gbm_pixmap.cc | 42 +++++++++++++++++++++++--
+ 2 files changed, 41 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 2c24c9c2..3f97890d 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -272,6 +272,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_sleep_unittest.cc",
+     "domicile/drm_vt_switcher_unittest.cc",
+     "domicile/edid_name_unittest.cc",
++    "domicile/gbm_pixmap_scanout_unittest.cc",
+ 
+     # evdev's, not this platform's: `//ui/events/ozone/evdev:unittests` is
+     # linked only into `events_unittests`, which no job here builds, and the
+diff --git a/ui/ozone/platform/drm/gpu/gbm_pixmap.cc b/ui/ozone/platform/drm/gpu/gbm_pixmap.cc
+index 3afd12cb..999a840d 100644
+--- a/ui/ozone/platform/drm/gpu/gbm_pixmap.cc
++++ b/ui/ozone/platform/drm/gpu/gbm_pixmap.cc
+@@ -6,10 +6,15 @@
+ 
+ #include <gbm.h>
+ #include <memory>
++#include <set>
++#include <tuple>
+ #include <utility>
+ 
+-#include "base/check.h"
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "ui/gfx/gpu_fence.h"
++#include "ui/gfx/linux/drm_util_linux.h"
+ #include "ui/gfx/native_pixmap_handle.h"
+ #include "ui/ozone/platform/drm/gpu/drm_overlay_plane.h"
+ #include "ui/ozone/platform/drm/gpu/gbm_surface_factory.h"
+@@ -17,6 +22,23 @@
+ 
+ namespace ui {
+ 
++namespace {
++
++// DOMICILE: returns true the first time this process skips a buffer of
++// `buffer`'s format, size and modifier.
++bool FirstSkipOfItsKind(const GbmBuffer& buffer) {
++  static base::NoDestructor<base::Lock> lock;
++  static base::NoDestructor<std::set<std::tuple<uint32_t, int, int, uint64_t>>>
++      skipped;
++  base::AutoLock hold(*lock);
++  return skipped
++      ->emplace(buffer.GetFormat(), buffer.GetSize().width(),
++                buffer.GetSize().height(), buffer.GetFormatModifier())
++      .second;
++}
++
++}  // namespace
++
+ GbmPixmap::GbmPixmap(GbmSurfaceFactory* surface_manager,
+                      std::unique_ptr<GbmBuffer> buffer,
+                      scoped_refptr<DrmFramebuffer> framebuffer)
+@@ -76,7 +98,23 @@ bool GbmPixmap::ScheduleOverlayPlane(
+     gfx::AcceleratedWidget widget,
+     const gfx::OverlayPlaneData& overlay_plane_data,
+     gfx::GpuFenceHandle acquire_fence) {
+-  DCHECK(buffer_->GetFlags() & GBM_BO_USE_SCANOUT);
++  // DOMICILE: a buffer allocated or imported without GBM_BO_USE_SCANOUT has
++  // no framebuffer, so display cannot read it. `OzoneImageBackingFactory`
++  // makes one for the primary plane when a scanout allocation fails, and
++  // patch 0005 imports a client's buffer for sampling only. Queue no plane and
++  // warn once per format, size and modifier: a buffer queue holds several
++  // alike. Failing the frame instead loses the context every frame, which can
++  // loop GPU-process restarts.
++  if (!(buffer_->GetFlags() & GBM_BO_USE_SCANOUT)) {
++    if (FirstSkipOfItsKind(*buffer_)) {
++      LOG(WARNING) << "Not scanning out a "
++                   << DrmFormatToString(buffer_->GetFormat()) << " buffer ("
++                   << buffer_->GetSize().ToString() << ", modifier "
++                   << buffer_->GetFormatModifier()
++                   << ") allocated or imported without GBM_BO_USE_SCANOUT";
++    }
++    return true;
++  }
+   // |framebuffer_id| might be 0 if AddFramebuffer2 failed, in that case we
+   // already logged the error in GbmBuffer ctor. We avoid logging the error
+   // here since this method might be called every pageflip.
+-- 
+2.56.0
+

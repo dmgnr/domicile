@@ -1,0 +1,314 @@
+From 750a9fd9489f916c3f9a0d49a57e93f54edb09e6 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 17:36:44 +0700
+Subject: [PATCH] domicile: add headless desk emulated input
+
+---
+ ui/ozone/platform/headless/BUILD.gn           | 17 +++++
+ ui/ozone/platform/headless/headless_window.cc |  8 +-
+ ui/ozone/platform/headless/headless_window.h  |  5 ++
+ .../headless/ozone_platform_headless.cc       | 75 ++++++++++++++++++-
+ ui/ozone/public/ozone_platform.h              | 25 +++++++
+ 5 files changed, 127 insertions(+), 3 deletions(-)
+
+diff --git a/ui/ozone/platform/headless/BUILD.gn b/ui/ozone/platform/headless/BUILD.gn
+index c2823a71..ae2aa43c 100644
+--- a/ui/ozone/platform/headless/BUILD.gn
++++ b/ui/ozone/platform/headless/BUILD.gn
+@@ -3,6 +3,7 @@
+ # found in the LICENSE file.
+ 
+ import("//gpu/vulkan/features.gni")
++import("//ui/base/ui_features.gni")
+ 
+ visibility = [ "//ui/ozone/*" ]
+ 
+@@ -12,6 +13,10 @@ source_set("headless") {
+     "client_native_pixmap_factory_headless.h",
+     "domicile/headless_desk.cc",
+     "domicile/headless_desk.h",
++    "domicile/headless_desk_cursors.cc",
++    "domicile/headless_desk_cursors.h",
++    "domicile/headless_desk_input.cc",
++    "domicile/headless_desk_input.h",
+     "headless_screen.cc",
+     "headless_screen.h",
+     "headless_surface_factory.cc",
+@@ -26,6 +31,10 @@ source_set("headless") {
+ 
+   defines = [ "OZONE_IMPLEMENTATION" ]
+ 
++  if (use_xkbcommon) {
++    configs += [ "//ui/events/ozone/layout:xkbcommon" ]
++  }
++
+   deps = [
+     "//base",
+     "//build:chromecast_buildflags",
+@@ -36,9 +45,11 @@ source_set("headless") {
+     "//skia",
+     "//ui/base",
+     "//ui/base/cursor",
++    "//ui/base/cursor/domicile:desk_cursor_image",
+     "//ui/base/ime",
+     "//ui/display",
+     "//ui/events",
++    "//ui/events:dom_keycode_converter",
+     "//ui/events/ozone/layout",
+     "//ui/events/platform",
+     "//ui/gfx",
+@@ -66,6 +77,8 @@ source_set("headless") {
+ source_set("headless_unittests") {
+   testonly = true
+   sources = [
++    "domicile/headless_desk_cursors_unittest.cc",
++    "domicile/headless_desk_input_unittest.cc",
+     "domicile/headless_desk_unittest.cc",
+     "headless_window_unittest.cc",
+   ]
+@@ -73,9 +86,13 @@ source_set("headless_unittests") {
+     ":headless",
+     "//base",
+     "//base/test:test_support",
++    "//skia",
+     "//testing/gtest",
++    "//ui/base/cursor",
++    "//ui/base/cursor/domicile:desk_cursor_image",
+     "//ui/display:test_support",
+     "//ui/events:test_support",
++    "//ui/events/ozone/layout",
+     "//ui/gfx",
+     "//ui/ozone:platform",
+     "//ui/ozone:test_support",
+diff --git a/ui/ozone/platform/headless/headless_window.cc b/ui/ozone/platform/headless/headless_window.cc
+index a0061fa1..1be29c8e 100644
+--- a/ui/ozone/platform/headless/headless_window.cc
++++ b/ui/ozone/platform/headless/headless_window.cc
+@@ -8,10 +8,12 @@
+ 
+ #include "base/notimplemented.h"
+ #include "build/build_config.h"
++#include "ui/base/cursor/domicile/desk_cursor_image.h"
+ #include "ui/base/cursor/platform_cursor.h"
+ #include "ui/display/screen.h"
+ #include "ui/display/types/display_constants.h"
+ #include "ui/events/platform/platform_event_source.h"
++#include "ui/ozone/platform/headless/domicile/headless_desk_cursors.h"
+ #include "ui/ozone/platform/headless/headless_window_manager.h"
+ 
+ namespace ui {
+@@ -190,7 +192,11 @@ bool HeadlessWindow::ShouldUseNativeFrame() const {
+   return false;
+ }
+ 
+-void HeadlessWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {}
++// DOMICILE: no window system draws a headless pointer, so the desk's screen
++// casts do, from the image set here.
++void HeadlessWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {
++  DeskCursorImageSource::Get().Set(HeadlessDeskCursorImage(cursor.get()));
++}
+ 
+ void HeadlessWindow::MoveCursorTo(const gfx::Point& location) {}
+ 
+diff --git a/ui/ozone/platform/headless/headless_window.h b/ui/ozone/platform/headless/headless_window.h
+index a7dc0249..c9931171 100644
+--- a/ui/ozone/platform/headless/headless_window.h
++++ b/ui/ozone/platform/headless/headless_window.h
+@@ -71,6 +71,11 @@ class HeadlessWindow : public PlatformWindow {
+ 
+   gfx::AcceleratedWidget widget() const { return widget_; }
+ 
++  // DOMICILE: hands a desk's emulated input to the window, as a platform
++  // event source would. See
++  // ui/ozone/platform/headless/domicile/headless_desk_input.h.
++  void DispatchDomicileEvent(Event* event) { delegate_->DispatchEvent(event); }
++
+  protected:
+   PlatformWindowDelegate* delegate() { return delegate_; }
+ 
+diff --git a/ui/ozone/platform/headless/ozone_platform_headless.cc b/ui/ozone/platform/headless/ozone_platform_headless.cc
+index 6ac568e3..1effbd48 100644
+--- a/ui/ozone/platform/headless/ozone_platform_headless.cc
++++ b/ui/ozone/platform/headless/ozone_platform_headless.cc
+@@ -12,20 +12,27 @@
+ #include "base/command_line.h"
+ #include "base/containers/flat_map.h"
+ #include "base/files/file_path.h"
++#include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
+ #include "build/build_config.h"
+ #include "build/chromecast_buildflags.h"
++#include "ui/base/buildflags.h"
+ #include "ui/base/cursor/cursor_factory.h"
+ #include "ui/base/ime/input_method_minimal.h"
+ #include "ui/display/types/native_display_delegate.h"
++#include "ui/events/event.h"
+ #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
+ #include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
+ #include "ui/events/platform/platform_event_source.h"
+ #include "ui/gfx/display_color_spaces.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/vector2d_f.h"
+ #include "ui/ozone/common/bitmap_cursor_factory.h"
+ #include "ui/ozone/common/stub_overlay_manager.h"
+ #include "ui/ozone/platform/headless/domicile/headless_desk.h"
++#include "ui/ozone/platform/headless/domicile/headless_desk_cursors.h"
++#include "ui/ozone/platform/headless/domicile/headless_desk_input.h"
+ #include "ui/ozone/platform/headless/headless_screen.h"
+ #include "ui/ozone/platform/headless/headless_surface_factory.h"
+ #include "ui/ozone/platform/headless/headless_window.h"
+@@ -41,6 +48,11 @@
+ #include "ui/base/ime/fuchsia/input_method_fuchsia.h"
+ #endif
+ 
++#if BUILDFLAG(USE_XKBCOMMON)
++#include "ui/events/ozone/layout/xkb/xkb_evdev_codes.h"
++#include "ui/events/ozone/layout/xkb/xkb_keyboard_layout_engine.h"
++#endif
++
+ namespace ui {
+ 
+ namespace {
+@@ -131,6 +143,17 @@ class OzonePlatformHeadlessImpl : public OzonePlatformHeadless {
+     virtual_ = std::move(displays);
+     ShowDesk();
+   }
++  // DOMICILE: the shell's window, which a desk's emulated input goes to.
++  void SetDomicileDeskHost(gfx::AcceleratedWidget host) override {
++    desk_host_ = host;
++  }
++  // DOMICILE: an EIS client's input, on a desk only. See
++  // ui/ozone/platform/headless/domicile/headless_desk_input.h.
++  void InjectDomicileInput(const DomicileDeskInput& input) override {
++    if (desk_input_) {
++      desk_input_->Inject(input);
++    }
++  }
+   base::flat_map<int64_t, std::string> GetDomicileConnectors() const override {
+     return connectors_;
+   }
+@@ -167,13 +190,36 @@ class OzonePlatformHeadlessImpl : public OzonePlatformHeadless {
+     // This unbreaks tests that create their own.
+     if (!PlatformEventSource::GetInstance())
+       platform_event_source_ = std::make_unique<HeadlessPlatformEventSource>();
+-    keyboard_layout_engine_ = std::make_unique<StubKeyboardLayoutEngine>();
++    const bool desk = base::CommandLine::ForCurrentProcess()->HasSwitch(
++        kDomicileHeadlessDesk);
++#if BUILDFLAG(USE_XKBCOMMON)
++    // DOMICILE: a desk's keys type what the compositor's keymap says.
++    if (desk) {
++      keyboard_layout_engine_ =
++          std::make_unique<XkbKeyboardLayoutEngine>(xkb_evdev_code_converter_);
++    }
++#endif
++    if (!keyboard_layout_engine_) {
++      keyboard_layout_engine_ = std::make_unique<StubKeyboardLayoutEngine>();
++    }
+     KeyboardLayoutEngineManager::SetKeyboardLayoutEngine(
+         keyboard_layout_engine_.get());
++    if (desk) {
++      // Unretained: the platform outlives every event it injects.
++      desk_input_ = std::make_unique<HeadlessDeskInput>(
++          base::BindRepeating(&OzonePlatformHeadlessImpl::DeliverToDesk,
++                              base::Unretained(this)),
++          keyboard_layout_engine_.get());
++    }
+ 
+     overlay_manager_ = std::make_unique<StubOverlayManager>();
+     input_controller_ = std::make_unique<StubInputController>();
+-    cursor_factory_ = std::make_unique<BitmapCursorFactory>();
++    // DOMICILE: a desk's casts draw the pointer, so its cursors need images.
++    if (desk) {
++      cursor_factory_ = std::make_unique<HeadlessDeskCursorFactory>();
++    } else {
++      cursor_factory_ = std::make_unique<BitmapCursorFactory>();
++    }
+     gpu_platform_support_host_.reset(CreateStubGpuPlatformSupportHost());
+ 
+     return true;
+@@ -197,6 +243,27 @@ class OzonePlatformHeadlessImpl : public OzonePlatformHeadless {
+     desk_screen_->SetDomicileDesk(desk.displays);
+   }
+ 
++  // DOMICILE: hands an injected event, located in desk pixels, to the
++  // shell's window. Dropped before the shell has one.
++  void DeliverToDesk(Event* event) {
++    HeadlessWindow* window =
++        window_manager_ ? window_manager_->GetWindow(desk_host_) : nullptr;
++    if (!window) {
++      return;
++    }
++    if (event->IsLocatedEvent()) {
++      LocatedEvent* located = event->AsLocatedEvent();
++      const gfx::Rect bounds = window->GetBoundsInPixels();
++      const gfx::Vector2dF origin(bounds.x(), bounds.y());
++      located->set_location_f(located->location_f() - origin);
++      located->set_root_location_f(located->root_location_f() - origin);
++    }
++    window->DispatchDomicileEvent(event);
++  }
++
++#if BUILDFLAG(USE_XKBCOMMON)
++  XkbEvdevCodes xkb_evdev_code_converter_;
++#endif
+   std::unique_ptr<KeyboardLayoutEngine> keyboard_layout_engine_;
+   std::unique_ptr<HeadlessWindowManager> window_manager_;
+   std::unique_ptr<HeadlessSurfaceFactory> surface_factory_;
+@@ -213,6 +280,10 @@ class OzonePlatformHeadlessImpl : public OzonePlatformHeadless {
+   std::vector<DomicileVirtualDisplay> virtual_;
+   std::vector<DomicileDisplayLayout> layout_;
+   base::flat_map<int64_t, std::string> connectors_;
++  // DOMICILE: the shell's window, and the desk's emulated pointer and keyboard,
++  // made by `InitializeUI` with the desk switch.
++  gfx::AcceleratedWidget desk_host_ = gfx::kNullAcceleratedWidget;
++  std::unique_ptr<HeadlessDeskInput> desk_input_;
+ };
+ 
+ }  // namespace
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index 0d911ffc..7bdde5bc 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -132,6 +132,27 @@ struct DomicileWhitePoint {
+   float blue = 1.f;
+ };
+ 
++// DOMICILE: one event of emulated input (EIS) for the desk, as a pointer or
++// keyboard of the platform's own would send it. See
++// docs/architecture/A-HEADLESS-DESKTOP.md.
++struct DomicileDeskInput {
++  enum class Kind {
++    // The pointer moved to `x`, `y`, a point on the desk in pixels.
++    kPointer,
++    // Button `code`, an evdev code, went down or up.
++    kButton,
++    // A scroll by `x`, `y` pixels: right and down are positive.
++    kScroll,
++    // Key `code`, an evdev code, went down or up.
++    kKey,
++  };
++  Kind kind = Kind::kPointer;
++  double x = 0;
++  double y = 0;
++  uint32_t code = 0;
++  bool pressed = false;
++};
++
+ // Base class for Ozone platform implementations.
+ //
+ // Ozone platforms must override this class and implement the virtual
+@@ -426,6 +447,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // CRTC. DRM only, like the layout above: a nested desktop's monitors are
+   // the host session's.
+   virtual void SetDomicileWhitePoint(const DomicileWhitePoint& white_point) {}
++  // DOMICILE: emulated input for the desk host, which it hears as it hears
++  // the platform's own devices. A headless desk only: it has no devices, and
++  // DRM's EIS input still goes to the compositor's seat.
++  virtual void InjectDomicileInput(const DomicileDeskInput& input) {}
+   // DOMICILE: what the compositor says is on one of the desktop's clipboards.
+   //
+   // THE BROWSER IS TOLD RATHER THAN ASKED. The compositor reads every
+-- 
+2.56.0
+

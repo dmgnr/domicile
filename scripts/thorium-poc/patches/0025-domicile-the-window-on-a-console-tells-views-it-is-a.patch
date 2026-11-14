@@ -1,0 +1,161 @@
+From db13f6714e953b02ab69beb8b987139002e434aa Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:44:41 +0700
+Subject: [PATCH] domicile: report DRM window activation to views
+
+---
+ ui/ozone/platform/drm/host/drm_window_host.cc | 75 ++++++++++++++++++-
+ ui/ozone/platform/drm/host/drm_window_host.h  | 15 ++++
+ 2 files changed, 88 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/host/drm_window_host.cc b/ui/ozone/platform/drm/host/drm_window_host.cc
+index e7ca5f85..f0f04128 100644
+--- a/ui/ozone/platform/drm/host/drm_window_host.cc
++++ b/ui/ozone/platform/drm/host/drm_window_host.cc
+@@ -4,7 +4,10 @@
+ 
+ #include "ui/ozone/platform/drm/host/drm_window_host.h"
+ 
++#include <utility>
++
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/notimplemented.h"
+ #include "ui/base/cursor/platform_cursor.h"
+@@ -71,10 +74,32 @@ gfx::Rect DrmWindowHost::GetCursorConfinedBounds() const {
+ 
+ void DrmWindowHost::Show(bool inactive) {
+   visible_ = true;
++
++  // THE WINDOW SAYS IT IS ACTIVE, BECAUSE NOTHING ELSE WILL. Activation is a
++  // fact the platform reports upward -- `WaylandWindow` from
++  // `xdg_toplevel.configure`'s activated state, `X11Window` from
++  // `WM_TAKE_FOCUS` -- and ozone/drm reports it never, for the reason it
++  // NOTREACHED()s half of this interface: ash is its only consumer, and ash
++  // decides activation itself through its own `ActivationClient` without ever
++  // asking the platform window.
++  //
++  // A views browser is not ash. `DesktopWindowTreeHostPlatform::is_active_`
++  // starts false and only `OnActivationChanged` moves it, and that call is
++  // what reaches `DesktopNativeWidgetAura::HandleActivationChanged` ->
++  // `FocusManager::RestoreFocusedView`. Without it no view in the widget ever
++  // holds focus, so the key events this class dispatches arrive at a window
++  // tree with nothing focused to deliver them to and are dropped -- a desktop
++  // that draws, tracks the pointer, and answers no key at all.
++  //
++  // `inactive` is `Widget`'s own word for "show this without giving it
++  // focus", and it is honored for the same reason the rest of this class
++  // answers rather than asserts: it is what the caller asked for.
++  SetActive(!inactive);
+ }
+ 
+ void DrmWindowHost::Hide() {
+   visible_ = false;
++  SetActive(false);
+ }
+ 
+ void DrmWindowHost::Close() {
+@@ -250,11 +275,40 @@ PlatformWindowState DrmWindowHost::GetPlatformWindowState() const {
+ }
+ 
+ void DrmWindowHost::Activate() {
+-  NOTIMPLEMENTED_LOG_ONCE();
++  // Upstream is `NOTIMPLEMENTED_LOG_ONCE()`, which in the shipped engine --
++  // `is_debug = false`, so `DLOG` is compiled out -- is silence. A desktop
++  // whose keyboard does nothing said nothing about it anywhere.
++  //
++  // THERE IS ONE WINDOW ON A CONSOLE, so activating is telling views what is
++  // already true rather than choosing between candidates. When there is more
++  // than one, the one asked to activate is the one that should be active, and
++  // `SetActive` below is where any deactivation of the others would go.
++  SetActive(true);
+ }
+ 
+ void DrmWindowHost::Deactivate() {
+-  NOTIMPLEMENTED_LOG_ONCE();
++  SetActive(false);
++}
++
++void DrmWindowHost::SetActive(bool active) {
++  // GUARDED, BECAUSE THE DELEGATE ACTS ON THE CALL AND NOT ON THE CHANGE.
++  // `DesktopWindowTreeHostPlatform::OnActivationChanged` returns early when
++  // the state matches, but on the way there it reorders `open_windows()` and
++  // `DesktopNativeWidgetAura::HandleActivationChanged` restores focus -- so a
++  // repeated activation is work, and a repeated deactivation on a window that
++  // is being torn down is work on a half-destroyed host. `Show` and
++  // `Activate` both land here, and on a startup that calls both, one of them
++  // is a no-op.
++  if (active_ == active) {
++    return;
++  }
++  active_ = active;
++
++  VLOG(1) << "domicile: the window on this console is "
++          << (active ? "active" : "not active")
++          << "; a views browser gives no view focus until it hears this";
++
++  delegate_->OnActivationChanged(active);
+ }
+ 
+ void DrmWindowHost::SetUseNativeFrame(bool use_native_frame) {}
+@@ -352,6 +406,23 @@ bool DrmWindowHost::CanDispatchEvent(const PlatformEvent& event) {
+ uint32_t DrmWindowHost::DispatchEvent(const PlatformEvent& event) {
+   DCHECK(event);
+ 
++  // SAID ONCE PER KIND, AND THAT IS THE POINT. Whether a desktop that answers
++  // nothing is reading its devices at all is the first question about it, and
++  // the layers below this one are silent on success: a converter that opened,
++  // started and read logs nothing, and neither does a converter that opened,
++  // started and never read a byte. One line per kind of event separates "the
++  // descriptors are dead" from "the events arrive and something above drops
++  // them", which is two entirely different bugs and was two wrong diagnoses.
++  //
++  // Per kind rather than per event because a trackpad is thousands of events
++  // a second and a log nobody can read answers nothing either.
++  if (event->IsKeyEvent() && !std::exchange(said_a_key_arrived_, true)) {
++    VLOG(1) << "domicile: the first key event reached the window";
++  } else if (event->IsLocatedEvent() &&
++             !std::exchange(said_a_pointer_arrived_, true)) {
++    VLOG(1) << "domicile: the first pointer event reached the window";
++  }
++
+   if (event->IsLocatedEvent()) {
+     // Make the event location relative to this window's origin.
+     LocatedEvent* located_event = event->AsLocatedEvent();
+diff --git a/ui/ozone/platform/drm/host/drm_window_host.h b/ui/ozone/platform/drm/host/drm_window_host.h
+index 91634249..a0d9a09c 100644
+--- a/ui/ozone/platform/drm/host/drm_window_host.h
++++ b/ui/ozone/platform/drm/host/drm_window_host.h
+@@ -111,6 +111,11 @@ class DrmWindowHost : public PlatformWindow,
+   // on, which on this platform is the whole of a CRTC.
+   gfx::Rect FullscreenBounds(int64_t target_display_id) const;
+ 
++  // Tells views this window is (or is no longer) the active one, once per
++  // change. Ozone/DRM is the only platform with nothing to read this off, so
++  // it is the only one that has to decide it.
++  void SetActive(bool active);
++
+   const raw_ptr<PlatformWindowDelegate> delegate_;        // Not owned.
+   const raw_ptr<GpuThreadAdapter> sender_;                // Not owned.
+   const raw_ptr<EventFactoryEvdev> event_factory_;        // Not owned.
+@@ -127,6 +132,16 @@ class DrmWindowHost : public PlatformWindow,
+   // methods a views browser asks for during startup, because ash never asks
+   // them on ChromeOS. These are what two of the answers need.
+   bool visible_ = false;
++  // What this window last told views about its activation. Upstream tells it
++  // nothing ever, which leaves `DesktopWindowTreeHostPlatform::is_active_`
++  // false for the life of the process and every view in the widget unfocused
++  // -- a desktop that draws and answers no key.
++  bool active_ = false;
++  // Whether the first event of each kind has been named in the log. A desktop
++  // that answers nothing needs to say whether events reach it at all, and
++  // everything under this line is silent when it works.
++  bool said_a_key_arrived_ = false;
++  bool said_a_pointer_arrived_ = false;
+   std::optional<gfx::Rect> restored_bounds_;
+   // What this window last told views it is. Upstream answers kUnknown forever,
+   // which makes DesktopWindowTreeHostPlatform::IsFullscreen() permanently
+-- 
+2.56.0
+

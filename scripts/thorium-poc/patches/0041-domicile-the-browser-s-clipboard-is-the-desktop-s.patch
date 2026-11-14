@@ -1,0 +1,146 @@
+From a4fbfd0015b0ea511a54fb942a5d133f89b17aac Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:59:09 +0700
+Subject: [PATCH] domicile: connect DRM clipboard to desktop selections
+
+---
+ ui/ozone/platform/drm/BUILD.gn              |  3 +++
+ ui/ozone/platform/drm/DEPS                  |  7 ++++++
+ ui/ozone/platform/drm/ozone_platform_drm.cc | 28 +++++++++++++++++++++
+ ui/ozone/public/ozone_platform.h            | 21 ++++++++++++++++
+ 4 files changed, 59 insertions(+)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 1b75cca2..b415e3ac 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -132,6 +132,8 @@ source_set("gbm") {
+     "domicile/drm_master.h",
+     "domicile/drm_modeset.cc",
+     "domicile/drm_modeset.h",
++    "domicile/drm_clipboard.cc",
++    "domicile/drm_clipboard.h",
+     "domicile/drm_screen.cc",
+     "domicile/drm_screen.h",
+     "domicile/drm_sleep.cc",
+@@ -261,6 +263,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_input_devices_unittest.cc",
+     "domicile/drm_master_unittest.cc",
+     "domicile/drm_modeset_unittest.cc",
++    "domicile/drm_clipboard_unittest.cc",
+     "domicile/drm_screen_unittest.cc",
+     "domicile/drm_sleep_unittest.cc",
+     "domicile/drm_vt_switcher_unittest.cc",
+diff --git a/ui/ozone/platform/drm/DEPS b/ui/ozone/platform/drm/DEPS
+index 2652ce93..f85b3648 100644
+--- a/ui/ozone/platform/drm/DEPS
++++ b/ui/ozone/platform/drm/DEPS
+@@ -4,6 +4,13 @@ include_rules = [
+   "+services/service_manager",
+   "+services/viz/public/mojom",
+   "+ui/base/buildflags.h",  # Doesn't bring in all of ui/base.
++  # DOMICILE: the desktop's clipboards, which this platform now provides --
++  # `ui/base/clipboard/clipboard_buffer.h` is which of the two, and
++  # `clipboard_constants.h` is the spellings text is offered under. Two
++  # headers of names and an enum, like the buildflags line above, rather than
++  # all of //ui/base. See domicile/drm_clipboard.h.
++  "+ui/base/clipboard/clipboard_buffer.h",
++  "+ui/base/clipboard/clipboard_constants.h",
+   "+ui/base/ui_base_features.h",
+   "+ui/base/ui_base_switches.h",
+   "+ui/display/util",
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index b76b4380..8a091f1f 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -46,6 +46,7 @@
+ #include "ui/ozone/platform/drm/host/drm_display_host_manager.h"
+ #include "ui/ozone/platform/drm/host/drm_native_display_delegate.h"
+ #include "ui/ozone/platform/drm/host/drm_window_host.h"
++#include "ui/ozone/platform/drm/domicile/drm_clipboard.h"
+ #include "ui/ozone/platform/drm/domicile/drm_cursor_factory.h"
+ #include "ui/ozone/platform/drm/domicile/drm_logind_input.h"
+ #include "ui/ozone/platform/drm/domicile/drm_modeset.h"
+@@ -162,6 +163,27 @@ class OzonePlatformDrm : public OzonePlatform {
+     }
+   }
+ 
++  // DOMICILE: the desktop's clipboards, which without this the browser does
++  // not have -- `Clipboard::Create` falls back to `ClipboardNonBacked`, an
++  // in-process store nothing outside the browser can reach, so a copy made in
++  // a terminal and a copy made in a page landed in two different places. See
++  // ui/ozone/platform/drm/domicile/drm_clipboard.h.
++  //
++  // Answered whether or not a compositor has turned up: this is asked once,
++  // the first time anything in the process reads or writes a clipboard, and
++  // the browser is started BEFORE the compositor -- so a null here would be a
++  // browser with the fallback clipboard for the rest of its life.
++  PlatformClipboard* GetPlatformClipboard() override { return &clipboard_; }
++
++  void SetDomicileClipboard(ClipboardBuffer buffer,
++                            const std::string& text) override {
++    clipboard_.SetContents(buffer, text);
++  }
++
++  void SetDomicileCopiedCallback(DomicileCopied copied) override {
++    clipboard_.SetCopiedCallback(std::move(copied));
++  }
++
+   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
+     return drm_device_connector_.get();
+   }
+@@ -476,6 +498,12 @@ class OzonePlatformDrm : public OzonePlatform {
+   std::unique_ptr<DrmCursor> cursor_;
+   std::unique_ptr<EventFactoryEvdev> event_factory_ozone_;
+   std::unique_ptr<DrmDisplayHostManager> display_manager_;
++  // DOMICILE: the desktop's clipboards. A plain member rather than a
++  // `unique_ptr`, because it holds two strings and two callbacks and needs
++  // nothing started: it answers an empty clipboard from the moment the
++  // platform exists, which is what a browser whose compositor has not
++  // connected yet should say.
++  DrmClipboard clipboard_;
+   // Domicile's engine fork: drives NativeDisplayDelegate so that something
+   // actually modesets. Declared after display_manager_ so it is destroyed
+   // before the manager whose delegate it holds.
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index 4869265c..27da20f0 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -18,6 +18,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
+ #include "components/viz/common/resources/shared_image_format.h"
++#include "ui/base/clipboard/clipboard_buffer.h"
+ #include "ui/gfx/buffer_types.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/native_ui_types.h"
+@@ -345,6 +346,26 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // to lay out. See `DomicileDisplayLayout` above.
+   virtual void SetDomicileDisplayLayout(
+       const std::vector<DomicileDisplayLayout>& layout) {}
++  // DOMICILE: what the compositor says is on one of the desktop's clipboards.
++  //
++  // THE BROWSER IS TOLD RATHER THAN ASKED. The compositor reads every
++  // selection as it is made, so by the time a page pastes there is nothing
++  // left to fetch. Implemented by the DRM platform and nowhere else, for the
++  // same reason `SetDomicileDisplayLayout` above is: every other platform is a
++  // window inside somebody else's session, and the clipboard the browser reads
++  // there is that session's. See
++  // ui/ozone/platform/drm/domicile/drm_clipboard.h.
++  virtual void SetDomicileClipboard(ClipboardBuffer buffer,
++                                    const std::string& text) {}
++  // DOMICILE: where a copy made in this process goes, which is the compositor.
++  //
++  // A callback rather than a call, because the two ends are in different
++  // targets: the clipboard is //ui/ozone's and the compositor's connection is
++  // //content/browser's, and neither may depend on the other. Set once, by
++  // whoever holds that connection.
++  using DomicileCopied =
++      base::RepeatingCallback<void(ClipboardBuffer, const std::string&)>;
++  virtual void SetDomicileCopiedCallback(DomicileCopied copied) {}
+   virtual PlatformClipboard* GetPlatformClipboard();
+   virtual std::unique_ptr<InputMethod> CreateInputMethod(
+       ImeKeyEventDispatcher* ime_key_event_dispatcher,
+-- 
+2.56.0
+

@@ -1,0 +1,72 @@
+From 922e7129471109f94fc6f62bc03476507578813e Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:49:44 +0700
+Subject: [PATCH] domicile: restore display modes after system sleep
+
+---
+ ui/ozone/platform/drm/BUILD.gn              |  3 +++
+ ui/ozone/platform/drm/ozone_platform_drm.cc | 13 +++++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index bc0be3c3..1b75cca2 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -134,6 +134,8 @@ source_set("gbm") {
+     "domicile/drm_modeset.h",
+     "domicile/drm_screen.cc",
+     "domicile/drm_screen.h",
++    "domicile/drm_sleep.cc",
++    "domicile/drm_sleep.h",
+     "domicile/drm_vt_switcher.cc",
+     "domicile/drm_vt_switcher.h",
+     "domicile/edid_name.cc",
+@@ -260,6 +262,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_master_unittest.cc",
+     "domicile/drm_modeset_unittest.cc",
+     "domicile/drm_screen_unittest.cc",
++    "domicile/drm_sleep_unittest.cc",
+     "domicile/drm_vt_switcher_unittest.cc",
+     "domicile/edid_name_unittest.cc",
+   ]
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index 3ee57b40..74c908ae 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -50,6 +50,7 @@
+ #include "ui/ozone/platform/drm/domicile/drm_logind_input.h"
+ #include "ui/ozone/platform/drm/domicile/drm_modeset.h"
+ #include "ui/ozone/platform/drm/domicile/drm_screen.h"
++#include "ui/ozone/platform/drm/domicile/drm_sleep.h"
+ #include "ui/ozone/platform/drm/domicile/drm_vt_switcher.h"
+ #include "ui/ozone/platform/drm/host/drm_window_host_manager.h"
+ #include "ui/ozone/platform/drm/host/host_drm_device.h"
+@@ -128,6 +129,15 @@ class OzonePlatformDrm : public OzonePlatform {
+     // platform is.
+     vt_switcher_ = std::make_unique<DrmVtSwitcher>(
+         CreateNativeDisplayDelegate(), event_factory_ozone_.get());
++
++    // And the machine this console is on, which can go to sleep under it. A
++    // suspend takes nothing away from this session -- logind pauses no device
++    // and drops no master for one -- so unlike the console switch above there
++    // is nothing here to hand back. What it does take is the state inside the
++    // GPU, and the connectors say nothing about that: they report what they
++    // reported going down, which is what the driver's own hotplug guard reads
++    // as "no need to modeset". See `domicile/drm_sleep.h`.
++    sleep_ = std::make_unique<DrmSleep>(modeset_.get());
+   }
+ 
+   // DOMICILE: the compositor's answer about what the glass does, on its way to
+@@ -465,6 +475,9 @@ class OzonePlatformDrm : public OzonePlatform {
+   // Declared after event_factory_ozone_ so its event-source observer is
+   // destroyed before the event source.
+   std::unique_ptr<DrmVtSwitcher> vt_switcher_;
++  // And after modeset_, which it holds and asks to light the screens again
++  // when the machine wakes up.
++  std::unique_ptr<DrmSleep> sleep_;
+   PlatformRuntimeProperties host_properties_;
+ 
+   base::WeakPtrFactory<OzonePlatformDrm> weak_factory_{this};
+-- 
+2.56.0
+

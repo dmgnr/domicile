@@ -1,0 +1,44 @@
+From b17d690b4b37f4a608b6f29d2dfd7dd072d72ac5 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:52:29 +0700
+Subject: [PATCH] domicile: relight DRM screens after a VT switch
+
+---
+ ui/ozone/platform/drm/ozone_platform_drm.cc | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index 74c908ae..b76b4380 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -127,8 +127,16 @@ class OzonePlatformDrm : public OzonePlatform {
+     // key in the desktop is dispatched through, and it exists by now:
+     // `InitializeUI` builds it and a screen is not initialized before a
+     // platform is.
++    //
++    // AND `modeset_`, because the console this session comes back to is not
++    // the one it left: whoever had the panel in between programmed the card,
++    // and master says nothing about what it is programmed to. The take is
++    // answered and then the screens are lit again, which is the difference
++    // between a desktop that survives `Ctrl+Alt+F<n>` and one that locks up
++    // on the way back. See `domicile/drm_vt_switcher.h`.
+     vt_switcher_ = std::make_unique<DrmVtSwitcher>(
+-        CreateNativeDisplayDelegate(), event_factory_ozone_.get());
++        CreateNativeDisplayDelegate(), event_factory_ozone_.get(),
++        modeset_.get());
+ 
+     // And the machine this console is on, which can go to sleep under it. A
+     // suspend takes nothing away from this session -- logind pauses no device
+@@ -473,7 +481,8 @@ class OzonePlatformDrm : public OzonePlatform {
+   // before the manager whose delegate it holds.
+   std::unique_ptr<DrmModeset> modeset_;
+   // Declared after event_factory_ozone_ so its event-source observer is
+-  // destroyed before the event source.
++  // destroyed before the event source, and after modeset_ because it asks
++  // modeset_ to light the screens again when the console comes back.
+   std::unique_ptr<DrmVtSwitcher> vt_switcher_;
+   // And after modeset_, which it holds and asks to light the screens again
+   // when the machine wakes up.
+-- 
+2.56.0
+

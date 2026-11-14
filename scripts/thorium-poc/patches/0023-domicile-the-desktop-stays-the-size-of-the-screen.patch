@@ -1,0 +1,137 @@
+From 13b24acf3862e0a009c93139ab7c794e17682a81 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:39:48 +0700
+Subject: [PATCH] domicile: tell fullscreen watchdog when DRM displays windows
+
+---
+ .../ui/views/exclusive_access/BUILD.gn        |  6 +++++
+ .../exclusive_access_bubble_views.cc          | 26 ++++++++++++++++++-
+ ui/ozone/platform/drm/ozone_platform_drm.cc   | 14 ++++++++++
+ ui/ozone/public/ozone_platform.h              | 20 ++++++++++++++
+ 4 files changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/views/exclusive_access/BUILD.gn b/chrome/browser/ui/views/exclusive_access/BUILD.gn
+index 5b697465..97a35222 100644
+--- a/chrome/browser/ui/views/exclusive_access/BUILD.gn
++++ b/chrome/browser/ui/views/exclusive_access/BUILD.gn
+@@ -40,6 +40,12 @@ source_set("impl") {
+     "//ui/strings:ui_strings_grit",
+     "//ui/views",
+   ]
++
++  # The presentation watchdog asks the platform whether a window that is not
++  # the screen is ever presented, which only Ozone can answer.
++  if (use_ozone) {
++    deps += [ "//ui/ozone" ]
++  }
+ }
+ 
+ source_set("browser_tests") {
+diff --git a/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc b/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc
+index 3df24594..54981fe3 100644
+--- a/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc
++++ b/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc
+@@ -44,11 +44,35 @@
+ #include "ui/base/l10n/l10n_util_win.h"
+ #endif
+ 
++#if BUILDFLAG(IS_OZONE)
++#include "ui/ozone/public/ozone_platform.h"
++#endif
++
+ bool ExclusiveAccessBubbleViews::skip_presentation_delay_for_testing_ = false;
+ bool ExclusiveAccessBubbleViews::simulate_gpu_hang_for_testing_ = false;
+ 
+ namespace {
+ 
++// Whether a frame this bubble's own window submits can reach a display at all.
++//
++// The bubble is a top-level window of its own wherever views is:
++// SubtleNotificationView::CreatePopupWidget asks for
++// ui::ZOrderLevel::kSecuritySurface, and a security surface is answered with
++// kDesktopNativeWidgetAura unconditionally, so that a menu cannot cover the
++// one piece of UI standing between a page and a convincing fake desktop.
++//
++// On a platform that scans out one window per display that makes it a window
++// with nowhere to go. See PlatformRuntimeProperties::presents_every_window.
++bool PlatformPresentsEveryWindow() {
++#if BUILDFLAG(IS_OZONE)
++  return ui::OzonePlatform::GetInstance()
++      ->GetPlatformRuntimeProperties()
++      .presents_every_window;
++#else
++  return true;
++#endif
++}
++
+ // Returns whether `type` indicates a tab-initiated fullscreen mode.
+ bool IsTabFullscreenType(ExclusiveAccessBubbleType type) {
+   return type == EXCLUSIVE_ACCESS_BUBBLE_TYPE_FULLSCREEN_EXIT_INSTRUCTION ||
+@@ -470,7 +494,7 @@ void ExclusiveAccessBubbleViews::Show() {
+   // relying on visible exit instructions. Arming the watchdog would make it
+   // always fire and spuriously exit fullscreen (e.g. reverting the
+   // --start-fullscreen switch shortly after startup).
+-  if (!headless::IsHeadlessMode()) {
++  if (!headless::IsHeadlessMode() && PlatformPresentsEveryWindow()) {
+     presentation_watchdog_timer_.Start(
+         FROM_HERE, base::Milliseconds(1500),
+         base::BindOnce(&ExclusiveAccessBubbleViews::OnPresentationTimeout,
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index 58e72612..d2804eec 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -238,6 +238,20 @@ class OzonePlatformDrm : public OzonePlatform {
+ 
+     host_thread_ = base::PlatformThread::CurrentRef();
+ 
++    // ONE WINDOW PER CRTC REACHES THE SCREEN, AND THE REST ARE DROPPED.
++    // ScreenManager::FindWindowAt binds a window to a display controller only
++    // when the window's rectangle is EXACTLY the CRTC's, so a second top-level
++    // window -- a menu, a dialog, the fullscreen exit bubble -- takes
++    // DrmWindow::SchedulePageFlip's `if (!controller_)` branch and is answered
++    // gfx::PresentationFeedback::Failure() every frame for as long as it
++    // lives. Nothing is wrong when that happens; it is what this platform is.
++    //
++    // Set here rather than in InitializeGPU beside supports_native_pixmaps,
++    // because the process that has to know is the browser: out of
++    // single-process mode InitializeGPU never runs there, and a default that
++    // reached views would be the answer every windowed platform gives.
++    host_properties_.presents_every_window = false;
++
+     device_manager_ = CreateDeviceManager();
+     window_manager_ = std::make_unique<DrmWindowHostManager>();
+     cursor_ = std::make_unique<DrmCursor>(window_manager_.get());
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index 4537244c..d1ce2d90 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -211,6 +211,26 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+     // ui::kStatusIconWmRoleName) are supported.
+     bool supports_system_tray_windowing = false;
+ 
++    // Whether every window this platform takes a frame for can reach a
++    // display, or only some of them can.
++    //
++    // True wherever a window system is what puts pixels on a screen, which is
++    // why it is the default: the compositor hands a frame over and the server
++    // is answerable for it from there. False on ozone/drm, which IS the window
++    // system -- ScreenManager::FindWindowAt binds a window to a display
++    // controller only when the window's rectangle is EXACTLY
++    // gfx::Rect(controller->origin(), controller->GetModeSize()), so one
++    // window per CRTC is scanned out and every other one takes
++    // DrmWindow::SchedulePageFlip's `if (!controller_)` branch, which answers
++    // gfx::PresentationFeedback::Failure() for as long as the window lives.
++    //
++    // Ask before waiting on a window's presentation. A failed presentation
++    // keeps the successful-presentation callbacks pending rather than running
++    // them (cc/trees/presentation_time_callback_buffer.cc), so a timeout
++    // written to catch a wedged GPU is, on such a platform, a timer that
++    // always fires on a healthy one.
++    bool presents_every_window = true;
++
+     // Allows overriding whether per window scaling is enabled in tests.
+     static SupportsForTest override_supports_per_window_scaling_for_test;
+ 
+-- 
+2.56.0
+

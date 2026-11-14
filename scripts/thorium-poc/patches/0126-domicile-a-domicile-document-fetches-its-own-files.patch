@@ -1,0 +1,52 @@
+From d2aa7281ecb90c8da2cec9ebed363fd14efb1773 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 16:06:34 +0700
+Subject: [PATCH] domicile: allow shell pages to fetch local resources
+
+---
+ chrome/renderer/BUILD.gn                          | 1 +
+ chrome/renderer/chrome_content_renderer_client.cc | 9 +++++++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+index df80dfe8..3b8a4aac 100644
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -152,6 +152,7 @@ static_library("renderer") {
+     "//components/continuous_search/renderer",
+     "//components/country_codes",
+     "//components/dom_distiller/content/renderer",
++    "//components/domicile:common",
+     "//components/facilitated_payments/content/renderer",
+     "//components/facilitated_payments/core/features",
+     "//components/feed:feature_list",
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index d460c0fb..251b9f83 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/renderer/chrome_content_renderer_client.h"
+ 
++#include "components/domicile/common/domicile_scheme.h"
++
+ #include <functional>
+ #include <memory>
+ #include <optional>
+@@ -620,6 +622,13 @@ void ChromeContentRendererClient::RenderThreadStarted() {
+   WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
+       WebString::FromAscii(chrome::kChromeExperimentalSiteTokenProviderScheme));
+ 
++  // Domicile's engine fork. A domicile:// document fetch()es its own files,
++  // such as the splash's progress.json; without this Blink refuses the scheme
++  // before any loader sees the request. ShellURLLoaderFactory serves a file
++  // only to its own origin, so no other page can read one.
++  WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
++      WebString::FromAscii(domicile::kDomicileScheme));
++
+   // This doesn't work in single-process mode.
+   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kSingleProcess)) {
+-- 
+2.56.0
+

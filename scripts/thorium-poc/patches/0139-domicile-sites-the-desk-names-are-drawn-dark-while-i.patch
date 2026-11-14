@@ -1,0 +1,95 @@
+From 0d82535793b3e57d2c8d8b5e79f34597f4793188 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 17:21:15 +0700
+Subject: [PATCH] domicile: port site force-dark settings to Chromium 156
+
+---
+ chrome/browser/BUILD.gn                       |  1 +
+ .../chrome_browser_interface_binders.cc       |  7 +++++++
+ .../browser/chrome_content_browser_client.cc  | 19 +++++++++++++++++++
+ 3 files changed, 27 insertions(+)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index d82739dd..1826dc7e 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2416,6 +2416,7 @@ source_set("browser") {
+     "//components/domicile:color_scheme",
+     "//components/domicile:control_channel",
+     "//components/domicile:desktop_prefs",
++    "//components/domicile:force_dark",
+     "//components/domicile:keyboard_layout",
+     "//components/domicile:shell_origin",
+     "//components/domicile:shell_scheme",
+diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
+index 57904508..37effb48 100644
+--- a/chrome/browser/chrome_browser_interface_binders.cc
++++ b/chrome/browser/chrome_browser_interface_binders.cc
+@@ -15,6 +15,7 @@
+ #include "components/domicile/browser/app_roots.h"
+ #include "components/domicile/browser/color_scheme.h"
+ #include "components/domicile/browser/control_channel.h"
++#include "components/domicile/browser/force_dark.h"
+ #include "components/domicile/browser/keyboard_layout.h"
+ #include "components/domicile/browser/shell_origin.h"
+ #include "components/domicile/browser/web_view_guest.h"
+@@ -563,6 +564,12 @@ void PopulateChromeFrameBinders(
+                 base::BindPostTask(
+                     content::GetUIThreadTaskRunner({}),
+                     base::BindRepeating(&ui::SetDeskCursorTheme)),
++                // AND WHICH SITES ARE DRAWN DARK while the desk is. Bound here
++                // for the keymap's reason above: WebPreferences are computed
++                // on the UI thread.
++                base::BindPostTask(
++                    content::GetUIThreadTaskRunner({}),
++                    base::BindRepeating(&domicile::SetForceDarkSites)),
+                 // AND WHICH PAGE THIS IS, which is what a chord pressed in one
+                 // of its <webview>s is told to, and no other page.
+                 domicile::Page{frame->GetGlobalId().child_id.value(),
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 003efb74..9ad4c504 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/chrome_content_browser_client.h"
+ 
++#include "components/domicile/browser/force_dark.h"
+ #include "components/domicile/browser/shell_source.h"
+ #include "components/domicile/browser/shell_url_loader_factory.h"
+ #include "components/domicile/common/domicile_scheme.h"
+@@ -4975,6 +4976,13 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
+       GetPreferredColorScheme(
+           *web_prefs, main_frame_site.GetSecurityPrincipal(), web_contents);
+ 
++  // Domicile's engine fork: a site the desk's config names is drawn dark while
++  // the desk is. See components/domicile/browser/force_dark.h.
++  web_prefs->force_dark_mode_enabled |= domicile::ForcesDark(
++      web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
++      web_prefs->preferred_color_scheme ==
++          blink::mojom::PreferredColorScheme::kDark);
++
+   web_prefs->root_scrollbar_theme_color =
+       GetRootScrollbarThemeColor(web_contents);
+ 
+@@ -5117,6 +5125,17 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
+       web_prefs->preferred_root_scrollbar_color_scheme !=
+           old_preferred_root_scrollbar_color_scheme;
+ 
++  // Domicile's engine fork: the same as OverrideWebPreferences, for the page
++  // this navigation committed.
++  const bool force_dark =
++      profile->GetPrefs()->GetBoolean(prefs::kWebKitForceDarkModeEnabled) ||
++      domicile::ForcesDark(
++          web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
++          web_prefs->preferred_color_scheme ==
++              blink::mojom::PreferredColorScheme::kDark);
++  prefs_changed |= web_prefs->force_dark_mode_enabled != force_dark;
++  web_prefs->force_dark_mode_enabled = force_dark;
++
+ #if BUILDFLAG(IS_ANDROID)
+   if (auto* theme_client =
+           night_mode::WebContentsThemeClient::FromWebContents(web_contents)) {
+-- 
+2.56.0
+

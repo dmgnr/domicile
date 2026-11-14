@@ -1,0 +1,71 @@
+From 084328a0f86c3061e52d57e24a3a7fb6deaa4c7a Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:15:04 +0700
+Subject: [PATCH] domicile: fall back from out-of-memory display tiles
+
+---
+ cc/tiles/picture_layer_tiling.h         |  7 +++++++
+ cc/tiles/tiling_set_coverage_iterator.h | 15 ++++++++++++++-
+ 2 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/cc/tiles/picture_layer_tiling.h b/cc/tiles/picture_layer_tiling.h
+index 7e78f66e..d27e7cd2 100644
+--- a/cc/tiles/picture_layer_tiling.h
++++ b/cc/tiles/picture_layer_tiling.h
+@@ -21,6 +21,7 @@
+ #include "cc/base/region.h"
+ #include "cc/base/tiling_data.h"
+ #include "cc/cc_export.h"
++#include "cc/domicile/display_regions.h"
+ #include "cc/paint/paint_worklet_input.h"
+ #include "cc/paint/scroll_offset_map.h"
+ #include "cc/raster/raster_source.h"
+@@ -135,6 +136,12 @@ class CC_EXPORT PictureLayerTiling {
+     domicile_clip_in_layer_space_ = clip_in_layer_space;
+   }
+   float domicile_display_ratio() const { return domicile_display_ratio_; }
++  // DOMICILE: whether `tile`, ready, is drawn, or passed over for the next
++  // tiling to cover. A monitor's tile out of memory is passed over, so the
++  // page's tile is drawn there instead of a solid color.
++  bool DomicileDrawsTile(const Tile& tile) const {
++    return cc::DomicileDrawsTile(domicile_display_ratio_, tile.IsOOM());
++  }
+   void set_can_require_tiles_for_activation(bool can_require_tiles) {
+     can_require_tiles_for_activation_ = can_require_tiles;
+   }
+diff --git a/cc/tiles/tiling_set_coverage_iterator.h b/cc/tiles/tiling_set_coverage_iterator.h
+index 3ff2be1a..a0e95ca7 100644
+--- a/cc/tiles/tiling_set_coverage_iterator.h
++++ b/cc/tiles/tiling_set_coverage_iterator.h
+@@ -130,6 +130,19 @@ class TilingSetCoverageIterator {
+ 
+  private:
+   using TilingIterator = typename Container::const_iterator;
++
++  // DOMICILE: whether the current tiling draws `tile`, ready, or passes it
++  // over for the next tiling to cover. See cc/domicile/display_regions.h.
++  bool DomicileDrawsTile(const Tile* tile) const {
++    if constexpr (requires(const T& tiling, const Tile& t) {
++                    tiling.DomicileDrawsTile(t);
++                  }) {
++      return (***current_tiling_).DomicileDrawsTile(*tile);
++    } else {
++      return true;
++    }
++  }
++
+   static TilingIterator FindIdealTiling(const Container& tilings,
+                                         float ideal_contents_scale) {
+     if (tilings.empty()) {
+@@ -180,7 +193,7 @@ class TilingSetCoverageIterator {
+       absl::InlinedVector<SkIRect, 64> missing_batch;
+       for (; tiling_iter_.IsValid(); ++tiling_iter_) {
+         Tile* const tile = (**current_tiling_)->TileAt(tiling_iter_.index());
+-        if (tile && tile->IsReadyToDraw()) {
++        if (tile && tile->IsReadyToDraw() && DomicileDrawsTile(tile)) {
+           missing_region_.Union(missing_batch);
+           return;
+         }
+-- 
+2.56.0
+

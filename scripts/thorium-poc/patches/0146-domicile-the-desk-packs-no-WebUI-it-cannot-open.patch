@@ -1,0 +1,117 @@
+From 944d59c273d8262765e05f835ce8918518491fc0 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 17:29:01 +0700
+Subject: [PATCH] domicile: remove unreachable WebUI resources in Chromium 156
+
+---
+ .../browser/ui/webui/chrome_web_ui_configs.cc |  6 -----
+ chrome/chrome_paks.gni                        | 22 +------------------
+ 2 files changed, 1 insertion(+), 27 deletions(-)
+
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+index 139feceb..d5c266c9 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -330,7 +330,6 @@ void RegisterChromeWebUIConfigs() {
+   map.AddWebUIConfig(std::make_unique<WebRtcLogsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<RegionalCapabilitiesInternalsUIConfig>());
+ #if BUILDFLAG(ENABLE_WEBUI_NTP)
+-  map.AddWebUIConfig(std::make_unique<NewTabPageUIConfig>());
+   map.AddWebUIConfig(std::make_unique<CustomizeChromeUIConfig>());
+ #endif  // BUILDFLAG(ENABLE_WEBUI_NTP)
+ 
+@@ -384,7 +383,6 @@ void RegisterChromeWebUIConfigs() {
+           multistep_filter_internals::MultistepFilterInternalsUIConfig>());
+ #if BUILDFLAG(ENABLE_WEBUI_NTP)
+   map.AddWebUIConfig(std::make_unique<NewTabFooterUIConfig>());
+-  map.AddWebUIConfig(std::make_unique<NewTabPageThirdPartyUIConfig>());
+ #endif  // BUILDFLAG(ENABLE_WEBUI_NTP)
+   map.AddWebUIConfig(std::make_unique<NewTabUIConfig>());
+   map.AddWebUIConfig(std::make_unique<OmniboxEverywhereUIConfig>());
+@@ -393,11 +391,9 @@ void RegisterChromeWebUIConfigs() {
+   map.AddWebUIConfig(
+       std::make_unique<on_device_internals::OnDeviceInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<PageActionInternalsUIConfig>());
+-  map.AddWebUIConfig(std::make_unique<PasswordManagerUIConfig>());
+   map.AddWebUIConfig(std::make_unique<ProfileInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<ReadingListUIConfig>());
+   map.AddWebUIConfig(std::make_unique<SearchEngineChoiceUIConfig>());
+-  map.AddWebUIConfig(std::make_unique<settings::SettingsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<ShoppingInsightsSidePanelUIConfig>());
+   map.AddWebUIConfig(std::make_unique<SupportToolUIConfig>());
+   map.AddWebUIConfig(std::make_unique<SyncConfirmationUIConfig>());
+@@ -411,7 +407,6 @@ void RegisterChromeWebUIConfigs() {
+   map.AddWebUIConfig(std::make_unique<WebNNInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<IndigoInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<WebUIBrowserUIConfig>());
+-  map.AddWebUIConfig(std::make_unique<WebuiGalleryUIConfig>());
+   map.AddWebUIConfig(std::make_unique<WebUIJsErrorUIConfig>());
+   map.AddWebUIConfig(std::make_unique<WebUIToolbarConfig>());
+ #endif  // BUILDFLAG(IS_ANDROID)
+@@ -452,7 +447,6 @@ void RegisterChromeWebUIConfigs() {
+   map.AddWebUIConfig(std::make_unique<HistorySyncOptinUIConfig>());
+   map.AddWebUIConfig(std::make_unique<OnDeviceTranslationInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<WebAppSettingsUIConfig>());
+-  map.AddWebUIConfig(std::make_unique<WhatsNewUIConfig>());
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
+index 12a5e535..9fe5f322 100644
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -154,14 +154,7 @@ template("chrome_extra_paks") {
+     ]
+ 
+     if (enable_webui_ntp) {
+-      sources += [
+-        "$root_gen_dir/chrome/new_tab_page_instant_resources.pak",
+-        "$root_gen_dir/chrome/new_tab_page_resources.pak",
+-        "$root_gen_dir/chrome/new_tab_page_third_party_resources.pak",
+-        "$root_gen_dir/chrome/new_tab_page_untrusted_resources.pak",
+-        "$root_gen_dir/chrome/new_tab_shared_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_customize_chrome_resources.pak",
+-      ]
++      sources += [ "$root_gen_dir/chrome/new_tab_shared_resources.pak" ]
+     }
+ 
+     # side_panel/shared is not NTP-specific; see chrome/browser/resources.
+@@ -234,35 +227,22 @@ template("chrome_extra_paks") {
+         "$root_gen_dir/chrome/key_value_pair_viewer_shared_resources.pak",
+         "$root_gen_dir/chrome/lens_shared_resources.pak",
+         "$root_gen_dir/chrome/lens_untrusted_resources.pak",
+-        "$root_gen_dir/chrome/new_tab_footer_resources.pak",
+         "$root_gen_dir/chrome/omnibox_everywhere_resources.pak",
+         "$root_gen_dir/chrome/omnibox_popup_resources.pak",
+         "$root_gen_dir/chrome/organizer_panel_resources.pak",
+-        "$root_gen_dir/chrome/password_manager_resources.pak",
+         "$root_gen_dir/chrome/profile_internals_resources.pak",
+         "$root_gen_dir/chrome/search_engine_choice_resources.pak",
+-        "$root_gen_dir/chrome/settings_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_bookmarks_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_comments_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_commerce_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_history_clusters_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_history_resources.pak",
+         "$root_gen_dir/chrome/side_panel_read_anything_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_reading_list_resources.pak",
+-        "$root_gen_dir/chrome/side_panel_tabs_from_other_devices_resources.pak",
+         "$root_gen_dir/chrome/signin_resources.pak",
+         "$root_gen_dir/chrome/support_tool_resources.pak",
+         "$root_gen_dir/chrome/tab_group_home_resources.pak",
+         "$root_gen_dir/chrome/tab_group_shared_resources.pak",
+-        "$root_gen_dir/chrome/tab_search_resources.pak",
+         "$root_gen_dir/chrome/tab_strip_api_resources.pak",
+         "$root_gen_dir/chrome/web_app_internals_resources.pak",
+         "$root_gen_dir/chrome/webnn_internals_resources.pak",
+         "$root_gen_dir/chrome/webui_browser_resources.pak",
+-        "$root_gen_dir/chrome/webui_gallery_resources.pak",
+         "$root_gen_dir/chrome/webui_toolbar_resources.pak",
+         "$root_gen_dir/chrome/webui_toolbar_shared_resources.pak",
+-        "$root_gen_dir/chrome/whats_new_resources.pak",
+         "$root_gen_dir/components/headless/command_handler/headless_command_resources.pak",
+         "$root_gen_dir/content/browser/tracing/tracing_resources.pak",
+         "$root_gen_dir/content/traces_internals_resources.pak",
+-- 
+2.56.0
+

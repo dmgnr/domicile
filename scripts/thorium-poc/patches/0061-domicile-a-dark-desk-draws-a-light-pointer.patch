@@ -1,0 +1,184 @@
+From ff9654d0c66eb038f475418d3ec529c66f398ceb Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 14:24:18 +0700
+Subject: [PATCH] domicile: draw contrasting cursors on dark desktops
+
+---
+ ui/views/BUILD.gn                              |  1 +
+ .../desktop_native_cursor_manager.cc           | 18 ++++++++++++++++++
+ .../desktop_native_cursor_manager.h            | 16 ++++++++++++++++
+ ui/wm/core/cursor_loader.cc                    | 17 +++++++++++++++--
+ ui/wm/core/cursor_loader.h                     |  8 ++++++++
+ 5 files changed, 58 insertions(+), 2 deletions(-)
+
+diff --git a/ui/views/BUILD.gn b/ui/views/BUILD.gn
+index 968bd702..1db61724 100644
+--- a/ui/views/BUILD.gn
++++ b/ui/views/BUILD.gn
+@@ -942,6 +942,7 @@ component("views") {
+         "widget/desktop_aura/desktop_screen_position_client.cc",
+         "widget/desktop_aura/desktop_window_tree_host.cc",
+       ]
++      deps += [ "//ui/views/widget/desktop_aura/domicile:cursor_color_scheme" ]
+       if (is_win) {
+         public += [ "widget/desktop_aura/desktop_window_tree_host_win.h" ]
+         sources += [
+diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
+index 9e25f070..f1880f9e 100644
+--- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
++++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
+@@ -4,18 +4,25 @@
+ 
+ #include "ui/views/widget/desktop_aura/desktop_native_cursor_manager.h"
+ 
++#include "base/functional/bind.h"
+ #include "base/notimplemented.h"
+ #include "base/trace_event/trace_event.h"
+ #include "ui/aura/client/cursor_shape_client.h"
+ #include "ui/aura/window_event_dispatcher.h"
+ #include "ui/aura/window_tree_host.h"
+ #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
++#include "ui/native_theme/native_theme.h"
++#include "ui/views/widget/desktop_aura/domicile/cursor_color_scheme.h"
+ #include "ui/wm/core/cursor_loader.h"
+ 
+ namespace views {
+ 
+ DesktopNativeCursorManager::DesktopNativeCursorManager() {
+   aura::client::SetCursorShapeClient(&cursor_loader_);
++  cursor_color_scheme_ = std::make_unique<CursorColorScheme>(
++      ui::NativeTheme::GetInstanceForNativeUi(),
++      base::BindRepeating(&DesktopNativeCursorManager::SetCursorColors,
++                          base::Unretained(this)));
+ }
+ 
+ DesktopNativeCursorManager::~DesktopNativeCursorManager() {
+@@ -41,6 +48,7 @@ void DesktopNativeCursorManager::SetDisplay(
+ void DesktopNativeCursorManager::SetCursor(
+     gfx::NativeCursor cursor,
+     wm::NativeCursorManagerDelegate* delegate) {
++  delegate_ = delegate;
+   gfx::NativeCursor new_cursor = cursor;
+   cursor_loader_.SetPlatformCursor(&new_cursor);
+   delegate->CommitCursor(new_cursor);
+@@ -113,4 +121,14 @@ void DesktopNativeCursorManager::SetCursorColor(
+   NOTIMPLEMENTED();
+ }
+ 
++void DesktopNativeCursorManager::SetCursorColors(const CursorColors& colors) {
++  cursor_loader_.SetColor(colors.fill);
++  cursor_loader_.SetOutlineColor(colors.outline);
++  // The first colors arrive from the constructor, before any cursor has been
++  // set and so before there is anything on screen to redraw.
++  if (delegate_) {
++    SetCursor(delegate_->GetCursor(), delegate_);
++  }
++}
++
+ }  // namespace views
+diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
+index 070dff35..11c04251 100644
+--- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
++++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
+@@ -23,6 +23,9 @@ class NativeCursorManagerDelegate;
+ 
+ namespace views {
+ 
++class CursorColorScheme;
++struct CursorColors;
++
+ // A NativeCursorManager that performs the desktop-specific setting of cursor
+ // state. Similar to NativeCursorManagerAsh, it also communicates these changes
+ // to all root windows.
+@@ -70,7 +73,20 @@ class VIEWS_EXPORT DesktopNativeCursorManager : public wm::NativeCursorManager {
+   using Hosts = std::set<raw_ptr<aura::WindowTreeHost, SetExperimental>>;
+   Hosts hosts_;
+ 
++  // Domicile: recolors `cursor_loader_`'s art, and the cursor on screen with
++  // it. See `domicile/cursor_color_scheme.h`.
++  void SetCursorColors(const CursorColors& colors);
++
+   wm::CursorLoader cursor_loader_;
++
++  // The delegate the last cursor was set through, which is what a recolor
++  // sets it through again: `wm::CursorManager` asks again only when the type
++  // changes. It owns this manager, so it outlives it.
++  raw_ptr<wm::NativeCursorManagerDelegate> delegate_ = nullptr;
++
++  // After `cursor_loader_` and `delegate_`, because it colors the one and
++  // reads the other before its constructor returns.
++  std::unique_ptr<CursorColorScheme> cursor_color_scheme_;
+ };
+ 
+ }  // namespace views
+diff --git a/ui/wm/core/cursor_loader.cc b/ui/wm/core/cursor_loader.cc
+index 13967a22..c81003c7 100644
+--- a/ui/wm/core/cursor_loader.cc
++++ b/ui/wm/core/cursor_loader.cc
+@@ -100,6 +100,19 @@ void CursorLoader::SetColor(SkColor color) {
+   UnloadCursors();
+ }
+ 
++void CursorLoader::SetOutlineColor(std::optional<SkColor> outline_color) {
++  if (outline_color_ == outline_color) {
++    return;
++  }
++
++  outline_color_ = outline_color;
++
++  // The lottie cache holds animations built with the old color map, as it
++  // does for `SetColor`.
++  wm::ClearCursorAnimationCache();
++  UnloadCursors();
++}
++
+ void CursorLoader::SetPlatformCursor(ui::Cursor* cursor) {
+   DCHECK(cursor);
+ 
+@@ -147,7 +160,7 @@ std::optional<ui::CursorData> CursorLoader::GetCursorData(
+                            size_ == ui::CursorSize::kLarge
+                                ? std::make_optional(large_cursor_size_in_px)
+                                : std::nullopt,
+-                           display::Display::ROTATE_0, color_);
++                           display::Display::ROTATE_0, color_, outline_color_);
+ }
+ 
+ void CursorLoader::UnloadCursors() {
+@@ -219,7 +232,7 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::LoadCursorFromAsset(
+       size_ == ui::CursorSize::kLarge ? std::make_optional(ConvertDipToPixel(
+                                             large_cursor_size_in_dip_, scale_))
+                                       : std::nullopt,
+-      rotation_, color_);
++      rotation_, color_, outline_color_);
+   if (!cursor_data) {
+     return nullptr;
+   }
+diff --git a/ui/wm/core/cursor_loader.h b/ui/wm/core/cursor_loader.h
+index 4ab9f718..135be711 100644
+--- a/ui/wm/core/cursor_loader.h
++++ b/ui/wm/core/cursor_loader.h
+@@ -59,6 +59,11 @@ class COMPONENT_EXPORT(UI_WM) CursorLoader
+   // Sets the color of the cursor.
+   void SetColor(SkColor color);
+ 
++  // Domicile: sets the color of the cursor's outline, or leaves the art's own
++  // when `outline_color` is nullopt. `wm::GetCursorData` has always taken one;
++  // nothing here passed it on. Only cursors loaded from assets are affected.
++  void SetOutlineColor(std::optional<SkColor> outline_color);
++
+   // Sets the platform cursor based on the type of |cursor|.
+   void SetPlatformCursor(ui::Cursor* cursor);
+ 
+@@ -101,6 +106,9 @@ class COMPONENT_EXPORT(UI_WM) CursorLoader
+ 
+   // The current color set to the mouse cursor icon.
+   SkColor color_ = ui::kDefaultCursorColor;
++
++  // The current outline color, or nullopt for the art's own.
++  std::optional<SkColor> outline_color_;
+ };
+ 
+ }  // namespace wm
+-- 
+2.56.0
+

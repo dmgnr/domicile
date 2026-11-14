@@ -1,0 +1,51 @@
+From 296d5a52badda6727924f61f672f04d9c10c018e Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:01:12 +0700
+Subject: [PATCH] domicile: block Chrome internal pages in webviews
+
+---
+ chrome/browser/BUILD.gn                                   | 1 +
+ .../chrome_content_browser_client_navigation_throttles.cc | 8 ++++++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index ca66f8f8..d7b3f6e2 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1138,6 +1138,7 @@ source_set("core") {
+     "//components/device_event_log",
+     "//components/dom_distiller/content/browser",
+     "//components/dom_distiller/content/common/mojom",
++    "//components/domicile:browser_page_throttle",
+     "//components/embedder_support",
+     "//components/embedder_support:content_settings",
+     "//components/embedder_support:user_agent",
+diff --git a/chrome/browser/chrome_content_browser_client_navigation_throttles.cc b/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
+index dfa341dc..5b31cdde 100644
+--- a/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
++++ b/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
+@@ -55,6 +55,7 @@
+ #include "components/dom_distiller/content/browser/distiller_referrer_throttle.h"
+ #include "components/dom_distiller/core/url_constants.h"
+ #include "components/dom_distiller/core/url_utils.h"
++#include "components/domicile/browser/browser_page_throttle.h"
+ #include "components/error_page/content/browser/net_error_auto_reloader.h"
+ #include "components/guest_view/buildflags/buildflags.h"
+ #include "components/history/content/browser/visited_link_navigation_throttle.h"
+@@ -309,6 +310,13 @@ void CreateAndAddChromeThrottlesForNavigation(
+ #endif  // BUILDFLAG(IS_ANDROID)
+   }
+ 
++  // Domicile's engine fork. No <webview> is given a page Chrome serves itself:
++  // they are Chrome's UI for Chrome's window, a desk has none, and HistoryUI
++  // took the browser down looking up a tab its guest was not in. After the
++  // main frame's MetricsNavigationThrottle, which has to run before anything
++  // that may cancel.
++  domicile::BrowserPageThrottle::MaybeCreateAndAdd(registry);
++
+   DSEPrewarmNavigationThrottle::MaybeCreateAndAdd(registry);
+   if (!features::IsDsePreload2Enabled()) {
+     SearchPrefetchNavigationThrottle::MaybeCreateAndAdd(registry);
+-- 
+2.56.0
+

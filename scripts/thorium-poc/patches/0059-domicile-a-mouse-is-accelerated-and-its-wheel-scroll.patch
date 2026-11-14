@@ -1,0 +1,201 @@
+From 31019265f42f3758f1a11793af88985b09d3fb20 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 14:18:34 +0700
+Subject: [PATCH] domicile: port accelerated mouse and wheel handling to
+ Chromium 156
+
+---
+ ui/events/ozone/evdev/BUILD.gn                |  2 +
+ ui/events/ozone/evdev/event_device_info.cc    |  7 +++
+ .../ozone/evdev/libinput_event_converter.cc   | 46 ++++++++++++++++++-
+ .../ozone/evdev/libinput_event_converter.h    |  2 +
+ ui/events/ozone/features.cc                   |  3 ++
+ ui/events/ozone/features.h                    |  2 +
+ ui/ozone/platform/drm/BUILD.gn                |  1 +
+ 7 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
+index 473ab91e..7391c5c1 100644
+--- a/ui/events/ozone/evdev/BUILD.gn
++++ b/ui/events/ozone/evdev/BUILD.gn
+@@ -51,6 +51,8 @@ component("evdev") {
+     "device_event_dispatcher_evdev.h",
+     "domicile/scroll_accelerator.cc",
+     "domicile/scroll_accelerator.h",
++    "domicile/wheel_ticks.cc",
++    "domicile/wheel_ticks.h",
+     "event_converter_evdev.cc",
+     "event_converter_evdev.h",
+     "event_converter_evdev_impl.cc",
+diff --git a/ui/events/ozone/evdev/event_device_info.cc b/ui/events/ozone/evdev/event_device_info.cc
+index 113037f7..c7ba170c 100644
+--- a/ui/events/ozone/evdev/event_device_info.cc
++++ b/ui/events/ozone/evdev/event_device_info.cc
+@@ -802,6 +802,13 @@ bool EventDeviceInfo::UseLibinput() const {
+     }
+   }
+ 
++  // A mouse left to `EventConverterEvdevImpl` is raw: one count to one pixel,
++  // no acceleration, and no `REL_WHEEL` case at all. A node that is also a
++  // keyboard stays there, because libinput's converter reads no keys.
++  if (HasMouse() && !HasKeyboard()) {
++    useLibinput = base::FeatureList::IsEnabled(ui::kLibinputHandleMouse);
++  }
++
+   return useLibinput;
+ }
+ 
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.cc b/ui/events/ozone/evdev/libinput_event_converter.cc
+index 0e6712ce..4eda7fdc 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.cc
++++ b/ui/events/ozone/evdev/libinput_event_converter.cc
+@@ -19,6 +19,7 @@
+ #include "ui/events/ozone/evdev/cursor_delegate_evdev.h"
+ #include "ui/events/ozone/evdev/device_event_dispatcher_evdev.h"
+ #include "ui/events/ozone/evdev/domicile/scroll_accelerator.h"
++#include "ui/events/ozone/evdev/domicile/wheel_ticks.h"
+ #include "ui/events/ozone/evdev/event_device_info.h"
+ #include "ui/events/ozone/evdev/input_device_settings_evdev.h"
+ 
+@@ -41,6 +42,15 @@ double GetAxisValue(libinput_event_pointer* const event,
+   return -libinput_event_pointer_get_axis_value(event, axis);
+ }
+ 
++// A wheel's whole clicks on `axis`, in libinput's sign.
++double GetAxisValueDiscrete(libinput_event_pointer* const event,
++                            const libinput_pointer_axis axis) {
++  if (!libinput_event_pointer_has_axis(event, axis)) {
++    return 0.0;
++  }
++  return libinput_event_pointer_get_axis_value_discrete(event, axis);
++}
++
+ // Log the result of setting a device configuration value.
+ template <typename Value>
+ void LogConfigStatus(const libinput_config_status status,
+@@ -124,6 +134,13 @@ void LibInputEventConverter::LibInputDevice::ApplySettings(
+   SetTapToClickEnabled(touchpad_settings.tap_to_click_enabled);
+ }
+ 
++void LibInputEventConverter::LibInputDevice::ApplyMouseSettings(
++    const InputDeviceSettingsEvdev& settings) const {
++  const auto& mouse_settings = settings.GetMouseSettings(device_id_);
++  SetNaturalScrollEnabled(mouse_settings.reverse_scroll_enabled);
++  SetSensitivity(mouse_settings.sensitivity);
++}
++
+ // Get a comma-separated string of the device's capabilities
+ std::string LibInputEventConverter::LibInputDevice::GetCapabilitiesString() {
+   // All capabilities exposed by libinput
+@@ -349,7 +366,12 @@ LibInputEventConverter::~LibInputEventConverter() {}
+ 
+ void LibInputEventConverter::ApplyDeviceSettings(
+     const InputDeviceSettingsEvdev& settings) {
+-  if (device_) {
++  if (device_ && has_mouse_) {
++    // A mouse has a mouse's settings. The touchpad's would ask it for
++    // tap-to-click, which libinput refuses and this logs as an error on
++    // every settings change.
++    device_->ApplyMouseSettings(settings);
++  } else if (device_) {
+     device_->ApplySettings(settings);
+   } else {
+     LOG(ERROR)
+@@ -444,6 +466,16 @@ void LibInputEventConverter::HandlePointerButton(const LibInputEvent& evt) {
+ 
+ void LibInputEventConverter::HandlePointerAxis(const LibInputEvent& evt) {
+   libinput_event_pointer* event = evt.PointerEvent();
++  // A wheel is a wheel, not a touchpad's scroll: whole notches as a
++  // `MouseWheelEvent`, the way every other platform delivers one. Dispatched
++  // as a scroll it would move a page by libinput's degrees -- 15 pixels a
++  // click -- and fling like a pad.
++  if (libinput_event_pointer_get_axis_source(event) ==
++      LIBINPUT_POINTER_AXIS_SOURCE_WHEEL) {
++    HandleWheel(evt);
++    return;
++  }
++
+   const auto h = GetAxisValue(event, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL);
+   const auto v = GetAxisValue(event, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
+   // Two fingers on the pad go through the accelerator, which also carries
+@@ -464,6 +496,18 @@ void LibInputEventConverter::HandlePointerAxis(const LibInputEvent& evt) {
+                                     Timestamp(evt)});
+ }
+ 
++void LibInputEventConverter::HandleWheel(const LibInputEvent& evt) {
++  libinput_event_pointer* event = evt.PointerEvent();
++  const gfx::Vector2d ticks = WheelTicks(
++      GetAxisValueDiscrete(event, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL),
++      GetAxisValueDiscrete(event, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL));
++
++  DVLOG(3) << "Wheel: " << ticks.ToString();
++
++  dispatcher_->DispatchMouseWheelEvent(
++      {input_device_.id, cursor_->GetLocation(), ticks, ticks, Timestamp(evt)});
++}
++
+ base::TimeTicks LibInputEventConverter::Timestamp(const LibInputEvent& evt) {
+   libinput_event_pointer* event = evt.PointerEvent();
+   uint64_t time_usec = libinput_event_pointer_get_time_usec(event);
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.h b/ui/events/ozone/evdev/libinput_event_converter.h
+index 54ffd05d..31227712 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.h
++++ b/ui/events/ozone/evdev/libinput_event_converter.h
+@@ -62,6 +62,7 @@ class LibInputEventConverter : public EventConverterEvdev {
+     ~LibInputDevice();
+ 
+     void ApplySettings(const InputDeviceSettingsEvdev& settings) const;
++    void ApplyMouseSettings(const InputDeviceSettingsEvdev& settings) const;
+ 
+    private:
+     std::string GetCapabilitiesString();
+@@ -157,6 +158,7 @@ class LibInputEventConverter : public EventConverterEvdev {
+   void HandlePointerMotion(const LibInputEvent& evt);
+   void HandlePointerButton(const LibInputEvent& evt);
+   void HandlePointerAxis(const LibInputEvent& evt);
++  void HandleWheel(const LibInputEvent& evt);
+   base::TimeTicks Timestamp(const LibInputEvent& evt);
+ 
+   const raw_ptr<DeviceEventDispatcherEvdev> dispatcher_;
+diff --git a/ui/events/ozone/features.cc b/ui/events/ozone/features.cc
+index 8bc0e968..5fb6b267 100644
+--- a/ui/events/ozone/features.cc
++++ b/ui/events/ozone/features.cc
+@@ -18,6 +18,9 @@ BASE_FEATURE(kEnableNeuralPalmDetectionFilter,
+ // Controls whether libinput is used to handle touchpad.
+ BASE_FEATURE(kLibinputHandleTouchpad, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
++// Controls whether libinput is used to handle a mouse.
++BASE_FEATURE(kLibinputHandleMouse, base::FEATURE_DISABLED_BY_DEFAULT);
++
+ BASE_FEATURE(kEnableFakeKeyboardHeuristic, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kEnableFakeMouseHeuristic, base::FEATURE_ENABLED_BY_DEFAULT);
+diff --git a/ui/events/ozone/features.h b/ui/events/ozone/features.h
+index 8d6865c1..f1567721 100644
+--- a/ui/events/ozone/features.h
++++ b/ui/events/ozone/features.h
+@@ -39,6 +39,8 @@ COMPONENT_EXPORT(EVENTS_OZONE) BASE_DECLARE_FEATURE(kEnableInputEventLogging);
+ 
+ COMPONENT_EXPORT(EVENTS_OZONE) BASE_DECLARE_FEATURE(kLibinputHandleTouchpad);
+ 
++COMPONENT_EXPORT(EVENTS_OZONE) BASE_DECLARE_FEATURE(kLibinputHandleMouse);
++
+ COMPONENT_EXPORT(EVENTS_OZONE)
+ BASE_DECLARE_FEATURE(kEnableFakeKeyboardHeuristic);
+ 
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 1bff144b..2c24c9c2 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -277,6 +277,7 @@ source_set("gbm_unittests") {
+     # linked only into `events_unittests`, which no job here builds, and the
+     # console is the one platform whose touchpad goes through libinput.
+     "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
++    "//ui/events/ozone/evdev/domicile/wheel_ticks_unittest.cc",
+   ]
+ 
+   # `ui/display/manager/test/fake_display_snapshot.h` is the one thing this
+-- 
+2.56.0
+

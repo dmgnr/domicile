@@ -1,0 +1,723 @@
+From 61f135ba66ba6cd3cd2029076b049eef5022e6f1 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 14:52:18 +0700
+Subject: [PATCH] domicile: raster pages at each display density
+
+---
+ cc/BUILD.gn                                   |  3 +
+ cc/layers/picture_layer_impl.cc               | 94 +++++++++++++++++++
+ cc/layers/picture_layer_impl.h                |  8 ++
+ cc/layers/tile_based_layer_impl.h             | 69 +++++++++-----
+ cc/tiles/picture_layer_tiling.cc              | 18 +++-
+ cc/tiles/picture_layer_tiling.h               | 14 +++
+ cc/tiles/tiling_set_raster_queue_all.cc       | 44 ++++++++-
+ cc/tiles/tiling_set_raster_queue_all.h        | 10 +-
+ cc/trees/commit_state.h                       |  3 +
+ cc/trees/layer_tree_host.cc                   |  8 ++
+ cc/trees/layer_tree_host.h                    |  5 +
+ cc/trees/layer_tree_impl.cc                   | 11 +++
+ cc/trees/layer_tree_impl.h                    |  8 ++
+ .../renderer/platform/widget/widget_base.cc   | 18 ++++
+ .../renderer/platform/widget/widget_base.h    |  5 +
+ 15 files changed, 283 insertions(+), 35 deletions(-)
+
+diff --git a/cc/BUILD.gn b/cc/BUILD.gn
+index 7ef7576a..30c269de 100644
+--- a/cc/BUILD.gn
++++ b/cc/BUILD.gn
+@@ -510,6 +510,9 @@ cc_component("cc") {
+   public_deps = [
+     ":layer_selection_bound",
+     "//cc/base",
++
++    # DOMICILE: a page drawn at each monitor's own density.
++    "//cc/domicile:display_regions",
+     "//cc/mojom:mojom_browser_controls",
+     "//cc/mojom:mojom_layer_trees",
+     "//cc/paint",
+diff --git a/cc/layers/picture_layer_impl.cc b/cc/layers/picture_layer_impl.cc
+index 0d868a4c..a4466e4f 100644
+--- a/cc/layers/picture_layer_impl.cc
++++ b/cc/layers/picture_layer_impl.cc
+@@ -24,6 +24,7 @@
+ #include "cc/base/math_util.h"
+ #include "cc/benchmarks/micro_benchmark_impl.h"
+ #include "cc/debug/debug_colors.h"
++#include "cc/domicile/display_regions.h"
+ #include "cc/layers/append_quads_context.h"
+ #include "cc/layers/append_quads_data.h"
+ #include "cc/paint/display_item_list.h"
+@@ -389,6 +390,7 @@ bool PictureLayerImpl::UpdateTiles() {
+   if (should_adjust_raster_scale)
+     RecalculateRasterScales();
+   UpdateTilingsForRasterScaleAndTranslation(should_adjust_raster_scale);
++  UpdateDomicileDisplayTilings();
+   raster_source_size_changed_ = false;
+ 
+   DCHECK(raster_page_scale_);
+@@ -1510,6 +1512,11 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
+   bool needs_push = false;
+   for (size_t i = 0; i < tilings_->num_tilings(); ++i) {
+     PictureLayerTiling* tiling = tilings_->tiling_at(i);
++    // DOMICILE: a monitor's tiling is kept for as long as the monitor shows
++    // the layer, which UpdateDomicileDisplayTilings decides.
++    if (tiling->domicile_display_ratio() != 0.f) {
++      continue;
++    }
+     // Keep all tilings within the min/max scales.
+     if (tiling->contents_scale_key() >= min_acceptable_high_res_scale &&
+         tiling->contents_scale_key() <= max_acceptable_high_res_scale) {
+@@ -1545,6 +1552,93 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
+   }
+ }
+ 
++bool PictureLayerImpl::DomicileDrawsPerDisplay() const {
++  // Only what is drawn straight into the page, unmoving: a surface of its own
++  // is drawn into the page by a transform this cannot see past, and a moving
++  // layer would make and drop tilings every frame.
++  return !layer_tree_impl()->domicile_display_regions().empty() &&
++         layer_tree_impl()->IsActiveTree() &&
++         render_target() == layer_tree_impl()->RootRenderSurface() &&
++         draw_properties().target_space_transform.IsScaleOrTranslation() &&
++         !screen_space_transform_is_animating() && !IsDirectlyCompositedImage();
++}
++
++void PictureLayerImpl::UpdateDomicileDisplayTilings() {
++  const DomicileDisplayRegions& regions =
++      layer_tree_impl()->domicile_display_regions();
++  const PictureLayerTiling* high_res =
++      tilings_->FindTilingWithResolution(HIGH_RESOLUTION);
++  std::vector<float> ratios;
++  if (high_res != nullptr && DomicileDrawsPerDisplay()) {
++    ratios = DomicileRatiosMeeting(
++        regions,
++        MathUtil::MapEnclosingClippedRect(
++            draw_properties().target_space_transform, visible_layer_rect()));
++  }
++  const auto scale_key_at = [&](float ratio) {
++    return high_res->contents_scale_key() * ratio;
++  };
++
++  // A monitor's tiling no longer wanted, or at a raster scale since replaced,
++  // is an ordinary non-ideal tiling again: drawn from until the new one is
++  // ready, then cleaned up.
++  for (size_t i = 0; i < tilings_->num_tilings(); ++i) {
++    PictureLayerTiling* tiling = tilings_->tiling_at(i);
++    const float ratio = tiling->domicile_display_ratio();
++    if (ratio != 0.f && (!std::ranges::contains(ratios, ratio) ||
++                         tiling->contents_scale_key() != scale_key_at(ratio))) {
++      tiling->SetDomicileDisplay(0.f, std::nullopt);
++    }
++  }
++
++  for (const float ratio : ratios) {
++    const gfx::AxisTransform2d raster =
++        gfx::AxisTransform2d::FromScaleAndTranslation(
++            gfx::ScaleVector2d(high_res->raster_transform().scale(), ratio),
++            gfx::ScaleVector2d(high_res->raster_transform().translation(),
++                               ratio));
++    if (raster.scale().x() < MinimumContentsScale() ||
++        raster.scale().y() < MinimumContentsScale()) {
++      continue;
++    }
++    PictureLayerTiling* tiling =
++        tilings_->FindTilingWithScaleKey(scale_key_at(ratio));
++    if (tiling == nullptr) {
++      tiling = AddTiling(raster);
++      tiling->set_resolution(NON_IDEAL_RESOLUTION);
++    }
++    tiling->SetDomicileDisplay(
++        ratio, DomicileRegionInLayer(regions, ratio,
++                                     draw_properties().target_space_transform));
++  }
++}
++
++std::vector<std::pair<gfx::Rect, float>>
++PictureLayerImpl::DomicileCoverageByDisplay(
++    const gfx::Rect& visible,
++    const gfx::Transform& to_target) const {
++  const float ideal = GetIdealContentsScaleKey();
++  if (!DomicileDrawsPerDisplay()) {
++    return {{visible, ideal}};
++  }
++  std::vector<std::pair<gfx::Rect, float>> pieces;
++  for (const DomicileCoveragePiece& piece : DomicileCoverage(
++           layer_tree_impl()->domicile_display_regions(), to_target, visible)) {
++    // From the monitor's own tiling, if it has one yet; the ideal is what
++    // the coverage falls back from when a tile of it is not ready.
++    float scale_key = ideal;
++    for (size_t i = 0; i < tilings_->num_tilings(); ++i) {
++      const PictureLayerTiling* tiling = tilings_->tiling_at(i);
++      if (piece.ratio != 1.f &&
++          tiling->domicile_display_ratio() == piece.ratio) {
++        scale_key = tiling->contents_scale_key();
++      }
++    }
++    pieces.emplace_back(piece.rect, scale_key);
++  }
++  return pieces;
++}
++
+ float PictureLayerImpl::MinimumRasterContentsScaleForWillChangeTransform()
+     const {
+   DCHECK(AffectedByWillChangeTransformHint());
+diff --git a/cc/layers/picture_layer_impl.h b/cc/layers/picture_layer_impl.h
+index c25d6479..ac2a487d 100644
+--- a/cc/layers/picture_layer_impl.h
++++ b/cc/layers/picture_layer_impl.h
+@@ -12,6 +12,7 @@
+ #include <memory>
+ #include <set>
+ #include <string>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/containers/flat_set.h"
+@@ -238,6 +239,10 @@ class CC_EXPORT PictureLayerImpl
+   // Returns false if raster translation is not applicable.
+   bool CalculateRasterTranslation(gfx::Vector2dF& raster_translation) const;
+   void CleanUpTilingsOnActiveLayer();
++  // DOMICILE: a tiling for each less dense monitor this layer is shown on.
++  // See cc/domicile/display_regions.h.
++  bool DomicileDrawsPerDisplay() const;
++  void UpdateDomicileDisplayTilings();
+   float MinimumContentsScale() const;
+   float MaximumContentsScale() const;
+   void UpdateViewportRectForTilePriorityInContentSpace();
+@@ -422,6 +427,9 @@ class CC_EXPORT PictureLayerImpl
+       const TilingSetCoverageIterator<PictureLayerTiling>& iter) override;
+ 
+   gfx::Rect GetScaledViewportForTilePriority(float scale) const override;
++  std::vector<std::pair<gfx::Rect, float>> DomicileCoverageByDisplay(
++      const gfx::Rect& visible,
++      const gfx::Transform& to_target) const override;
+ 
+  private:
+   TilingResolution GetTilingResolutionForDebugBorders(
+diff --git a/cc/layers/tile_based_layer_impl.h b/cc/layers/tile_based_layer_impl.h
+index 7890c8d4..46217f04 100644
+--- a/cc/layers/tile_based_layer_impl.h
++++ b/cc/layers/tile_based_layer_impl.h
+@@ -215,6 +215,14 @@ class CC_EXPORT TileBasedLayerImpl : public LayerImpl {
+ 
+   virtual float GetIdealContentsScaleKey() const = 0;
+ 
++  // DOMICILE: `visible`, in the space `to_target` maps from, in parts, each
++  // with the scale its tiles are best drawn from. One part, at the ideal
++  // scale, but where a page is shown on monitors of several densities: see
++  // cc/domicile/display_regions.h.
++  virtual std::vector<std::pair<gfx::Rect, float>> DomicileCoverageByDisplay(
++      const gfx::Rect& visible,
++      const gfx::Transform& to_target) const;
++
+   // Called at the end of AppendQuads() to allow subclasses to do any specific
+   // validation desired.
+   virtual void SanityCheckTilingState() const {}
+@@ -240,6 +248,14 @@ class CC_EXPORT TileBasedLayerImpl : public LayerImpl {
+   bool produced_tile_last_append_quads_ : 1 = true;
+ };
+ 
++template <typename Tiling>
++std::vector<std::pair<gfx::Rect, float>>
++TileBasedLayerImpl<Tiling>::DomicileCoverageByDisplay(
++    const gfx::Rect& visible,
++    const gfx::Transform& to_target) const {
++  return {{visible, GetIdealContentsScaleKey()}};
++}
++
+ template <typename Tiling>
+ template <typename Functor>
+ void TileBasedLayerImpl<Tiling>::ForEachVisibleTile(
+@@ -420,31 +436,34 @@ void TileBasedLayerImpl<Tiling>::AppendQuads(
+       GetScaledViewportForTilePriority(max_contents_scale);
+ 
+   int missing_tile_count = 0;
+-  ForEachVisibleTile(
+-      shared_quad_state->visible_quad_layer_rect, max_contents_scale,
+-      ideal_scale_key, scaled_occlusion,
+-      [&](const TilingSetCoverageIterator<Tiling>& iter,
+-          const gfx::Rect& visible_geometry_rect) {
+-        gfx::Rect offset_geometry_rect = iter.geometry_rect();
+-        offset_geometry_rect.Offset(quad_offset);
+-        gfx::Rect offset_visible_geometry_rect = visible_geometry_rect;
+-        offset_visible_geometry_rect.Offset(quad_offset);
+-
+-        const bool needs_blending = !contents_opaque();
+-
+-        append_quads_data->visible_layer_area +=
+-            visible_geometry_rect.size().Area64();
+-
+-        if (!AppendQuadForTile(
+-                iter, context, render_pass, append_quads_data,
+-                shared_quad_state, scaled_occlusion, offset_geometry_rect,
+-                offset_visible_geometry_rect, visible_geometry_rect,
+-                needs_blending, max_contents_scale,
+-                scaled_viewport_for_tile_priority)) {
+-          missing_tile_count++;
+-        }
+-        return IterationStatus::kContinue;
+-      });
++  for (const auto& [piece, piece_scale_key] :
++       DomicileCoverageByDisplay(shared_quad_state->visible_quad_layer_rect,
++                                 shared_quad_state->quad_to_target_transform)) {
++    ForEachVisibleTile(
++        piece, max_contents_scale, piece_scale_key, scaled_occlusion,
++        [&](const TilingSetCoverageIterator<Tiling>& iter,
++            const gfx::Rect& visible_geometry_rect) {
++          gfx::Rect offset_geometry_rect = iter.geometry_rect();
++          offset_geometry_rect.Offset(quad_offset);
++          gfx::Rect offset_visible_geometry_rect = visible_geometry_rect;
++          offset_visible_geometry_rect.Offset(quad_offset);
++
++          const bool needs_blending = !contents_opaque();
++
++          append_quads_data->visible_layer_area +=
++              visible_geometry_rect.size().Area64();
++
++          if (!AppendQuadForTile(
++                  iter, context, render_pass, append_quads_data,
++                  shared_quad_state, scaled_occlusion, offset_geometry_rect,
++                  offset_visible_geometry_rect, visible_geometry_rect,
++                  needs_blending, max_contents_scale,
++                  scaled_viewport_for_tile_priority)) {
++            missing_tile_count++;
++          }
++          return IterationStatus::kContinue;
++        });
++  }
+ 
+   if (missing_tile_count) {
+     append_quads_data->num_missing_tiles += missing_tile_count;
+diff --git a/cc/tiles/picture_layer_tiling.cc b/cc/tiles/picture_layer_tiling.cc
+index 27ce3ced..dbd0d307 100644
+--- a/cc/tiles/picture_layer_tiling.cc
++++ b/cc/tiles/picture_layer_tiling.cc
+@@ -475,10 +475,17 @@ void PictureLayerTiling::ComputeTilePriorityRects(
+   current_content_to_screen_scale_ =
+       ideal_contents_scale / contents_scale_key();
+ 
+-  SetPriorityRect(visible_rect_in_layer_space, VISIBLE_RECT);
+-  SetPriorityRect(skewport_rect_in_layer_space, SKEWPORT_RECT);
+-  SetPriorityRect(soon_border_rect_in_layer_space, SOON_BORDER_RECT);
+-  SetPriorityRect(eventually_rect_in_layer_space, EVENTUALLY_RECT,
++  // DOMICILE: a monitor's tiling is wanted where that monitor is, and
++  // nowhere else. See cc/domicile/display_regions.h.
++  const auto clipped = [this](const gfx::Rect& rect) {
++    return domicile_clip_in_layer_space_.has_value()
++               ? gfx::IntersectRects(rect, *domicile_clip_in_layer_space_)
++               : rect;
++  };
++  SetPriorityRect(clipped(visible_rect_in_layer_space), VISIBLE_RECT);
++  SetPriorityRect(clipped(skewport_rect_in_layer_space), SKEWPORT_RECT);
++  SetPriorityRect(clipped(soon_border_rect_in_layer_space), SOON_BORDER_RECT);
++  SetPriorityRect(clipped(eventually_rect_in_layer_space), EVENTUALLY_RECT,
+                   /*evicts_tiles=*/true);
+ 
+   // Note that we use the largest skewport extent from the viewport as the
+@@ -591,7 +598,8 @@ void PictureLayerTiling::SetLiveTilesRect(
+ 
+   // We don't rasterize non ideal resolution tiles, so there is no need to
+   // create any new tiles.
+-  if (resolution_ == NON_IDEAL_RESOLUTION) {
++  // DOMICILE: except a monitor's, which is rastered for the monitor it is.
++  if (resolution_ == NON_IDEAL_RESOLUTION && domicile_display_ratio_ == 0.f) {
+     live_tiles_rect_.Intersect(new_live_tiles_rect);
+     VerifyTiles();
+     return;
+diff --git a/cc/tiles/picture_layer_tiling.h b/cc/tiles/picture_layer_tiling.h
+index 92395953..a487d760 100644
+--- a/cc/tiles/picture_layer_tiling.h
++++ b/cc/tiles/picture_layer_tiling.h
+@@ -11,6 +11,7 @@
+ #include <algorithm>
+ #include <map>
+ #include <memory>
++#include <optional>
+ #include <unordered_map>
+ #include <utility>
+ #include <vector>
+@@ -123,6 +124,17 @@ class CC_EXPORT PictureLayerTiling {
+     resolution_ = resolution;
+   }
+   TileResolution resolution() const { return resolution_; }
++
++  // DOMICILE: a tiling at a less dense monitor's scale, rastered only where
++  // that monitor shows the layer -- `clip_in_layer_space` -- and not dropped
++  // for being non-ideal. `ratio` 0 makes it an ordinary tiling again. See
++  // cc/domicile/display_regions.h.
++  void SetDomicileDisplay(float ratio,
++                          std::optional<gfx::Rect> clip_in_layer_space) {
++    domicile_display_ratio_ = ratio;
++    domicile_clip_in_layer_space_ = clip_in_layer_space;
++  }
++  float domicile_display_ratio() const { return domicile_display_ratio_; }
+   void set_can_require_tiles_for_activation(bool can_require_tiles) {
+     can_require_tiles_for_activation_ = can_require_tiles;
+   }
+@@ -449,6 +461,8 @@ class CC_EXPORT PictureLayerTiling {
+   const float min_preraster_distance_;
+   const float max_preraster_distance_;
+   TileResolution resolution_ = NON_IDEAL_RESOLUTION;
++  float domicile_display_ratio_ = 0.f;
++  std::optional<gfx::Rect> domicile_clip_in_layer_space_;
+ 
+   // Internal data.
+   TilingData tiling_data_{gfx::Size(), gfx::Rect(), kBorderTexels};
+diff --git a/cc/tiles/tiling_set_raster_queue_all.cc b/cc/tiles/tiling_set_raster_queue_all.cc
+index ddc1d41e..fa613543 100644
+--- a/cc/tiles/tiling_set_raster_queue_all.cc
++++ b/cc/tiles/tiling_set_raster_queue_all.cc
+@@ -36,7 +36,7 @@ std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
+   } else {
+     if (!tiling_set->num_tilings()) {
+       return base::WrapUnique(
+-          new TilingSetRasterQueueAll(nullptr, nullptr, is_drawing_layer));
++          new TilingSetRasterQueueAll(nullptr, nullptr, {}, is_drawing_layer));
+     }
+   }
+ 
+@@ -49,10 +49,16 @@ std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
+   // These tilings are the only non-high res tilings that could have required
+   // for activation tiles, so they need to be considered for rasterization.
+   PictureLayerTiling* active_non_ideal_pending_high_res_tiling = nullptr;
++  // DOMICILE: the less dense monitors' tilings with tiles still to raster.
++  std::vector<PictureLayerTiling*> domicile_display_tilings;
+   for (size_t i = 0; i < tiling_set->num_tilings(); ++i) {
+     PictureLayerTiling* tiling = tiling_set->tiling_at(i);
+     if (tiling->resolution() == HIGH_RESOLUTION)
+       high_res_tiling = tiling;
++    if (tiling->domicile_display_ratio() != 0.f && tiling->has_tiles() &&
++        !tiling->all_tiles_done()) {
++      domicile_display_tilings.push_back(tiling);
++    }
+     if (tree == ACTIVE_TREE && tiling->resolution() != HIGH_RESOLUTION) {
+       const PictureLayerTiling* twin =
+           client->GetPendingOrActiveTwinTiling(tiling);
+@@ -61,6 +67,14 @@ std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
+     }
+   }
+ 
++  // DOMICILE: one already rastered as the pending tree's high res is not
++  // rastered twice.
++  std::erase(domicile_display_tilings,
++             active_non_ideal_pending_high_res_tiling);
++  if (domicile_display_tilings.size() > kDomicileDisplays) {
++    domicile_display_tilings.resize(kDomicileDisplays);
++  }
++
+   bool use_high_res_tiling = high_res_tiling && high_res_tiling->has_tiles() &&
+                              !high_res_tiling->all_tiles_done();
+   bool use_active_non_ideal_pending_high_res_tiling =
+@@ -69,7 +83,7 @@ std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
+       !active_non_ideal_pending_high_res_tiling->all_tiles_done();
+ 
+   if (!use_high_res_tiling && !use_active_non_ideal_pending_high_res_tiling &&
+-      features::IsCCSlimmingEnabled()) {
++      domicile_display_tilings.empty() && features::IsCCSlimmingEnabled()) {
+     return nullptr;
+   }
+ 
+@@ -78,18 +92,29 @@ std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
+       use_active_non_ideal_pending_high_res_tiling
+           ? active_non_ideal_pending_high_res_tiling
+           : nullptr,
+-      is_drawing_layer));
++      domicile_display_tilings, is_drawing_layer));
+ }
+ 
+ TilingSetRasterQueueAll::TilingSetRasterQueueAll(
+     PictureLayerTiling* high_res_tiling,
+     PictureLayerTiling* active_non_ideal_pending_high_res_tiling,
++    const std::vector<PictureLayerTiling*>& domicile_display_tilings,
+     bool is_drawing_layer)
+     : current_stage_(0), is_drawing_layer_(is_drawing_layer) {
+-  if (!high_res_tiling && !active_non_ideal_pending_high_res_tiling) {
++  if (!high_res_tiling && !active_non_ideal_pending_high_res_tiling &&
++      domicile_display_tilings.empty()) {
+     DCHECK(!features::IsCCSlimmingEnabled());
+     return;
+   }
++  // DOMICILE: each less dense monitor's tiling, after the page's own in each
++  // bin -- what the monitor shows meanwhile is the page's tiles, shrunk.
++  std::vector<IteratorType> domicile_displays;
++  for (PictureLayerTiling* tiling : domicile_display_tilings) {
++    const auto type = static_cast<IteratorType>(DOMICILE_DISPLAY_0 +
++                                                domicile_displays.size());
++    MakeTilingIterator(type, tiling);
++    domicile_displays.push_back(type);
++  }
+ 
+   // Make the tiling iterators.
+   if (high_res_tiling) {
+@@ -108,6 +133,9 @@ TilingSetRasterQueueAll::TilingSetRasterQueueAll(
+   if (high_res_tiling) {
+     stages_.push_back(IterationStage(HIGH_RES, TilePriority::NOW));
+   }
++  for (IteratorType display : domicile_displays) {
++    stages_.push_back(IterationStage(display, TilePriority::NOW));
++  }
+ 
+   if (active_non_ideal_pending_high_res_tiling) {
+     stages_.push_back(
+@@ -118,8 +146,16 @@ TilingSetRasterQueueAll::TilingSetRasterQueueAll(
+ 
+   if (high_res_tiling) {
+     stages_.push_back(IterationStage(HIGH_RES, TilePriority::SOON));
++  }
++  for (IteratorType display : domicile_displays) {
++    stages_.push_back(IterationStage(display, TilePriority::SOON));
++  }
++  if (high_res_tiling) {
+     stages_.push_back(IterationStage(HIGH_RES, TilePriority::EVENTUALLY));
+   }
++  for (IteratorType display : domicile_displays) {
++    stages_.push_back(IterationStage(display, TilePriority::EVENTUALLY));
++  }
+ 
+   DCHECK(!stages_.empty());
+ 
+diff --git a/cc/tiles/tiling_set_raster_queue_all.h b/cc/tiles/tiling_set_raster_queue_all.h
+index 88b116eb..34461b16 100644
+--- a/cc/tiles/tiling_set_raster_queue_all.h
++++ b/cc/tiles/tiling_set_raster_queue_all.h
+@@ -10,6 +10,7 @@
+ #include <array>
+ #include <memory>
+ #include <optional>
++#include <vector>
+ 
+ #include "base/notreached.h"
+ #include "cc/cc_export.h"
+@@ -191,15 +192,22 @@ class CC_EXPORT TilingSetRasterQueueAll {
+     EventuallyTilingIterator eventually_iterator_;
+   };
+ 
++  // DOMICILE: and a tiling for each less dense monitor the layer is on, up to
++  // three. See cc/domicile/display_regions.h.
+   enum IteratorType {
+     HIGH_RES,
+     ACTIVE_NON_IDEAL_PENDING_HIGH_RES,
++    DOMICILE_DISPLAY_0,
++    DOMICILE_DISPLAY_1,
++    DOMICILE_DISPLAY_2,
+     NUM_ITERATORS
+   };
++  static constexpr size_t kDomicileDisplays = 3;
+ 
+   TilingSetRasterQueueAll(
+       PictureLayerTiling* high_res_tiling,
+       PictureLayerTiling* active_non_ideal_pending_high_res_tiling,
++      const std::vector<PictureLayerTiling*>& domicile_display_tilings,
+       bool is_drawing_layer);
+ 
+   void MakeTilingIterator(IteratorType type, PictureLayerTiling* tiling);
+@@ -215,7 +223,7 @@ class CC_EXPORT TilingSetRasterQueueAll {
+ 
+   // The max number of stages is 5: 3 high res for NOW/SOON/EVENTUALLY, and 2
+   // active non ideal pending high res for NOW/SOON.
+-  absl::InlinedVector<IterationStage, 5> stages_;
++  absl::InlinedVector<IterationStage, 11> stages_;
+   std::array<std::optional<TilingIterator>, NUM_ITERATORS> iterators_;
+   bool is_drawing_layer_ = false;
+ };
+diff --git a/cc/trees/commit_state.h b/cc/trees/commit_state.h
+index 9d885219..b41d27a7 100644
+--- a/cc/trees/commit_state.h
++++ b/cc/trees/commit_state.h
+@@ -20,6 +20,7 @@
+ #include "cc/benchmarks/micro_benchmark_impl.h"
+ #include "cc/cc_export.h"
+ #include "cc/debug/layer_tree_debug_state.h"
++#include "cc/domicile/display_regions.h"
+ #include "cc/input/event_listener_properties.h"
+ #include "cc/input/layer_selection_bound.h"
+ #include "cc/input/overscroll_behavior.h"
+@@ -99,6 +100,8 @@ struct CC_EXPORT CommitState {
+   float painted_device_scale_factor = 1.f;
+   float top_controls_shown_ratio = 0.f;
+   gfx::DisplayColorSpaces display_color_spaces;
++  // DOMICILE: see cc/domicile/display_regions.h.
++  DomicileDisplayRegions domicile_display_regions;
+   // Display transform hint to tag generated compositor frames.
+   gfx::OverlayTransform display_transform_hint = gfx::OVERLAY_TRANSFORM_NONE;
+   gfx::Rect device_viewport_rect;
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index 5192a70f..c893379f 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -1646,6 +1646,14 @@ void LayerTreeHost::SetRecordingScaleFactor(float recording_scale_factor) {
+   recording_scale_factor_ = recording_scale_factor;
+ }
+ 
++void LayerTreeHost::SetDomicileDisplayRegions(DomicileDisplayRegions regions) {
++  if (pending_commit_state()->domicile_display_regions == regions) {
++    return;
++  }
++  pending_commit_state()->domicile_display_regions = std::move(regions);
++  SetNeedsCommit();
++}
++
+ void LayerTreeHost::SetDisplayColorSpaces(
+     const gfx::DisplayColorSpaces& display_color_spaces) {
+   if (pending_commit_state()->display_color_spaces == display_color_spaces)
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index 478cd5e1..3cd88fb7 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -33,6 +33,7 @@
+ #include "cc/benchmarks/micro_benchmark.h"
+ #include "cc/benchmarks/micro_benchmark_controller.h"
+ #include "cc/cc_export.h"
++#include "cc/domicile/display_regions.h"
+ #include "cc/input/browser_controls_offset_tag_modifications.h"
+ #include "cc/input/browser_controls_state.h"
+ #include "cc/input/compositor_input_interfaces.h"
+@@ -665,6 +666,10 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+     return pending_commit_state()->display_color_spaces;
+   }
+ 
++  // DOMICILE: where this page is shown on monitors less dense than it is
++  // rastered for. See cc/domicile/display_regions.h.
++  void SetDomicileDisplayRegions(DomicileDisplayRegions regions);
++
+   bool HasCompositorDrivenScrollAnimationForTesting() const {
+     DCHECK(IsMainThread());
+     return scroll_animation_.in_progress;
+diff --git a/cc/trees/layer_tree_impl.cc b/cc/trees/layer_tree_impl.cc
+index aae25d05..e657e0d7 100644
+--- a/cc/trees/layer_tree_impl.cc
++++ b/cc/trees/layer_tree_impl.cc
+@@ -911,6 +911,7 @@ void LayerTreeImpl::PullLayerTreePropertiesFrom(CommitState& commit_state) {
+                                     commit_state.bottom_controls_shown_ratio);
+ 
+   SetDisplayColorSpaces(commit_state.display_color_spaces);
++  SetDomicileDisplayRegions(commit_state.domicile_display_regions);
+   SetExternalPageScaleFactor(commit_state.external_page_scale_factor);
+ 
+   set_painted_device_scale_factor(commit_state.painted_device_scale_factor);
+@@ -1037,6 +1038,7 @@ void LayerTreeImpl::PushPropertiesTo(LayerTreeImpl* target_tree) {
+   target_tree->set_overscroll_behavior(overscroll_behavior_);
+ 
+   target_tree->SetDisplayColorSpaces(display_color_spaces_);
++  target_tree->SetDomicileDisplayRegions(domicile_display_regions_);
+ 
+   target_tree->set_painted_device_scale_factor(painted_device_scale_factor());
+   target_tree->SetDeviceScaleFactor(device_scale_factor());
+@@ -1730,6 +1732,15 @@ void LayerTreeImpl::SetDisplayColorSpaces(
+   display_color_spaces_ = display_color_spaces;
+ }
+ 
++void LayerTreeImpl::SetDomicileDisplayRegions(
++    const DomicileDisplayRegions& regions) {
++  if (domicile_display_regions_ == regions) {
++    return;
++  }
++  domicile_display_regions_ = regions;
++  set_needs_update_draw_properties();
++}
++
+ void LayerTreeImpl::SetExternalPageScaleFactor(
+     float external_page_scale_factor) {
+   if (external_page_scale_factor_ == external_page_scale_factor)
+diff --git a/cc/trees/layer_tree_impl.h b/cc/trees/layer_tree_impl.h
+index 7ae7de0e..447a0a51 100644
+--- a/cc/trees/layer_tree_impl.h
++++ b/cc/trees/layer_tree_impl.h
+@@ -19,6 +19,7 @@
+ #include "base/memory/raw_ptr_exclusion.h"
+ #include "base/time/time.h"
+ #include "cc/base/synced_property.h"
++#include "cc/domicile/display_regions.h"
+ #include "cc/input/event_listener_properties.h"
+ #include "cc/input/layer_selection_bound.h"
+ #include "cc/input/overscroll_behavior.h"
+@@ -470,6 +471,12 @@ class CC_EXPORT LayerTreeImpl {
+     return display_color_spaces_;
+   }
+ 
++  // DOMICILE: see cc/domicile/display_regions.h.
++  void SetDomicileDisplayRegions(const DomicileDisplayRegions& regions);
++  const DomicileDisplayRegions& domicile_display_regions() const {
++    return domicile_display_regions_;
++  }
++
+   const ViewportPropertyIds& viewport_property_ids() const {
+     return viewport_property_ids_;
+   }
+@@ -931,6 +938,7 @@ class CC_EXPORT LayerTreeImpl {
+   float device_scale_factor_;
+   float painted_device_scale_factor_;
+   gfx::DisplayColorSpaces display_color_spaces_;
++  DomicileDisplayRegions domicile_display_regions_;
+ 
+   viz::LocalSurfaceId local_surface_id_from_parent_;
+ 
+diff --git a/third_party/blink/renderer/platform/widget/widget_base.cc b/third_party/blink/renderer/platform/widget/widget_base.cc
+index 0a1ef672..f6c271af 100644
+--- a/third_party/blink/renderer/platform/widget/widget_base.cc
++++ b/third_party/blink/renderer/platform/widget/widget_base.cc
+@@ -19,6 +19,7 @@
+ #include "cc/animation/animation_host.h"
+ #include "cc/animation/animation_id_provider.h"
+ #include "cc/base/features.h"
++#include "cc/domicile/display_regions.h"
+ #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
+ #include "cc/raster/categorized_worker_pool.h"
+ #include "cc/trees/layer_tree_host.h"
+@@ -576,6 +577,7 @@ void WidgetBase::UpdateScreenRects(const gfx::Rect& widget_screen_rect,
+     widget_screen_rect_ = widget_screen_rect;
+     window_screen_rect_ = window_screen_rect;
+   }
++  UpdateDomicileDisplayRegions();
+   std::move(callback).Run();
+ }
+ 
+@@ -1919,6 +1921,7 @@ void WidgetBase::UpdateSurfaceAndScreenInfo(
+     LayerTreeHost()->SetDisplayColorSpaces(
+         screen_infos_.current().display_color_spaces);
+   }
++  UpdateDomicileDisplayRegions();
+ 
+   if (orientation_changed) {
+     auto weak_this = weak_ptr_factory_.GetWeakPtr();
+@@ -1965,6 +1968,21 @@ void WidgetBase::SetScreenRects(const gfx::Rect& widget_screen_rect,
+                                 const gfx::Rect& window_screen_rect) {
+   widget_screen_rect_ = widget_screen_rect;
+   window_screen_rect_ = window_screen_rect;
++  UpdateDomicileDisplayRegions();
++}
++
++void WidgetBase::UpdateDomicileDisplayRegions() {
++  if (!LayerTreeHost()) {
++    return;
++  }
++  std::vector<cc::DomicileDisplay> displays;
++  for (const display::ScreenInfo& info : screen_infos_.screen_infos) {
++    if (info.label == cc::kDomicileDisplayLabel) {
++      displays.push_back({info.rect, info.device_scale_factor});
++    }
++  }
++  LayerTreeHost()->SetDomicileDisplayRegions(cc::DomicileDisplayRegionsOf(
++      displays, widget_screen_rect_.origin(), GetOriginalDeviceScaleFactor()));
+ }
+ 
+ void WidgetBase::SetPendingWindowRect(const gfx::Rect& rect) {
+diff --git a/third_party/blink/renderer/platform/widget/widget_base.h b/third_party/blink/renderer/platform/widget/widget_base.h
+index a26fb60d..5fdc98df 100644
+--- a/third_party/blink/renderer/platform/widget/widget_base.h
++++ b/third_party/blink/renderer/platform/widget/widget_base.h
+@@ -358,6 +358,11 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
+   void SetScreenRects(const gfx::Rect& widget_screen_rect,
+                       const gfx::Rect& window_screen_rect);
+ 
++  // DOMICILE: tells the compositor where this widget is shown on monitors
++  // less dense than it is rastered for, which the browser lists among its
++  // screens. See cc/domicile/display_regions.h.
++  void UpdateDomicileDisplayRegions();
++
+   // Returns the visible viewport size.
+   const gfx::Size& VisibleViewportSize() const {
+     return visible_viewport_size_device_px_;
+-- 
+2.56.0
+

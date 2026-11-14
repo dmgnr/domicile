@@ -1,0 +1,35 @@
+From 044dfd2e022b299ede6b31a5b924bdc58fb8a0f2 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 18:09:46 +0700
+Subject: [PATCH] domicile: enable VMware 3D rendering
+
+---
+ gpu/config/software_rendering_list.json | 12 ------------
+ 1 file changed, 12 deletions(-)
+
+diff --git a/gpu/config/software_rendering_list.json b/gpu/config/software_rendering_list.json
+index a7c3a650..74dc2159 100644
+--- a/gpu/config/software_rendering_list.json
++++ b/gpu/config/software_rendering_list.json
+@@ -1366,18 +1366,6 @@
+         "accelerated_video_encode"
+       ]
+     },
+-    {
+-      "id": 176,
+-      "description": "VMware is buggy on Linux",
+-      "cr_bugs": [1327939],
+-      "os": {
+-        "type": "linux"
+-      },
+-      "vendor_id": "0x15ad",
+-      "features": [
+-        "all"
+-      ]
+-    },
+     {
+       "id": 177,
+       "description": "Apple Software Renderer used under VMWare experiences synchronization issues with GPU Raster",
+-- 
+2.56.0
+

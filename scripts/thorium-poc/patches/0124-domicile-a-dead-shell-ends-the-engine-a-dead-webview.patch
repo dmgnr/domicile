@@ -1,0 +1,77 @@
+From d64e0a45a119e71c78169153a0fb0881f28e93cb Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:59:40 +0700
+Subject: [PATCH] domicile: clear dead webview frame surfaces
+
+---
+ chrome/browser/ui/BUILD.gn                            | 2 ++
+ chrome/browser/ui/sad_tab_helper.cc                   | 7 +++++++
+ third_party/blink/renderer/core/frame/remote_frame.cc | 7 +++++++
+ 3 files changed, 16 insertions(+)
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 238f8625..87f94f17 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -5511,6 +5511,8 @@ if (toolkit_views) {
+       "//chrome/browser/ui/views/frame:browser_view_header",
+       "//chrome/browser/ui/views/frame:contents_web_view",
+       "//chrome/common",
++      # Domicile: the shell's page losing its renderer ends the engine.
++      "//components/domicile:shell_death",
+       "//components/strings:components_strings_grit",
+       "//components/tabs:public",
+       "//components/ui_metrics",
+diff --git a/chrome/browser/ui/sad_tab_helper.cc b/chrome/browser/ui/sad_tab_helper.cc
+index c0157e89..42231fa4 100644
+--- a/chrome/browser/ui/sad_tab_helper.cc
++++ b/chrome/browser/ui/sad_tab_helper.cc
+@@ -10,6 +10,7 @@
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+ #include "chrome/browser/ui/sad_tab.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/domicile/browser/shell_death.h"
+ #include "components/performance_manager/public/mojom/lifecycle.mojom.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/common/content_navigation_policy.h"
+@@ -92,6 +93,12 @@ void SadTabHelper::PrimaryMainFrameRenderProcessGone(
+     return;
+   }
+ 
++  // Domicile: the shell's page loses its renderer only through a bug in
++  // Domicile, so the engine dies saying so rather than show a sad tab. Any
++  // other page returns and gets one.
++  domicile::DieIfTheShellDied(web_contents()->GetLastCommittedURL(), status,
++                              web_contents()->GetCrashedErrorCode());
++
+   if (status == base::TERMINATION_STATUS_EVICTED_FOR_MEMORY) {
+     // If the renderer was terminated to prevent an browser OOM crash, discard
+     // the tab instead of showing a sad tab, unless the tab is visible. The tab
+diff --git a/third_party/blink/renderer/core/frame/remote_frame.cc b/third_party/blink/renderer/core/frame/remote_frame.cc
+index 62180d85..d55dee6b 100644
+--- a/third_party/blink/renderer/core/frame/remote_frame.cc
++++ b/third_party/blink/renderer/core/frame/remote_frame.cc
+@@ -43,6 +43,7 @@
+ #include "third_party/blink/renderer/core/frame/remote_frame_view.h"
+ #include "third_party/blink/renderer/core/frame/user_activation.h"
+ #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
++#include "third_party/blink/renderer/core/html/domicile/html_web_view_element.h"
+ #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
+ #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
+ #include "third_party/blink/renderer/core/inspector/console_message.h"
+@@ -928,6 +929,12 @@ void RemoteFrame::ChildProcessGone() {
+   remote_process_gone_ = true;
+   compositing_helper_->ChildFrameGone(
+       ancestor_widget_->GetOriginalScreenInfo().device_scale_factor);
++  // Domicile: a <webview> whose page lost its renderer draws nothing, not the
++  // gray sad frame, so the shell's own message shows through. The element
++  // reports why (`renderProcessGone`). A reload sets a new surface.
++  if (IsA<HTMLWebViewElement>(DeprecatedLocalOwner())) {
++    SetCcLayer(nullptr, /*is_surface_layer=*/false);
++  }
+ }
+ 
+ bool RemoteFrame::IsIgnoredForHitTest() const {
+-- 
+2.56.0
+

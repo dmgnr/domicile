@@ -1,0 +1,346 @@
+From 49e9ea22673297648597edc61b11c3f13dd4ae9a Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 14:55:47 +0700
+Subject: [PATCH] domicile: preserve per-display raster tilings on activation
+
+---
+ cc/layers/picture_layer_impl.cc              | 70 +++++++++++++-----
+ cc/layers/picture_layer_impl.h               |  3 +
+ cc/tiles/picture_layer_tiling.cc             |  3 +
+ cc/tiles/picture_layer_tiling.h              |  6 +-
+ cc/tiles/tiling_set_raster_queue_required.cc | 76 ++++++++++++++++----
+ cc/tiles/tiling_set_raster_queue_required.h  | 18 ++++-
+ 6 files changed, 139 insertions(+), 37 deletions(-)
+
+diff --git a/cc/layers/picture_layer_impl.cc b/cc/layers/picture_layer_impl.cc
+index a4466e4f..2a8c5610 100644
+--- a/cc/layers/picture_layer_impl.cc
++++ b/cc/layers/picture_layer_impl.cc
+@@ -134,7 +134,8 @@ void PictureLayerImpl::CopyPropertiesTo(LayerImpl* base_layer) const {
+     DCHECK(!solid_color() || tilings_->num_tilings() == 0);
+ 
+     // The pending tree should have at most a single tiling.
+-    DCHECK_LE(tilings_->num_tilings(), 1u);
++    // DOMICILE: besides one for each less dense monitor it is shown on.
++    DCHECK_LE(tilings_->num_tilings() - NumDomicileDisplayTilings(), 1u);
+ 
+     layer_impl->set_gpu_raster_max_texture_size(gpu_raster_max_texture_size_);
+ 
+@@ -1552,15 +1553,33 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
+   }
+ }
+ 
++DomicileLayer PictureLayerImpl::AsDomicileLayer() const {
++  return {
++      .to_page_is_scale_or_translation =
++          ScreenSpaceTransform().IsScaleOrTranslation(),
++      .draws_into_page =
++          render_target() == layer_tree_impl()->RootRenderSurface() &&
++          draw_properties().target_space_transform.IsScaleOrTranslation(),
++      .is_directly_composited_image = IsDirectlyCompositedImage(),
++  };
++}
++
++size_t PictureLayerImpl::NumDomicileDisplayTilings() const {
++  size_t count = 0;
++  for (size_t i = 0; i < tilings_->num_tilings(); ++i) {
++    if (tilings_->tiling_at(i)->domicile_display_ratio() != 0.f) {
++      ++count;
++    }
++  }
++  return count;
++}
++
+ bool PictureLayerImpl::DomicileDrawsPerDisplay() const {
+-  // Only what is drawn straight into the page, unmoving: a surface of its own
+-  // is drawn into the page by a transform this cannot see past, and a moving
+-  // layer would make and drop tilings every frame.
++  // Moving too: its tilings follow it, and a layer that dropped to the page's
++  // scale while it moved would snap back to its monitors' when it stopped.
+   return !layer_tree_impl()->domicile_display_regions().empty() &&
+          layer_tree_impl()->IsActiveTree() &&
+-         render_target() == layer_tree_impl()->RootRenderSurface() &&
+-         draw_properties().target_space_transform.IsScaleOrTranslation() &&
+-         !screen_space_transform_is_animating() && !IsDirectlyCompositedImage();
++         DomicileDrawsFromDisplayTilings(AsDomicileLayer());
+ }
+ 
+ void PictureLayerImpl::UpdateDomicileDisplayTilings() {
+@@ -1568,27 +1587,41 @@ void PictureLayerImpl::UpdateDomicileDisplayTilings() {
+       layer_tree_impl()->domicile_display_regions();
+   const PictureLayerTiling* high_res =
+       tilings_->FindTilingWithResolution(HIGH_RESOLUTION);
++  // On both trees, so that activation waits on a monitor's tiles as it does on
++  // the page's own; and whether or not the layer can draw from them this
++  // frame, so that none is given up and rebuilt empty. Found through the
++  // screen space transform, which reaches the page through a surface too.
++  const gfx::Transform to_page = ScreenSpaceTransform();
+   std::vector<float> ratios;
+-  if (high_res != nullptr && DomicileDrawsPerDisplay()) {
++  if (high_res != nullptr && DomicileKeepsDisplayTilings(AsDomicileLayer())) {
+     ratios = DomicileRatiosMeeting(
+-        regions,
+-        MathUtil::MapEnclosingClippedRect(
+-            draw_properties().target_space_transform, visible_layer_rect()));
++        regions, MathUtil::MapEnclosingClippedRect(to_page,
++                                                   visible_layer_rect()));
+   }
+   const auto scale_key_at = [&](float ratio) {
+     return high_res->contents_scale_key() * ratio;
+   };
+ 
+   // A monitor's tiling no longer wanted, or at a raster scale since replaced,
+-  // is an ordinary non-ideal tiling again: drawn from until the new one is
+-  // ready, then cleaned up.
++  // is an ordinary non-ideal tiling again on the active tree: drawn from until
++  // the new one is ready, then cleaned up. The pending tree drops it, as it
++  // does every non-ideal tiling.
++  std::vector<PictureLayerTiling*> to_remove;
+   for (size_t i = 0; i < tilings_->num_tilings(); ++i) {
+     PictureLayerTiling* tiling = tilings_->tiling_at(i);
+     const float ratio = tiling->domicile_display_ratio();
+-    if (ratio != 0.f && (!std::ranges::contains(ratios, ratio) ||
+-                         tiling->contents_scale_key() != scale_key_at(ratio))) {
+-      tiling->SetDomicileDisplay(0.f, std::nullopt);
++    if (ratio == 0.f || (std::ranges::contains(ratios, ratio) &&
++                         tiling->contents_scale_key() == scale_key_at(ratio))) {
++      continue;
+     }
++    tiling->SetDomicileDisplay(0.f, std::nullopt);
++    if (layer_tree_impl()->IsPendingTree() &&
++        tiling->resolution() != HIGH_RESOLUTION) {
++      to_remove.push_back(tiling);
++    }
++  }
++  for (PictureLayerTiling* tiling : to_remove) {
++    tilings_->Remove(tiling);
+   }
+ 
+   for (const float ratio : ratios) {
+@@ -1607,9 +1640,8 @@ void PictureLayerImpl::UpdateDomicileDisplayTilings() {
+       tiling = AddTiling(raster);
+       tiling->set_resolution(NON_IDEAL_RESOLUTION);
+     }
+-    tiling->SetDomicileDisplay(
+-        ratio, DomicileRegionInLayer(regions, ratio,
+-                                     draw_properties().target_space_transform));
++    tiling->SetDomicileDisplay(ratio,
++                               DomicileRegionInLayer(regions, ratio, to_page));
+   }
+ }
+ 
+diff --git a/cc/layers/picture_layer_impl.h b/cc/layers/picture_layer_impl.h
+index ac2a487d..d16dc165 100644
+--- a/cc/layers/picture_layer_impl.h
++++ b/cc/layers/picture_layer_impl.h
+@@ -20,6 +20,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ptr_exclusion.h"
+ #include "cc/cc_export.h"
++#include "cc/domicile/display_regions.h"
+ #include "cc/layers/layer.h"
+ #include "cc/layers/tile_based_layer_impl.h"
+ #include "cc/layers/tile_size_calculator.h"
+@@ -241,6 +242,8 @@ class CC_EXPORT PictureLayerImpl
+   void CleanUpTilingsOnActiveLayer();
+   // DOMICILE: a tiling for each less dense monitor this layer is shown on.
+   // See cc/domicile/display_regions.h.
++  DomicileLayer AsDomicileLayer() const;
++  size_t NumDomicileDisplayTilings() const;
+   bool DomicileDrawsPerDisplay() const;
+   void UpdateDomicileDisplayTilings();
+   float MinimumContentsScale() const;
+diff --git a/cc/tiles/picture_layer_tiling.cc b/cc/tiles/picture_layer_tiling.cc
+index dbd0d307..53027165 100644
+--- a/cc/tiles/picture_layer_tiling.cc
++++ b/cc/tiles/picture_layer_tiling.cc
+@@ -143,6 +143,9 @@ void PictureLayerTiling::TakeTilesAndPropertiesFrom(
+   RemoveTilesInRegion(layer_invalidation, false /* recreate tiles */);
+ 
+   resolution_ = pending_twin->resolution_;
++  // DOMICILE: and which monitor it is for, and where that monitor is.
++  domicile_display_ratio_ = pending_twin->domicile_display_ratio_;
++  domicile_clip_in_layer_space_ = pending_twin->domicile_clip_in_layer_space_;
+ 
+   while (!pending_twin->tiles_.empty()) {
+     auto pending_iter = pending_twin->tiles_.begin();
+diff --git a/cc/tiles/picture_layer_tiling.h b/cc/tiles/picture_layer_tiling.h
+index a487d760..7e78f66e 100644
+--- a/cc/tiles/picture_layer_tiling.h
++++ b/cc/tiles/picture_layer_tiling.h
+@@ -304,8 +304,12 @@ class CC_EXPORT PictureLayerTiling {
+                                    VisibilityChecker is_visible,
+                                    bool is_tile_occluded) const {
+     if (tree_ == PENDING_TREE) {
++      // DOMICILE: a less dense monitor's tiling too, so that a commit never
++      // leaves the monitor the page's tiles, shrunk, where its own were. See
++      // cc/domicile/display_regions.h.
+       if (!can_require_tiles_for_activation_ ||
+-          resolution_ != HIGH_RESOLUTION || is_tile_occluded) {
++          (resolution_ != HIGH_RESOLUTION && domicile_display_ratio_ == 0.f) ||
++          is_tile_occluded) {
+         return false;
+       }
+ 
+diff --git a/cc/tiles/tiling_set_raster_queue_required.cc b/cc/tiles/tiling_set_raster_queue_required.cc
+index 9620d9fd..465c59ff 100644
+--- a/cc/tiles/tiling_set_raster_queue_required.cc
++++ b/cc/tiles/tiling_set_raster_queue_required.cc
+@@ -7,6 +7,7 @@
+ #include <stddef.h>
+ 
+ #include <utility>
++#include <vector>
+ 
+ #include "cc/base/features.h"
+ #include "cc/tiles/picture_layer_tiling_set.h"
+@@ -40,35 +41,56 @@ TilingSetRasterQueueRequired::Create(PictureLayerTilingSet* tiling_set,
+   } else {
+     tiling = tiling_set->FindTilingWithResolution(HIGH_RESOLUTION);
+   }
++  if (tiling && tiling->all_tiles_done()) {
++    tiling = nullptr;
++  }
++
++  // DOMICILE: activation waits on each less dense monitor's tiling as well, on
++  // the pending tree or on the active one when its pending twin is one. See
++  // cc/domicile/display_regions.h.
++  std::vector<PictureLayerTiling*> domicile_display_tilings;
++  if (type == RasterTilePriorityQueue::Type::REQUIRED_FOR_ACTIVATION) {
++    for (size_t i = 0; i < tiling_set->num_tilings(); ++i) {
++      PictureLayerTiling* candidate = tiling_set->tiling_at(i);
++      const PictureLayerTiling* pending =
++          tiling_set->tree() == ACTIVE_TREE
++              ? tiling_set->client()->GetPendingOrActiveTwinTiling(candidate)
++              : candidate;
++      if (candidate != tiling && pending &&
++          pending->domicile_display_ratio() != 0.f &&
++          !candidate->all_tiles_done()) {
++        domicile_display_tilings.push_back(candidate);
++      }
++    }
++  }
+ 
+-  if (!tiling || tiling->all_tiles_done()) {
++  if (!tiling && domicile_display_tilings.empty()) {
+     if (features::IsCCSlimmingEnabled()) {
+       return nullptr;
+     }
+     return base::WrapUnique(new TilingSetRasterQueueRequired());
+   }
+-  return base::WrapUnique(new TilingSetRasterQueueRequired(tiling, type));
++  return base::WrapUnique(
++      new TilingSetRasterQueueRequired(tiling, domicile_display_tilings, type));
+ }
+ 
+ TilingSetRasterQueueRequired::TilingSetRasterQueueRequired() = default;
+ 
+ TilingSetRasterQueueRequired::TilingSetRasterQueueRequired(
+     PictureLayerTiling* tiling,
++    const std::vector<PictureLayerTiling*>& domicile_display_tilings,
+     RasterTilePriorityQueue::Type type)
+     : type_(type) {
+-  DCHECK(tiling);
+-  DCHECK(!tiling->all_tiles_done());
++  DCHECK(tiling || !domicile_display_tilings.empty());
++  DCHECK(!tiling || !tiling->all_tiles_done());
+ 
+-  if (type == RasterTilePriorityQueue::Type::REQUIRED_FOR_ACTIVATION) {
+-    iterator_ = TilingIterator(tiling, &tiling->tiling_data_,
+-                               tiling->pending_visible_rect());
+-  } else {
+-    iterator_ = TilingIterator(tiling, &tiling->tiling_data_,
+-                               tiling->current_visible_rect());
++  if (tiling) {
++    iterator_ = IteratorOver(tiling);
+   }
+-
+-  while (!iterator_.done() && !IsTileRequired(*iterator_))
+-    ++iterator_;
++  for (PictureLayerTiling* display_tiling : domicile_display_tilings) {
++    domicile_display_tilings_.push_back(display_tiling);
++  }
++  SkipToRequiredTile();
+ }
+ 
+ TilingSetRasterQueueRequired::~TilingSetRasterQueueRequired() = default;
+@@ -80,8 +102,32 @@ bool TilingSetRasterQueueRequired::IsEmpty() const {
+ void TilingSetRasterQueueRequired::Pop() {
+   DCHECK(!IsEmpty());
+   ++iterator_;
+-  while (!iterator_.done() && !IsTileRequired(*iterator_))
+-    ++iterator_;
++  SkipToRequiredTile();
++}
++
++TilingSetRasterQueueRequired::TilingIterator
++TilingSetRasterQueueRequired::IteratorOver(PictureLayerTiling* tiling) const {
++  if (type_ == RasterTilePriorityQueue::Type::REQUIRED_FOR_ACTIVATION) {
++    return TilingIterator(tiling, &tiling->tiling_data_,
++                          tiling->pending_visible_rect());
++  }
++  return TilingIterator(tiling, &tiling->tiling_data_,
++                        tiling->current_visible_rect());
++}
++
++void TilingSetRasterQueueRequired::SkipToRequiredTile() {
++  while (true) {
++    while (!iterator_.done() && !IsTileRequired(*iterator_)) {
++      ++iterator_;
++    }
++    // DOMICILE: then the monitors' tilings, in any order: every one of their
++    // required tiles is required.
++    if (!iterator_.done() || domicile_display_tilings_.empty()) {
++      return;
++    }
++    iterator_ = IteratorOver(domicile_display_tilings_.back());
++    domicile_display_tilings_.pop_back();
++  }
+ }
+ 
+ const PrioritizedTile& TilingSetRasterQueueRequired::Top() const {
+diff --git a/cc/tiles/tiling_set_raster_queue_required.h b/cc/tiles/tiling_set_raster_queue_required.h
+index e8177207..5b41726b 100644
+--- a/cc/tiles/tiling_set_raster_queue_required.h
++++ b/cc/tiles/tiling_set_raster_queue_required.h
+@@ -6,7 +6,9 @@
+ #define CC_TILES_TILING_SET_RASTER_QUEUE_REQUIRED_H_
+ 
+ #include <memory>
++#include <vector>
+ 
++#include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ptr_exclusion.h"
+ #include "cc/cc_export.h"
+ #include "cc/tiles/picture_layer_tiling_set.h"
+@@ -58,13 +60,25 @@ class CC_EXPORT TilingSetRasterQueueRequired {
+   };
+ 
+   TilingSetRasterQueueRequired();
+-  TilingSetRasterQueueRequired(PictureLayerTiling* tiling,
+-                               RasterTilePriorityQueue::Type type);
++  // DOMICILE: `tiling` may be null when `domicile_display_tilings`, the less
++  // dense monitors' tilings activation waits on too, are not empty. See
++  // cc/domicile/display_regions.h.
++  TilingSetRasterQueueRequired(
++      PictureLayerTiling* tiling,
++      const std::vector<PictureLayerTiling*>& domicile_display_tilings,
++      RasterTilePriorityQueue::Type type);
+ 
+   bool IsTileRequired(const PrioritizedTile& prioritized_tile) const;
++  TilingIterator IteratorOver(PictureLayerTiling* tiling) const;
++  // Moves `iterator_` on to a required tile, through the monitors' tilings
++  // once its own runs out.
++  void SkipToRequiredTile();
+ 
+   TilingIterator iterator_;
+   RasterTilePriorityQueue::Type type_;
++  // DOMICILE: those not yet iterated.
++  std::vector<raw_ptr<PictureLayerTiling, UnprotectedInRelease>>
++      domicile_display_tilings_;
+ };
+ 
+ }  // namespace cc
+-- 
+2.56.0
+

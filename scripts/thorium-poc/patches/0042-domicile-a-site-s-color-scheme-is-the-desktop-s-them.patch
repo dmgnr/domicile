@@ -1,0 +1,57 @@
+From bfddba8dbc93f777051fe6e17dce2f76f5c8edc7 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 14:02:00 +0700
+Subject: [PATCH] domicile: port process color scheme binder to Chromium 156
+
+---
+ chrome/browser/BUILD.gn                            |  4 +++-
+ chrome/browser/chrome_browser_interface_binders.cc | 10 +++++++++-
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index d46fab1f..26d99599 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2407,8 +2407,10 @@ source_set("browser") {
+     "//components/dom_distiller/content/browser",
+     "//components/domain_reliability",
+ 
+-    # Domicile engine fork: shell serving, control channel, keymap, and socket.
++    # Domicile engine fork: shell serving, control channel, keymap, color
++    # scheme, and socket.
+     "//chrome/browser/domicile",
++    "//components/domicile:color_scheme",
+     "//components/domicile:control_channel",
+     "//components/domicile:keyboard_layout",
+     "//components/domicile:shell_scheme",
+diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
+index 9050cf36..6a1ca6a1 100644
+--- a/chrome/browser/chrome_browser_interface_binders.cc
++++ b/chrome/browser/chrome_browser_interface_binders.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/task/bind_post_task.h"
+ #include "chrome/browser/domicile/domicile_pointer_warp.h"
++#include "components/domicile/browser/color_scheme.h"
+ #include "components/domicile/browser/control_channel.h"
+ #include "components/domicile/browser/keyboard_layout.h"
+ #include "components/domicile/browser/web_view_guest.h"
+@@ -526,7 +527,14 @@ void PopulateChromeFrameBinders(
+                 base::BindPostTask(
+                     content::GetUIThreadTaskRunner({}),
+                     base::BindRepeating(&domicile::WarpPointerIn,
+-                                        frame->GetGlobalId()))));
++                                        frame->GetGlobalId())),
++                // AND WHICH WAY ROUND EVERY PAGE IS DRAWN. The desktop's
++                // theme is the process's color scheme, which is what a site's
++                // `prefers-color-scheme` reads. Bound here for the keymap's
++                // reason above: NativeTheme belongs to the UI thread.
++                base::BindPostTask(
++                    content::GetUIThreadTaskRunner({}),
++                    base::BindRepeating(&domicile::SetProcessColorScheme))));
+       }));
+ 
+   // Domicile's engine fork: a <webview> asking for a guest to put behind it.
+-- 
+2.56.0
+

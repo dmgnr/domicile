@@ -1,0 +1,150 @@
+From fc30cef0bf6cf25f907a5df20a6e06ffc52158fc Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:53:18 +0700
+Subject: [PATCH] domicile: target tablets at their bound displays
+
+---
+ ui/ozone/platform/drm/BUILD.gn                |  3 +++
+ ui/ozone/platform/drm/host/drm_window_host.cc | 16 ++++++++++++----
+ ui/ozone/platform/drm/ozone_platform_drm.cc   | 18 ++++++++++++++++++
+ ui/ozone/public/ozone_platform.h              | 15 +++++++++++++++
+ 4 files changed, 48 insertions(+), 4 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 8ff554f0..6a2f00de 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -136,6 +136,8 @@ source_set("gbm") {
+     "domicile/drm_modeset.h",
+     "domicile/drm_pointer_crossing.cc",
+     "domicile/drm_pointer_crossing.h",
++    "domicile/drm_pointer_targets.cc",
++    "domicile/drm_pointer_targets.h",
+     "domicile/drm_clipboard.cc",
+     "domicile/drm_clipboard.h",
+     "domicile/drm_screen.cc",
+@@ -275,6 +277,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_master_unittest.cc",
+     "domicile/drm_modeset_unittest.cc",
+     "domicile/drm_pointer_crossing_unittest.cc",
++    "domicile/drm_pointer_targets_unittest.cc",
+     "domicile/drm_clipboard_unittest.cc",
+     "domicile/drm_screen_unittest.cc",
+     "domicile/drm_sleep_unittest.cc",
+diff --git a/ui/ozone/platform/drm/host/drm_window_host.cc b/ui/ozone/platform/drm/host/drm_window_host.cc
+index dae841e0..d0eed1e1 100644
+--- a/ui/ozone/platform/drm/host/drm_window_host.cc
++++ b/ui/ozone/platform/drm/host/drm_window_host.cc
+@@ -389,11 +389,17 @@ bool DrmWindowHost::CanDispatchEvent(const PlatformEvent& event) {
+     return grabber == widget_;
+ 
+   // DOMICILE: one page for the desk hears every pointer and key, on whichever
+-  // monitor. The rest are presenters, showing its page and taking nothing.
++  // monitor, and every touch from a device bound to a display
++  // (`DrmPointerTargets`). The rest are presenters, showing its page and
++  // taking nothing. An unbound touch keeps upstream's answer below.
+   const gfx::AcceleratedWidget desk = window_manager_->desk_host();
++  const bool bound_touch =
++      event->IsTouchEvent() &&
++      DeviceDataManager::GetInstance()->GetTargetDisplayForTouchDevice(
++          event->source_device_id()) != display::kInvalidDisplayId;
+   if (desk != gfx::kNullAcceleratedWidget &&
+       (event->IsMouseEvent() || event->IsScrollEvent() ||
+-       event->IsKeyEvent())) {
++       event->IsKeyEvent() || bound_touch)) {
+     return desk == widget_;
+   }
+ 
+@@ -510,9 +516,11 @@ uint32_t DrmWindowHost::DispatchEvent(const PlatformEvent& event) {
+     // on the engine's row less its own corner -- panel pixels, every CRTC at
+     // y = 0 -- which on a desk of turned monitors at other densities is
+     // somewhere else entirely. On the host's own monitor it is the upstream
+-    // arithmetic. See `PointerInWindow`.
++    // arithmetic. See `PointerInWindow`. A touch reaches here only from a
++    // device bound to a display, so it is placed the same way.
+     const gfx::PointF location =
+-        event->IsMouseEvent() || event->IsScrollEvent()
++        event->IsMouseEvent() || event->IsScrollEvent() ||
++                event->IsTouchEvent()
+             ? cursor_->ToWindow(widget_, located_event->location_f())
+             : located_event->location_f() -
+                   gfx::Vector2dF(bounds_.OffsetFromOrigin());
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index ea4e5523..f6b7a3ed 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -53,6 +53,7 @@
+ #include "ui/ozone/platform/drm/domicile/drm_cursor_factory.h"
+ #include "ui/ozone/platform/drm/domicile/drm_logind_input.h"
+ #include "ui/ozone/platform/drm/domicile/drm_modeset.h"
++#include "ui/ozone/platform/drm/domicile/drm_pointer_targets.h"
+ #include "ui/ozone/platform/drm/domicile/drm_screen.h"
+ #include "ui/ozone/platform/drm/domicile/drm_sleep.h"
+ #include "ui/ozone/platform/drm/domicile/drm_vt_switcher.h"
+@@ -181,6 +182,21 @@ class OzonePlatformDrm : public OzonePlatform {
+     }
+   }
+ 
++  // DOMICILE: made on the first targets, which the compositor sends after it
++  // has the displays, so `InitScreen` and the device lists come first.
++  void SetDomicilePointerTargets(
++      std::vector<DomicilePointerTarget> targets) override {
++    CHECK(screen_) << "domicile: pointer targets before InitScreen";
++    if (!pointer_targets_) {
++      // Unretained: display::Screen owns the screen for the process's life.
++      pointer_targets_ = std::make_unique<DrmPointerTargets>(
++          base::BindRepeating(
++              [](const DrmScreen* screen) { return screen->GetAllDisplays(); },
++              base::Unretained(screen_.get())));
++    }
++    pointer_targets_->Set(std::move(targets));
++  }
++
+   // DOMICILE: the desktop's clipboards, which without this the browser does
+   // not have -- `Clipboard::Create` falls back to `ClipboardNonBacked`, an
+   // in-process store nothing outside the browser can reach, so a copy made in
+@@ -538,6 +554,8 @@ class OzonePlatformDrm : public OzonePlatform {
+   // DOMICILE: the screen `InitScreen` was given. Not owned; display::Screen
+   // owns it.
+   raw_ptr<DrmScreen> screen_ = nullptr;
++  // DOMICILE: after `screen_`, which it reads. See `SetDomicilePointerTargets`.
++  std::unique_ptr<DrmPointerTargets> pointer_targets_;
+   // Domicile's engine fork: drives NativeDisplayDelegate so that something
+   // actually modesets. Declared after display_manager_ so it is destroyed
+   // before the manager whose delegate it holds.
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index e0dbd227..b0c4c2c0 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -96,6 +96,16 @@ struct DomicileDisplayLayout {
+   gfx::Rect desk;
+ };
+ 
++// DOMICILE: a tablet or touchscreen and the display it covers, from the
++// compositor's config. See
++// ui/ozone/platform/drm/domicile/drm_pointer_targets.h.
++struct DomicilePointerTarget {
++  // The evdev device's name or `phys`, matched exactly.
++  std::string device;
++  // Which display, as `display::Display::id()` names it.
++  int64_t display_id;
++};
++
+ // Base class for Ozone platform implementations.
+ //
+ // Ozone platforms must override this class and implement the virtual
+@@ -375,6 +385,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // (docs/architecture/ONE-PAGE-FOR-THE-DESK.md). `gfx::kNullAcceleratedWidget`
+   // gives each window its own events again. DRM only, like the layout above.
+   virtual void SetDomicileDeskHost(gfx::AcceleratedWidget host) {}
++  // DOMICILE: which display each tablet or touchscreen covers, replacing the
++  // last list. A device it does not name covers none. DRM only, like the
++  // layout above.
++  virtual void SetDomicilePointerTargets(
++      std::vector<DomicilePointerTarget> targets) {}
+   // DOMICILE: what the compositor says is on one of the desktop's clipboards.
+   //
+   // THE BROWSER IS TOLD RATHER THAN ASKED. The compositor reads every
+-- 
+2.56.0
+

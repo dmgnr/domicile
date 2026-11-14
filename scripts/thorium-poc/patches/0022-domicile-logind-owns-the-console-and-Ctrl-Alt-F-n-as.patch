@@ -1,0 +1,135 @@
+From d20d04b17e6fd420876c01282a657ec2c69982e6 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:37:17 +0700
+Subject: [PATCH] domicile: port logind-owned VT switching to Chromium 156
+
+---
+ ui/ozone/platform/drm/BUILD.gn                | 14 +++++++
+ .../drm/host/drm_display_host_manager.cc      |  7 ++--
+ ui/ozone/platform/drm/ozone_platform_drm.cc   | 42 +++++++------------
+ 3 files changed, 33 insertions(+), 30 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 98850d6d..303195be 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -288,6 +288,20 @@ source_set("gbm_unittests") {
+     "//third_party/libdrm",
+     "//ui/base/ime",
+     "//ui/display:test_support",
++
++    # `DrmVtSwitcherTest` includes `drm_vt_switcher.h`, which names
++    # `scoped_refptr<dbus::Bus>` and so includes `dbus/bus.h` -- and that pulls
++    # the system `<dbus/dbus.h>`, whose include directory only the `//dbus`
++    # target supplies. `:gbm` having the edge is not enough: an include
++    # directory reaches the translation units of the target that names it, and
++    # the test is its own target. `drm_logind_input.h` includes the same header
++    # and did not need this, because no test includes THAT one.
++    "//dbus",
++
++    # `DrmVtSwitcherTest` builds the `KeyEvent` it asks `VtForChord` about, so
++    # this target includes a `//ui/events` header directly rather than only
++    # through `:gbm`, and `gn check` wants the edge said out loud.
++    "//ui/events",
+     "//ui/gfx",
+     "//ui/gfx/linux:drm",
+     "//ui/gfx/linux:gbm",
+diff --git a/ui/ozone/platform/drm/host/drm_display_host_manager.cc b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
+index b60e40c0..c360d40e 100644
+--- a/ui/ozone/platform/drm/host/drm_display_host_manager.cc
++++ b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
+@@ -715,9 +715,10 @@ void DrmDisplayHostManager::GpuRelinquishedDisplayControl(bool status) {
+   // arriving by the other door.
+   //
+   // A DROP THAT FAILS MAKES THE WHOLE RELINQUISH FAIL, even though the GPU
+-  // succeeded. `DrmVtSwitcher` answers `VT_RELDISP(0)` to that and the switch
+-  // is refused, which is correct: the console would otherwise go to the kernel
+-  // while Chromium is still scanning out on it.
++  // succeeded. There is no refusing the switch -- logind owns the handshake
++  // and has handed the console over already -- so what this buys is that
++  // `DrmVtSwitcher` records a display it does not have and asks for it again
++  // on the way back, rather than believing a drop that did not happen.
+   const bool relinquished = status && drm_master_.Drop();
+ 
+   if (relinquished) {
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index 68f46ff8..58e72612 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -4,7 +4,6 @@
+ 
+ #include "ui/ozone/platform/drm/ozone_platform_drm.h"
+ 
+-#include <fcntl.h>
+ #include <gbm.h>
+ #include <stdlib.h>
+ #include <xf86drm.h>
+@@ -15,12 +14,9 @@
+ #include "base/check.h"
+ #include "base/command_line.h"
+ #include "base/containers/flat_set.h"
+-#include "base/files/scoped_file.h"
+ #include "base/functional/bind.h"
+-#include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/notreached.h"
+-#include "base/posix/eintr_wrapper.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/platform_thread.h"
+ #include "build/build_config.h"
+@@ -117,30 +113,20 @@ class OzonePlatformDrm : public OzonePlatform {
+                                             static_cast<DrmScreen*>(screen));
+     modeset_->Start();
+ 
+-    // And the console this is running on, so Ctrl+Alt+F<n> hands the display
+-    // back instead of leaving two owners on one CRTC.
++    // And the console this is running on, which logind owns. `TakeControl`
++    // -- which the evdev opener calls, and must, because no ACL covers a
++    // keyboard -- already put this VT in `K_OFF`, `KD_GRAPHICS` and
++    // `VT_PROCESS` with logind's own signals. So there is no handshake to
++    // install here and taking one would steal logind's: what this does instead
++    // is bind `Ctrl+Alt+F<n>` on the event source the evdev thread feeds and
++    // follow the session's `Active` property. See `domicile/drm_vt_switcher.h`.
+     //
+-    // `/dev/tty` and not `/dev/tty0`: the first is this process's controlling
+-    // terminal, which is the VT the desktop was started from, and the second
+-    // is whichever VT is active at the moment it is opened. Asking the wrong
+-    // one to raise signals at us is how a handshake ends up installed on
+-    // somebody else's console.
+-    //
+-    // FAILING IS ORDINARY AND IS NOT FATAL. A desktop nested in a Wayland
+-    // session has no VT, a service started without a controlling terminal has
+-    // no `/dev/tty`, and neither should stop a browser from starting. What is
+-    // lost is only the ability to switch away, which is what the log line
+-    // says.
+-    base::ScopedFD tty(HANDLE_EINTR(open("/dev/tty", O_RDWR | O_CLOEXEC)));
+-    if (!tty.is_valid()) {
+-      VPLOG(1) << "no controlling terminal, so no VT switching";
+-      return;
+-    }
+-    auto switcher = std::make_unique<DrmVtSwitcher>(
+-        CreateNativeDisplayDelegate(), std::move(tty));
+-    if (switcher->Start()) {
+-      vt_switcher_ = std::move(switcher);
+-    }
++    // `event_factory_ozone_` because that is the `PlatformEventSource` every
++    // key in the desktop is dispatched through, and it exists by now:
++    // `InitializeUI` builds it and a screen is not initialized before a
++    // platform is.
++    vt_switcher_ = std::make_unique<DrmVtSwitcher>(
++        CreateNativeDisplayDelegate(), event_factory_ozone_.get());
+   }
+ 
+   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
+@@ -435,6 +421,8 @@ class OzonePlatformDrm : public OzonePlatform {
+   // actually modesets. Declared after display_manager_ so it is destroyed
+   // before the manager whose delegate it holds.
+   std::unique_ptr<DrmModeset> modeset_;
++  // Declared after event_factory_ozone_ so its event-source observer is
++  // destroyed before the event source.
+   std::unique_ptr<DrmVtSwitcher> vt_switcher_;
+   PlatformRuntimeProperties host_properties_;
+ 
+-- 
+2.56.0
+

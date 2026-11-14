@@ -1,0 +1,24 @@
+From 0ef43cce2ecdcd714ac58c84dc0f05105419bdf6 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 15:20:26 +0700
+Subject: [PATCH] domicile: expose browser media prefs to settings
+
+---
+ chrome/browser/media/prefs/BUILD.gn | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/chrome/browser/media/prefs/BUILD.gn b/chrome/browser/media/prefs/BUILD.gn
+index d5e830bc..63140266 100644
+--- a/chrome/browser/media/prefs/BUILD.gn
++++ b/chrome/browser/media/prefs/BUILD.gn
+@@ -9,6 +9,7 @@ source_set("prefs") {
+     "//chrome/browser",
+     "//chrome/browser:core",
+     "//chrome/browser:core_unit_tests",
++    "//chrome/browser/domicile:*",
+     "//chrome/browser/media/webrtc:*",
+     "//chrome/browser/prefs:impl",
+     "//chrome/browser/ui",
+-- 
+2.56.0
+

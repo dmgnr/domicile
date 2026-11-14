@@ -1,0 +1,319 @@
+From 02af84878b62dfbdc4463c85c629ccefaee2b88c Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 17:03:21 +0700
+Subject: [PATCH] domicile: provide software output without GBM
+
+---
+ ui/ozone/platform/drm/BUILD.gn                |  4 ++
+ ui/ozone/platform/drm/gpu/drm_thread.cc       | 24 ++++++++++
+ ui/ozone/platform/drm/gpu/drm_thread.h        |  6 +++
+ ui/ozone/platform/drm/gpu/drm_thread_proxy.cc |  8 +++-
+ ui/ozone/platform/drm/gpu/drm_thread_proxy.h  |  7 +++
+ .../platform/drm/gpu/gbm_surface_factory.cc   | 45 +++++++++++++++++--
+ ui/ozone/platform/drm/gpu/screen_manager.cc   | 38 ++++++++++++++++
+ 7 files changed, 127 insertions(+), 5 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 3717823a..6dd6852a 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -138,6 +138,8 @@ source_set("gbm") {
+     "domicile/drm_pointer_crossing.h",
+     "domicile/drm_pointer_targets.cc",
+     "domicile/drm_pointer_targets.h",
++    "domicile/drm_canvas.cc",
++    "domicile/drm_canvas.h",
+     "domicile/drm_clipboard.cc",
+     "domicile/drm_clipboard.h",
+     "domicile/drm_screen.cc",
+@@ -270,6 +272,8 @@ source_set("gbm_unittests") {
+     "gpu/mock_drm_modifiers_filter.h",
+     "gpu/proxy_helpers_unittest.cc",
+     "domicile/connector_name_unittest.cc",
++    "domicile/drm_canvas_unittest.cc",
++    "domicile/drm_no_gbm_modeset_unittest.cc",
+     "domicile/drm_cursor_factory_unittest.cc",
+     "domicile/drm_fullscreen_unittest.cc",
+     "domicile/drm_input_controller_unittest.cc",
+diff --git a/ui/ozone/platform/drm/gpu/drm_thread.cc b/ui/ozone/platform/drm/gpu/drm_thread.cc
+index b46637f6..7c7e6ec9 100644
+--- a/ui/ozone/platform/drm/gpu/drm_thread.cc
++++ b/ui/ozone/platform/drm/gpu/drm_thread.cc
+@@ -25,6 +25,7 @@
+ #include "ui/gfx/linux/gbm_util.h"
+ #include "ui/gfx/presentation_feedback.h"
+ #include "ui/ozone/platform/drm/common/drm_util.h"
++#include "ui/ozone/platform/drm/domicile/drm_canvas.h"
+ #include "ui/ozone/platform/drm/gpu/crtc_controller.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device_generator.h"
+@@ -57,6 +58,12 @@ void CreateBufferWithGbmFlags(const scoped_refptr<DrmDevice>& drm,
+                               const std::vector<uint64_t>& modifiers,
+                               std::unique_ptr<GbmBuffer>* out_buffer,
+                               scoped_refptr<DrmFramebuffer>* out_framebuffer) {
++  // DOMICILE: a card with no 3D may have no GBM. See GbmDeviceGenerator.
++  if (!drm->gbm_device()) {
++    LOG(ERROR) << "domicile: no GBM buffer on " << drm->device_path().value()
++               << ", a card with only software output";
++    return;
++  }
+   std::unique_ptr<GbmBuffer> buffer =
+       drm->gbm_device()->CreateBufferWithModifiers(fourcc_format, size, flags,
+                                                    modifiers);
+@@ -208,6 +215,13 @@ void DrmThread::CreateBufferFromHandle(
+   scoped_refptr<ui::DrmDevice> drm = device_manager_->GetDrmDevice(widget);
+   DCHECK(drm);
+ 
++  // DOMICILE: a card with no 3D may have no GBM. See GbmDeviceGenerator.
++  if (!drm->gbm_device()) {
++    LOG(ERROR) << "domicile: cannot import a buffer on "
++               << drm->device_path().value()
++               << ", a card with only software output";
++    return;
++  }
+   std::unique_ptr<GbmBuffer> buffer = drm->gbm_device()->CreateBufferFromHandle(
+       GetFourCCFormatFromSharedImageFormat(format), size, std::move(handle));
+   if (!buffer)
+@@ -225,6 +239,16 @@ void DrmThread::CreateBufferFromHandle(
+   *out_framebuffer = std::move(framebuffer);
+ }
+ 
++void DrmThread::DomicileCreateScanoutBuffer(
++    gfx::AcceleratedWidget widget,
++    const gfx::Size& size,
++    std::optional<DrmScanoutBuffer>* buffer) {
++  TRACE_EVENT0("drm", "DrmThread::DomicileCreateScanoutBuffer");
++  scoped_refptr<ui::DrmDevice> drm = device_manager_->GetDrmDevice(widget);
++  CHECK(drm) << "No devices available for buffer allocation.";
++  *buffer = AllocateDrmScanoutBuffer(drm, size);
++}
++
+ void DrmThread::SetDisplaysConfiguredCallback(base::RepeatingClosure callback) {
+   display_manager_->SetDisplaysConfiguredCallback(std::move(callback));
+ }
+diff --git a/ui/ozone/platform/drm/gpu/drm_thread.h b/ui/ozone/platform/drm/gpu/drm_thread.h
+index b77f2c84..ef06a89b 100644
+--- a/ui/ozone/platform/drm/gpu/drm_thread.h
++++ b/ui/ozone/platform/drm/gpu/drm_thread.h
+@@ -51,6 +51,7 @@ namespace ui {
+ 
+ class DrmDeviceManager;
+ class DrmFramebuffer;
++struct DrmScanoutBuffer;
+ class DrmGpuDisplayManager;
+ class GbmBuffer;
+ class ScreenManager;
+@@ -104,6 +105,11 @@ class DrmThread : public base::Thread,
+                               gfx::NativePixmapHandle handle,
+                               std::unique_ptr<GbmBuffer>* buffer,
+                               scoped_refptr<DrmFramebuffer>* framebuffer);
++  // DOMICILE: a dumb buffer the window's CRTC can scan out, for the software
++  // output (`domicile/drm_canvas.h`). Left empty if the kernel refuses it.
++  void DomicileCreateScanoutBuffer(gfx::AcceleratedWidget widget,
++                                   const gfx::Size& size,
++                                   std::optional<DrmScanoutBuffer>* buffer);
+   void SetDisplaysConfiguredCallback(base::RepeatingClosure callback);
+   void AddDrmDeviceReceiver(
+       mojo::PendingReceiver<ozone::mojom::DrmDevice> receiver);
+diff --git a/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc b/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc
+index 4c8e4ea1..aa8399d6 100644
+--- a/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc
++++ b/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc
+@@ -14,6 +14,7 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
+ #include "ui/gfx/linux/gbm_wrapper.h"
++#include "ui/ozone/platform/drm/domicile/drm_canvas.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device_generator.h"
+ #include "ui/ozone/platform/drm/gpu/drm_thread.h"
+@@ -40,8 +41,11 @@ class GbmDeviceGenerator : public DrmDeviceGenerator {
+                                         bool is_primary_device) override {
+     auto gbm = CreateGbmDevice(fd.get());
+     if (!gbm) {
+-      PLOG(ERROR) << "Unable to initialize GBM for " << path.value();
+-      return nullptr;
++      // DOMICILE: a card with no 3D (2D virtio-gpu, simpledrm, vkms) may have
++      // no GBM. It still shows software output in dumb buffers
++      // (`domicile/drm_canvas.h`); GBM buffers on it fail, logged.
++      PLOG(ERROR) << "domicile: no GBM for " << path.value()
++                  << "; it shows only software output";
+     }
+ 
+     auto drm = base::MakeRefCounted<DrmDevice>(
+diff --git a/ui/ozone/platform/drm/gpu/drm_thread_proxy.h b/ui/ozone/platform/drm/gpu/drm_thread_proxy.h
+index cc61a863..1dd1abf2 100644
+--- a/ui/ozone/platform/drm/gpu/drm_thread_proxy.h
++++ b/ui/ozone/platform/drm/gpu/drm_thread_proxy.h
+@@ -6,6 +6,7 @@
+ #define UI_OZONE_PLATFORM_DRM_GPU_DRM_THREAD_PROXY_H_
+ 
+ #include <memory>
++#include <optional>
+ #include <vector>
+ 
+ #include "base/functional/callback.h"
+@@ -22,6 +23,7 @@
+ namespace ui {
+ 
+ class DrmWindowProxy;
++struct DrmScanoutBuffer;
+ class InterThreadMessagingProxy;
+ 
+ // Mediates the communication between GPU main/compositor/IO threads and the DRM
+@@ -59,6 +61,11 @@ class DrmThreadProxy {
+                               std::unique_ptr<GbmBuffer>* buffer,
+                               scoped_refptr<DrmFramebuffer>* framebuffer);
+ 
++  // DOMICILE: see DrmThread::DomicileCreateScanoutBuffer.
++  std::optional<DrmScanoutBuffer> DomicileCreateScanoutBuffer(
++      gfx::AcceleratedWidget widget,
++      const gfx::Size& size);
++
+   // Sets a callback that will be notified when display configuration may have
+   // changed, so we should update state for managing overlays.
+   // |callback| will be run on origin thread.
+diff --git a/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc b/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc
+index 74b70797..18c908ae 100644
+--- a/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc
++++ b/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc
+@@ -33,7 +33,10 @@
+ #include "ui/ozone/common/native_pixmap_egl_binding.h"
+ #include "ui/ozone/platform/drm/common/drm_util.h"
+ #include "ui/ozone/platform/drm/common/scoped_drm_types.h"
++#include "ui/ozone/platform/drm/domicile/drm_canvas.h"
++#include "ui/ozone/platform/drm/gpu/drm_framebuffer.h"
+ #include "ui/ozone/platform/drm/gpu/drm_gpu_util.h"
++#include "ui/ozone/platform/drm/gpu/drm_overlay_plane.h"
+ #include "ui/ozone/platform/drm/gpu/drm_thread_proxy.h"
+ #include "ui/ozone/platform/drm/gpu/drm_window_proxy.h"
+ #include "ui/ozone/platform/drm/gpu/gbm_overlay_surface.h"
+@@ -206,6 +209,40 @@ class GLOzoneEGLGbm : public GLOzoneEGL {
+   gl::EGLDisplayPlatform native_display_;
+ };
+ 
++// DOMICILE: a software-composited window's side of the DRM thread.
++class DrmThreadCanvasDisplay : public DrmCanvas::Display {
++ public:
++  DrmThreadCanvasDisplay(gfx::AcceleratedWidget widget,
++                         DrmThreadProxy* drm_thread_proxy)
++      : widget_(widget),
++        drm_thread_proxy_(drm_thread_proxy),
++        window_(drm_thread_proxy->CreateDrmWindowProxy(widget)) {}
++
++  std::optional<DrmScanoutBuffer> Allocate(const gfx::Size& size) override {
++    return drm_thread_proxy_->DomicileCreateScanoutBuffer(widget_, size);
++  }
++
++  void Flip(scoped_refptr<DrmFramebuffer> framebuffer,
++            SwapCompletionOnceCallback submitted,
++            PresentationOnceCallback presented) override {
++    const gfx::Size size = framebuffer->size();
++    std::vector<DrmOverlayPlane> planes;
++    planes.emplace_back(framebuffer, gfx::ColorSpace::CreateSRGB(),
++                        /*z_order=*/0, gfx::OVERLAY_TRANSFORM_NONE,
++                        /*damage_rect=*/gfx::Rect(size),
++                        /*display_bounds=*/gfx::Rect(size),
++                        /*crop_rect=*/gfx::RectF(0, 0, 1, 1),
++                        /*enable_blend=*/false, /*gpu_fence=*/nullptr);
++    window_->SchedulePageFlip(std::move(planes), std::move(submitted),
++                              std::move(presented));
++  }
++
++ private:
++  const gfx::AcceleratedWidget widget_;
++  const raw_ptr<DrmThreadProxy> drm_thread_proxy_;
++  const std::unique_ptr<DrmWindowProxy> window_;
++};
++
+ }  // namespace
+ 
+ GbmSurfaceFactory::GbmDeviceAndFile::GbmDeviceAndFile(base::File file,
+@@ -352,9 +389,11 @@ std::unique_ptr<OverlaySurface> GbmSurfaceFactory::CreateOverlaySurface(
+ 
+ std::unique_ptr<SurfaceOzoneCanvas> GbmSurfaceFactory::CreateCanvasForWidget(
+     gfx::AcceleratedWidget widget) {
+-  DCHECK(thread_checker_.CalledOnValidThread());
+-  LOG(ERROR) << "Software rendering mode is not supported with GBM platform";
+-  return nullptr;
++  // DOMICILE: software compositing draws into dumb buffers. Viz calls this on
++  // its compositor thread; the canvas reaches the DRM thread through the
++  // thread-safe proxy.
++  return std::make_unique<DrmCanvas>(
++      std::make_unique<DrmThreadCanvasDisplay>(widget, drm_thread_proxy_));
+ }
+ 
+ scoped_refptr<gfx::NativePixmap> GbmSurfaceFactory::CreateNativePixmap(
+diff --git a/ui/ozone/platform/drm/gpu/screen_manager.cc b/ui/ozone/platform/drm/gpu/screen_manager.cc
+index 1951f0da..8c9aee32 100644
+--- a/ui/ozone/platform/drm/gpu/screen_manager.cc
++++ b/ui/ozone/platform/drm/gpu/screen_manager.cc
+@@ -7,6 +7,7 @@
+ #include <xf86drmMode.h>
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <utility>
+ 
+@@ -32,6 +33,7 @@
+ #include "ui/gfx/linux/gbm_device.h"
+ #include "ui/ozone/common/features.h"
+ #include "ui/ozone/platform/drm/common/drm_util.h"
++#include "ui/ozone/platform/drm/domicile/drm_canvas.h"
+ #include "ui/ozone/platform/drm/gpu/crtc_controller.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device.h"
+ #include "ui/ozone/platform/drm/gpu/drm_dumb_buffer.h"
+@@ -93,6 +95,36 @@ bool FillModesetBuffer(const scoped_refptr<DrmDevice>& drm,
+   return true;
+ }
+ 
++// DOMICILE: GetModesetPlanes for a device with no GBM. The buffer is filled
++// as a GBM one is: with what the CRTC shows, or black.
++DrmOverlayPlaneList DomicileGetDumbModesetPlanes(
++    const scoped_refptr<DrmDevice>& drm,
++    HardwareDisplayController* controller,
++    const gfx::Rect& bounds,
++    bool is_testing) {
++  std::optional<DrmScanoutBuffer> buffer =
++      AllocateDrmScanoutBuffer(drm, bounds.size());
++  if (!buffer) {
++    return DrmOverlayPlaneList();
++  }
++
++  if (!is_testing &&
++      !FillModesetBuffer(drm, controller, buffer->pixels->surface(),
++                         /*modifiers=*/{})) {
++    buffer->pixels->GetCanvas()->clear(SK_ColorBLACK);
++  }
++
++  const gfx::Rect rect(buffer->framebuffer->size());
++  DrmOverlayPlaneList modeset_planes;
++  modeset_planes.emplace_back(buffer->framebuffer, gfx::ColorSpace::CreateSRGB(),
++                              /*z_order=*/0, gfx::OVERLAY_TRANSFORM_NONE,
++                              /*damage_rect=*/rect, /*display_bounds=*/rect,
++                              /*crop_rect=*/gfx::RectF(0, 0, 1, 1),
++                              /*enable_blend=*/false,
++                              /*gpu_fence=*/nullptr);
++  return modeset_planes;
++}
++
+ CrtcController* GetCrtcController(HardwareDisplayController* controller,
+                                   const scoped_refptr<DrmDevice>& drm,
+                                   uint32_t crtc) {
+@@ -916,6 +948,12 @@ DrmOverlayPlaneList ScreenManager::GetModesetPlanes(
+   scoped_refptr<DrmDevice> drm = controller->GetDrmDevice();
+   uint32_t fourcc_format = GetFourCCFormatForOpaqueFramebuffer(
+       display::DisplaySnapshot::PrimaryFormat());
++  // DOMICILE: a card with no 3D may have no GBM; it modesets with a dumb
++  // buffer.
++  if (!drm->gbm_device()) {
++    return DomicileGetDumbModesetPlanes(drm, controller, bounds, is_testing);
++  }
++
+   // Get the buffer that best reflects what the next Page Flip will look like,
+   // which is using the preferred modifiers from the controllers.
+   std::unique_ptr<GbmBuffer> buffer =
+-- 
+2.56.0
+

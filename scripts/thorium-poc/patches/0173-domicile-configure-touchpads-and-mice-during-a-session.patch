@@ -1,0 +1,487 @@
+From 9c9b70b91d8f43a9ef3026a2a3d752e5106ad0a4 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 18:27:34 +0700
+Subject: [PATCH] domicile: configure touchpads and mice during a session
+
+---
+ ui/events/ozone/evdev/BUILD.gn                |   2 +
+ .../ozone/evdev/input_controller_evdev.cc     |   9 +
+ .../ozone/evdev/input_controller_evdev.h      |   1 +
+ .../ozone/evdev/input_device_factory_evdev.cc |   7 +
+ .../ozone/evdev/input_device_settings_evdev.h |   3 +
+ .../ozone/evdev/libinput_event_converter.cc   | 183 ++++++++++++++----
+ .../ozone/evdev/libinput_event_converter.h    |   8 +-
+ ui/ozone/platform/drm/BUILD.gn                |   1 +
+ ui/ozone/platform/drm/ozone_platform_drm.cc   |  29 ++-
+ ui/ozone/public/ozone_platform.h              |   4 +
+ 10 files changed, 196 insertions(+), 51 deletions(-)
+
+diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
+index 6b011977..23637462 100644
+--- a/ui/events/ozone/evdev/BUILD.gn
++++ b/ui/events/ozone/evdev/BUILD.gn
+@@ -52,6 +52,8 @@ component("evdev") {
+     "device_event_dispatcher_evdev.h",
+     "domicile/absolute_mouse_event_converter_evdev.cc",
+     "domicile/absolute_mouse_event_converter_evdev.h",
++    "domicile/input_settings.cc",
++    "domicile/input_settings.h",
+     "domicile/scroll_accelerator.cc",
+     "domicile/scroll_accelerator.h",
+     "domicile/typing_guard.cc",
+diff --git a/ui/events/ozone/evdev/input_controller_evdev.cc b/ui/events/ozone/evdev/input_controller_evdev.cc
+index fc068863..4a022b98 100644
+--- a/ui/events/ozone/evdev/input_controller_evdev.cc
++++ b/ui/events/ozone/evdev/input_controller_evdev.cc
+@@ -240,6 +240,15 @@ bool InputControllerEvdev::IsInternalTouchpadEnabled() const {
+   return input_device_settings_.enable_internal_touchpad;
+ }
+ 
++void InputControllerEvdev::SetDomicileInputConfig(
++    DomicileInputSettings settings) {
++  input_device_settings_.domicile_disable_while_typing =
++      settings.touchpad.disable_while_typing != DomicileTypingPolicy::kDisabled;
++  input_device_settings_.domicile_input = std::move(settings);
++  ++input_device_settings_.domicile_input_generation;
++  ScheduleUpdateDeviceSettings();
++}
++
+ void InputControllerEvdev::SetDomicileDisableWhileTyping(bool enabled) {
+   input_device_settings_.domicile_disable_while_typing = enabled;
+   ScheduleUpdateDeviceSettings();
+diff --git a/ui/events/ozone/evdev/input_controller_evdev.h b/ui/events/ozone/evdev/input_controller_evdev.h
+index d26aa4ce..77465214 100644
+--- a/ui/events/ozone/evdev/input_controller_evdev.h
++++ b/ui/events/ozone/evdev/input_controller_evdev.h
+@@ -72,6 +72,7 @@ class COMPONENT_EXPORT(EVDEV) InputControllerEvdev : public InputController {
+   std::vector<uint64_t> GetKeyboardKeyBits(int id) override;
+   void SetTouchEventLoggingEnabled(bool enabled) override;
+   void SetThreeFingerClick(bool enabled) override;
++  void SetDomicileInputConfig(DomicileInputSettings settings);
+   void SetTouchpadSensitivity(std::optional<int> device_id, int value) override;
+   void SetTouchpadScrollSensitivity(std::optional<int> device_id,
+                                     int value) override;
+diff --git a/ui/events/ozone/evdev/input_device_factory_evdev.cc b/ui/events/ozone/evdev/input_device_factory_evdev.cc
+index 03680ab5..0dcbb5a4 100644
+--- a/ui/events/ozone/evdev/input_device_factory_evdev.cc
++++ b/ui/events/ozone/evdev/input_device_factory_evdev.cc
+@@ -300,6 +300,10 @@ void InputDeviceFactoryEvdev::SetCapsLockLed(bool enabled) {
+ 
+ void InputDeviceFactoryEvdev::UpdateInputDeviceSettings(
+     const InputDeviceSettingsEvdev& settings) {
++  if (input_device_settings_.domicile_input_generation !=
++      settings.domicile_input_generation) {
++    typing_guard_.ResetPause();
++  }
+   input_device_settings_ = settings;
+   ApplyInputDeviceSettings();
+ }
+@@ -442,6 +446,9 @@ void InputDeviceFactoryEvdev::ApplyInputDeviceSettings() {
+ 
+   SetBoolPropertyForOneType(DT_TOUCHPAD, "Tap Paused",
+                             input_device_settings_.tap_to_click_paused);
++  typing_guard_.SetPauses(
++      input_device_settings_.domicile_input.touchpad.typing_pause,
++      input_device_settings_.domicile_input.touchpad.typing_repeat_pause);
+   typing_guard_.SetEnabled(
+       input_device_settings_.domicile_disable_while_typing);
+   SetBoolPropertyForOneType(DT_TOUCHPAD, "T5R2 Three Finger Click Enable",
+diff --git a/ui/events/ozone/evdev/input_device_settings_evdev.h b/ui/events/ozone/evdev/input_device_settings_evdev.h
+index a2428510..6ecff46d 100644
+--- a/ui/events/ozone/evdev/input_device_settings_evdev.h
++++ b/ui/events/ozone/evdev/input_device_settings_evdev.h
+@@ -11,6 +11,7 @@
+ 
+ #include "base/component_export.h"
+ #include "base/containers/flat_map.h"
++#include "ui/events/ozone/evdev/domicile/input_settings.h"
+ 
+ namespace ui {
+ 
+@@ -88,6 +89,8 @@ struct COMPONENT_EXPORT(EVDEV) InputDeviceSettingsEvdev {
+   // DOMICILE: touchpads rest while a keyboard types. Applies to all touchpad
+   // devices. See ui/events/ozone/evdev/domicile/typing_guard.h.
+   bool domicile_disable_while_typing = true;
++  DomicileInputSettings domicile_input;
++  uint64_t domicile_input_generation = 0;
+   bool enable_touch_screens = true;
+   bool enable_internal_keyboard_filter = false;
+   std::vector<DomCode> internal_keyboard_allowed_keys;
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.cc b/ui/events/ozone/evdev/libinput_event_converter.cc
+index 08fef806..821dcca1 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.cc
++++ b/ui/events/ozone/evdev/libinput_event_converter.cc
+@@ -14,6 +14,7 @@
+ 
+ #include "base/compiler_specific.h"
+ #include "base/logging.h"
++#include "base/notreached.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "ui/events/ozone/evdev/cursor_delegate_evdev.h"
+@@ -51,27 +52,6 @@ double GetAxisValueDiscrete(libinput_event_pointer* const event,
+   return libinput_event_pointer_get_axis_value_discrete(event, axis);
+ }
+ 
+-// Log the result of setting a device configuration value.
+-template <typename Value>
+-void LogConfigStatus(const libinput_config_status status,
+-                     const char* key,
+-                     const Value value) {
+-  switch (status) {
+-    case LIBINPUT_CONFIG_STATUS_SUCCESS:
+-      DVLOG(3) << "libinput config: set " << key << " to " << value;
+-      break;
+-
+-    case LIBINPUT_CONFIG_STATUS_UNSUPPORTED:
+-      LOG(ERROR) << "libinput config: " << key << " not supported";
+-      break;
+-
+-    case LIBINPUT_CONFIG_STATUS_INVALID:
+-      LOG(ERROR) << "libinput config: invalid parameter for " << key << ": "
+-                 << value;
+-      break;
+-  }
+-}
+-
+ }  // namespace
+ 
+ LibInputEventConverter::LibInputEvent::LibInputEvent(LibInputEvent&& other)
+@@ -128,17 +108,117 @@ LibInputEventConverter::LibInputDevice::~LibInputDevice() {
+ 
+ void LibInputEventConverter::LibInputDevice::ApplySettings(
+     const InputDeviceSettingsEvdev& settings) const {
+-  const auto& touchpad_settings = settings.GetTouchpadSettings(device_id_);
+-  SetNaturalScrollEnabled(touchpad_settings.natural_scroll_enabled);
+-  SetSensitivity(touchpad_settings.sensitivity);
+-  SetTapToClickEnabled(touchpad_settings.tap_to_click_enabled);
++  const auto& pad = settings.domicile_input.touchpad;
++  ApplyCommonSettings(pad);
++  if (libinput_device_config_tap_get_finger_count(device_) > 0) {
++    SetTapToClickEnabled(pad.tap);
++    LogConfigStatus(
++        libinput_device_config_tap_set_button_map(
++            device_, pad.tap_button_map == DomicileTapButtonMap::kLrm
++                         ? LIBINPUT_CONFIG_TAP_MAP_LRM
++                         : LIBINPUT_CONFIG_TAP_MAP_LMR),
++        "tap-button-map", static_cast<int>(pad.tap_button_map));
++    LogConfigStatus(libinput_device_config_tap_set_drag_enabled(
++                        device_, pad.tap_drag ? LIBINPUT_CONFIG_DRAG_ENABLED
++                                              : LIBINPUT_CONFIG_DRAG_DISABLED),
++                    "tap-drag", pad.tap_drag);
++    LogConfigStatus(
++        libinput_device_config_tap_set_drag_lock_enabled(
++            device_, pad.drag_lock ? LIBINPUT_CONFIG_DRAG_LOCK_ENABLED
++                                   : LIBINPUT_CONFIG_DRAG_LOCK_DISABLED),
++        "drag-lock", pad.drag_lock);
++  } else if (pad.tap || pad.drag_lock) {
++    LOG(ERROR) << "domicile: " << libinput_device_get_name(device_)
++               << ": tapping is not supported";
++  }
++  const auto click = [&pad]() -> libinput_config_click_method {
++    switch (pad.click_method) {
++      case DomicileClickMethod::kDefault:
++        return LIBINPUT_CONFIG_CLICK_METHOD_NONE;
++      case DomicileClickMethod::kClickfinger:
++        return LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER;
++      case DomicileClickMethod::kButtonAreas:
++        return LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS;
++    }
++    NOTREACHED();
++  }();
++  const auto selected_click = SelectDomicileLibinputMethod(
++      click, libinput_device_config_click_get_methods(device_),
++      libinput_device_config_click_get_default_method(device_));
++  if (selected_click.has_value()) {
++    LogConfigStatus(libinput_device_config_click_set_method(
++                        device_, static_cast<libinput_config_click_method>(
++                                     *selected_click)),
++                    "click-method", *selected_click);
++  } else {
++    LOG(ERROR) << "domicile: " << libinput_device_get_name(device_)
++               << ": click-method: " << selected_click.error();
++  }
++  const auto scroll = [&pad]() -> libinput_config_scroll_method {
++    switch (pad.scroll_method) {
++      case DomicileScrollMethod::kDefault:
++        return LIBINPUT_CONFIG_SCROLL_NO_SCROLL;
++      case DomicileScrollMethod::kTwoFinger:
++        return LIBINPUT_CONFIG_SCROLL_2FG;
++      case DomicileScrollMethod::kEdge:
++        return LIBINPUT_CONFIG_SCROLL_EDGE;
++      case DomicileScrollMethod::kOnButtonDown:
++        return LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN;
++    }
++    NOTREACHED();
++  }();
++  const auto selected_scroll = SelectDomicileLibinputMethod(
++      scroll, libinput_device_config_scroll_get_methods(device_),
++      libinput_device_config_scroll_get_default_method(device_));
++  if (selected_scroll.has_value()) {
++    LogConfigStatus(libinput_device_config_scroll_set_method(
++                        device_, static_cast<libinput_config_scroll_method>(
++                                     *selected_scroll)),
++                    "scroll-method", *selected_scroll);
++  } else {
++    LOG(ERROR) << "domicile: " << libinput_device_get_name(device_)
++               << ": scroll-method: " << selected_scroll.error();
++  }
+ }
+ 
+ void LibInputEventConverter::LibInputDevice::ApplyMouseSettings(
+     const InputDeviceSettingsEvdev& settings) const {
+-  const auto& mouse_settings = settings.GetMouseSettings(device_id_);
+-  SetNaturalScrollEnabled(mouse_settings.reverse_scroll_enabled);
+-  SetSensitivity(mouse_settings.sensitivity);
++  ApplyCommonSettings(settings.domicile_input.mouse);
++}
++
++void LibInputEventConverter::LibInputDevice::ApplyCommonSettings(
++    const DomicileMouseSettings& settings) const {
++  if (libinput_device_config_scroll_has_natural_scroll(device_)) {
++    SetNaturalScrollEnabled(settings.natural_scroll);
++  } else if (settings.natural_scroll) {
++    LOG(ERROR) << "domicile: " << libinput_device_get_name(device_)
++               << ": natural scrolling is not supported";
++  }
++  if (libinput_device_config_accel_is_available(device_)) {
++    const auto profile = settings.accel_profile == DomicileAccelProfile::kFlat
++                             ? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT
++                             : LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
++    LogConfigStatus(libinput_device_config_accel_set_profile(device_, profile),
++                    "acceleration-profile", profile);
++    LogConfigStatus(
++        libinput_device_config_accel_set_speed(device_, settings.speed),
++        "speed", settings.speed);
++  } else if (settings.speed != 0 ||
++             settings.accel_profile != DomicileAccelProfile::kAdaptive) {
++    LOG(ERROR) << "domicile: " << libinput_device_get_name(device_)
++               << ": pointer acceleration is not supported";
++  }
++  if (libinput_device_config_middle_emulation_is_available(device_)) {
++    LogConfigStatus(
++        libinput_device_config_middle_emulation_set_enabled(
++            device_, settings.middle_emulation
++                         ? LIBINPUT_CONFIG_MIDDLE_EMULATION_ENABLED
++                         : LIBINPUT_CONFIG_MIDDLE_EMULATION_DISABLED),
++        "middle-emulation", settings.middle_emulation);
++  } else if (settings.middle_emulation) {
++    LOG(ERROR) << "domicile: " << libinput_device_get_name(device_)
++               << ": middle emulation is not supported";
++  }
+ }
+ 
+ // Get a comma-separated string of the device's capabilities
+@@ -163,6 +243,26 @@ std::string LibInputEventConverter::LibInputDevice::GetCapabilitiesString() {
+   return base::JoinString(parts, ", ");
+ }
+ 
++void LibInputEventConverter::LibInputDevice::LogConfigStatus(
++    libinput_config_status status,
++    const char* key,
++    double value) const {
++  switch (status) {
++    case LIBINPUT_CONFIG_STATUS_SUCCESS:
++      DVLOG(3) << "libinput " << libinput_device_get_name(device_) << ": "
++               << key << " = " << value;
++      break;
++    case LIBINPUT_CONFIG_STATUS_UNSUPPORTED:
++      LOG(ERROR) << "libinput " << libinput_device_get_name(device_) << ": "
++                 << key << " is not supported (requested " << value << ")";
++      break;
++    case LIBINPUT_CONFIG_STATUS_INVALID:
++      LOG(ERROR) << "libinput " << libinput_device_get_name(device_)
++                 << ": invalid " << key << " = " << value;
++      break;
++  }
++}
++
+ void LibInputEventConverter::LibInputDevice::SetNaturalScrollEnabled(
+     const bool enabled) const {
+   const auto status = libinput_device_config_scroll_set_natural_scroll_enabled(
+@@ -170,15 +270,6 @@ void LibInputEventConverter::LibInputDevice::SetNaturalScrollEnabled(
+   LogConfigStatus(status, "natural-scroll", enabled);
+ }
+ 
+-void LibInputEventConverter::LibInputDevice::SetSensitivity(
+-    const int sensitivity) const {
+-  // The range of |sensitivity| is [1..5] according to comments in
+-  // libgestures. Rescale to floating point [-1, 1].
+-  const double speed = (sensitivity - 3.0) / 2.0;
+-  const auto status = libinput_device_config_accel_set_speed(device_, speed);
+-  LogConfigStatus(status, "sensitivity", speed);
+-}
+-
+ void LibInputEventConverter::LibInputDevice::SetTapToClickEnabled(
+     const bool enabled) const {
+   const auto arg =
+@@ -366,6 +457,15 @@ LibInputEventConverter::~LibInputEventConverter() {}
+ 
+ void LibInputEventConverter::ApplyDeviceSettings(
+     const InputDeviceSettingsEvdev& settings) {
++  scroll_factor_ = has_touchpad_
++                       ? settings.domicile_input.touchpad.scroll_factor
++                       : settings.domicile_input.mouse.scroll_factor;
++  scroll_accelerator_.Configure(
++      has_touchpad_ && settings.domicile_input.touchpad.scroll_acceleration,
++      scroll_factor_);
++  typing_applies_ = DomicileTypingDeviceEligible(
++      settings.domicile_input.touchpad.disable_while_typing,
++      type() == InputDeviceType::INPUT_DEVICE_INTERNAL);
+   if (device_ && has_mouse_) {
+     // A mouse has a mouse's settings. The touchpad's would ask it for
+     // tap-to-click, which libinput refuses and this logs as an error on
+@@ -438,7 +538,8 @@ void LibInputEventConverter::HandlePointerMotion(const LibInputEvent& evt) {
+   const double dx = libinput_event_pointer_get_dx(event);
+   const double dy = libinput_event_pointer_get_dy(event);
+ 
+-  if (typing_guard_ && typing_guard_->DropsMotion(Timestamp(evt))) {
++  if (typing_guard_ && typing_applies_ &&
++      typing_guard_->DropsMotion(Timestamp(evt), input_device_.id)) {
+     return;
+   }
+ 
+@@ -470,7 +571,8 @@ void LibInputEventConverter::HandlePointerButton(const LibInputEvent& evt) {
+   DVLOG(3) << "Button: " << button << ", pressed: " << down;
+ 
+   if (typing_guard_ &&
+-      typing_guard_->DropsButton(button, down, Timestamp(evt))) {
++      typing_guard_->DropsButton(button, down, Timestamp(evt), typing_applies_,
++                                 input_device_.id)) {
+     return;
+   }
+ 
+@@ -491,7 +593,8 @@ void LibInputEventConverter::HandlePointerAxis(const LibInputEvent& evt) {
+     return;
+   }
+ 
+-  if (typing_guard_ && typing_guard_->DropsMotion(Timestamp(evt))) {
++  if (typing_guard_ && typing_applies_ &&
++      typing_guard_->DropsMotion(Timestamp(evt), input_device_.id)) {
+     return;
+   }
+ 
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.h b/ui/events/ozone/evdev/libinput_event_converter.h
+index d5b140de..205942d9 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.h
++++ b/ui/events/ozone/evdev/libinput_event_converter.h
+@@ -13,6 +13,7 @@
+ 
+ #include "base/files/scoped_file.h"
+ #include "base/memory/raw_ptr.h"
++#include "ui/events/ozone/evdev/domicile/input_settings.h"
+ #include "ui/events/ozone/evdev/domicile/scroll_accelerator.h"
+ #include "ui/events/ozone/evdev/domicile/typing_guard.h"
+ #include "ui/events/ozone/evdev/event_converter_evdev.h"
+@@ -69,7 +70,10 @@ class LibInputEventConverter : public EventConverterEvdev {
+     std::string GetCapabilitiesString();
+ 
+     void SetNaturalScrollEnabled(const bool enabled) const;
+-    void SetSensitivity(const int sensitivity) const;
++    void ApplyCommonSettings(const DomicileMouseSettings& settings) const;
++    void LogConfigStatus(libinput_config_status status,
++                         const char* key,
++                         double value) const;
+     void SetTapToClickEnabled(const bool enabled) const;
+ 
+     const int device_id_;
+@@ -178,6 +182,8 @@ class LibInputEventConverter : public EventConverterEvdev {
+   const std::optional<LibInputDevice> device_;
+ 
+   ScrollAccelerator scroll_accelerator_;
++  double scroll_factor_ = 1;
++  bool typing_applies_ = true;
+ 
+   // DOMICILE: null for a mouse, and until the factory attaches this.
+   raw_ptr<TypingGuard> typing_guard_ = nullptr;
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index ed6c43b4..4729fb40 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -302,6 +302,7 @@ source_set("gbm_unittests") {
+     # console is the one platform whose touchpad goes through libinput.
+     "//ui/events/ozone/evdev/domicile/absolute_mouse_event_converter_evdev_unittest.cc",
+     "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
++    "//ui/events/ozone/evdev/domicile/input_settings_unittest.cc",
+     "//ui/events/ozone/evdev/domicile/typing_guard_unittest.cc",
+     "//ui/events/ozone/evdev/domicile/wheel_ticks_unittest.cc",
+   ]
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index cbd8126f..43e531a0 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -29,6 +29,7 @@
+ #include "ui/base/buildflags.h"
+ #include "ui/base/cursor/cursor_factory.h"
+ #include "ui/events/ozone/device/device_manager.h"
++#include "ui/events/ozone/evdev/domicile/input_settings.h"
+ #include "ui/events/ozone/evdev/event_factory_evdev.h"
+ #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
+ #include "ui/gfx/linux/client_native_pixmap_dmabuf.h"
+@@ -36,6 +37,16 @@
+ #include "ui/ozone/common/base_keyboard_hook.h"
+ #include "ui/ozone/common/bitmap_cursor_factory.h"
+ #include "ui/ozone/platform/drm/common/drm_util.h"
++#include "ui/ozone/platform/drm/domicile/drm_clipboard.h"
++#include "ui/ozone/platform/drm/domicile/drm_cursor_factory.h"
++#include "ui/ozone/platform/drm/domicile/drm_desk_input.h"
++#include "ui/ozone/platform/drm/domicile/drm_logind_input.h"
++#include "ui/ozone/platform/drm/domicile/drm_logind_session.h"
++#include "ui/ozone/platform/drm/domicile/drm_modeset.h"
++#include "ui/ozone/platform/drm/domicile/drm_pointer_targets.h"
++#include "ui/ozone/platform/drm/domicile/drm_screen.h"
++#include "ui/ozone/platform/drm/domicile/drm_sleep.h"
++#include "ui/ozone/platform/drm/domicile/drm_vt_switcher.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device_generator.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device_manager.h"
+ #include "ui/ozone/platform/drm/gpu/drm_framebuffer.h"
+@@ -49,16 +60,6 @@
+ #include "ui/ozone/platform/drm/host/drm_display_host_manager.h"
+ #include "ui/ozone/platform/drm/host/drm_native_display_delegate.h"
+ #include "ui/ozone/platform/drm/host/drm_window_host.h"
+-#include "ui/ozone/platform/drm/domicile/drm_clipboard.h"
+-#include "ui/ozone/platform/drm/domicile/drm_cursor_factory.h"
+-#include "ui/ozone/platform/drm/domicile/drm_desk_input.h"
+-#include "ui/ozone/platform/drm/domicile/drm_logind_input.h"
+-#include "ui/ozone/platform/drm/domicile/drm_logind_session.h"
+-#include "ui/ozone/platform/drm/domicile/drm_modeset.h"
+-#include "ui/ozone/platform/drm/domicile/drm_pointer_targets.h"
+-#include "ui/ozone/platform/drm/domicile/drm_screen.h"
+-#include "ui/ozone/platform/drm/domicile/drm_sleep.h"
+-#include "ui/ozone/platform/drm/domicile/drm_vt_switcher.h"
+ #include "ui/ozone/platform/drm/host/drm_window_host_manager.h"
+ #include "ui/ozone/platform/drm/host/host_drm_device.h"
+ #include "ui/ozone/platform/drm/mojom/drm_device.mojom.h"
+@@ -195,6 +196,14 @@ class OzonePlatformDrm : public OzonePlatform {
+ 
+   // DOMICILE: made on the first targets, which the compositor sends after it
+   // has the displays, so `InitScreen` and the device lists come first.
++  void SetDomicileInputConfig(const std::string& config) override {
++    auto settings = ParseDomicileInputSettings(config);
++    CHECK(settings.has_value())
++        << "domicile: invalid input configuration: " << settings.error();
++    event_factory_ozone_->input_controller()->SetDomicileInputConfig(
++        std::move(settings).value());
++  }
++
+   void SetDomicilePointerTargets(
+       std::vector<DomicilePointerTarget> targets) override {
+     CHECK(screen_) << "domicile: pointer targets before InitScreen";
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index a10a3e03..01752f61 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -435,6 +435,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // DOMICILE: which display each tablet or touchscreen covers, replacing the
+   // last list. A device it does not name covers none. DRM only, like the
+   // layout above.
++  // Applies the compositor's touchpad and mouse settings. Nested platforms
++  // use the host compositor's input configuration.
++  virtual void SetDomicileInputConfig(const std::string& config) {}
++
+   virtual void SetDomicilePointerTargets(
+       std::vector<DomicilePointerTarget> targets) {}
+   // DOMICILE: the monitors with no connector, replacing the last list. Each
+-- 
+2.56.0
+

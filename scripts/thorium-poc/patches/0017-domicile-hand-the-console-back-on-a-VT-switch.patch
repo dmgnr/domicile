@@ -1,0 +1,107 @@
+From 6a1b571ac7586fd4ea23f5225abcfed1380eae19 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:27:26 +0700
+Subject: [PATCH] domicile: port VT switch handoff to Chromium 156
+
+---
+ ui/ozone/platform/drm/BUILD.gn              |  3 ++
+ ui/ozone/platform/drm/ozone_platform_drm.cc | 31 +++++++++++++++++++++
+ 2 files changed, 34 insertions(+)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 1d789a5c..50dc4586 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -124,6 +124,8 @@ source_set("gbm") {
+     "domicile/drm_modeset.h",
+     "domicile/drm_screen.cc",
+     "domicile/drm_screen.h",
++    "domicile/drm_vt_switcher.cc",
++    "domicile/drm_vt_switcher.h",
+     "host/drm_window_host_manager.h",
+     "host/gpu_thread_adapter.h",
+     "host/gpu_thread_observer.h",
+@@ -236,6 +238,7 @@ source_set("gbm_unittests") {
+     "gpu/proxy_helpers_unittest.cc",
+     "domicile/drm_modeset_unittest.cc",
+     "domicile/drm_screen_unittest.cc",
++    "domicile/drm_vt_switcher_unittest.cc",
+   ]
+ 
+   # `ui/display/manager/test/fake_display_snapshot.h` is the one thing this
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index f6afcb05..9d00a944 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "ui/ozone/platform/drm/ozone_platform_drm.h"
+ 
++#include <fcntl.h>
+ #include <gbm.h>
+ #include <stdlib.h>
+ #include <xf86drm.h>
+@@ -14,9 +15,12 @@
+ #include "base/check.h"
+ #include "base/command_line.h"
+ #include "base/containers/flat_set.h"
++#include "base/files/scoped_file.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/notreached.h"
++#include "base/posix/eintr_wrapper.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/platform_thread.h"
+ #include "build/build_config.h"
+@@ -48,6 +52,7 @@
+ #include "ui/ozone/platform/drm/host/drm_window_host.h"
+ #include "ui/ozone/platform/drm/domicile/drm_modeset.h"
+ #include "ui/ozone/platform/drm/domicile/drm_screen.h"
++#include "ui/ozone/platform/drm/domicile/drm_vt_switcher.h"
+ #include "ui/ozone/platform/drm/host/drm_window_host_manager.h"
+ #include "ui/ozone/platform/drm/host/host_drm_device.h"
+ #include "ui/ozone/platform/drm/mojom/drm_device.mojom.h"
+@@ -110,6 +115,31 @@ class OzonePlatformDrm : public OzonePlatform {
+     modeset_ = std::make_unique<DrmModeset>(CreateNativeDisplayDelegate(),
+                                             static_cast<DrmScreen*>(screen));
+     modeset_->Start();
++
++    // And the console this is running on, so Ctrl+Alt+F<n> hands the display
++    // back instead of leaving two owners on one CRTC.
++    //
++    // `/dev/tty` and not `/dev/tty0`: the first is this process's controlling
++    // terminal, which is the VT the desktop was started from, and the second
++    // is whichever VT is active at the moment it is opened. Asking the wrong
++    // one to raise signals at us is how a handshake ends up installed on
++    // somebody else's console.
++    //
++    // FAILING IS ORDINARY AND IS NOT FATAL. A desktop nested in a Wayland
++    // session has no VT, a service started without a controlling terminal has
++    // no `/dev/tty`, and neither should stop a browser from starting. What is
++    // lost is only the ability to switch away, which is what the log line
++    // says.
++    base::ScopedFD tty(HANDLE_EINTR(open("/dev/tty", O_RDWR | O_CLOEXEC)));
++    if (!tty.is_valid()) {
++      VPLOG(1) << "no controlling terminal, so no VT switching";
++      return;
++    }
++    auto switcher = std::make_unique<DrmVtSwitcher>(
++        CreateNativeDisplayDelegate(), std::move(tty));
++    if (switcher->Start()) {
++      vt_switcher_ = std::move(switcher);
++    }
+   }
+ 
+   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
+@@ -392,6 +422,7 @@ class OzonePlatformDrm : public OzonePlatform {
+   // actually modesets. Declared after display_manager_ so it is destroyed
+   // before the manager whose delegate it holds.
+   std::unique_ptr<DrmModeset> modeset_;
++  std::unique_ptr<DrmVtSwitcher> vt_switcher_;
+   PlatformRuntimeProperties host_properties_;
+ 
+   base::WeakPtrFactory<OzonePlatformDrm> weak_factory_{this};
+-- 
+2.56.0
+

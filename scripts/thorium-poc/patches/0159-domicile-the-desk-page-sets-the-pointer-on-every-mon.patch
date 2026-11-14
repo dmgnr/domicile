@@ -1,0 +1,68 @@
+From 455e7ed8b20f07c53745a6792c9a36e98feaafd5 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 17:52:12 +0700
+Subject: [PATCH] domicile: update desk cursor across monitor bounds
+
+---
+ .../render_widget_host_view_aura.cc           | 24 +++++++++++++++----
+ 1 file changed, 19 insertions(+), 5 deletions(-)
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_aura.cc b/content/browser/renderer_host/render_widget_host_view_aura.cc
+index 6dd861aa..795a1aa8 100644
+--- a/content/browser/renderer_host/render_widget_host_view_aura.cc
++++ b/content/browser/renderer_host/render_widget_host_view_aura.cc
+@@ -72,6 +72,7 @@
+ #include "ui/aura/client/screen_position_client.h"
+ #include "ui/aura/client/transient_window_client.h"
+ #include "ui/aura/client/window_parenting_client.h"
++#include "ui/aura/domicile/desk_targeter.h"
+ #include "ui/aura/env.h"
+ #include "ui/aura/window.h"
+ #include "ui/aura/window_event_dispatcher.h"
+@@ -106,6 +107,7 @@
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_palette.h"
+ #include "ui/gfx/geometry/dip_util.h"
++#include "ui/gfx/geometry/point_f.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/size_conversions.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+@@ -3156,9 +3158,6 @@ void RenderWidgetHostViewAura::UpdateCursorIfOverSelf() {
+   if (!root_window)
+     return;
+ 
+-  if (ShouldSkipCursorUpdate())
+-    return;
+-
+   display::Screen* screen = display::Screen::Get();
+   CHECK(screen);
+   gfx::Point root_window_point = screen->GetCursorScreenPoint();
+@@ -3169,8 +3168,23 @@ void RenderWidgetHostViewAura::UpdateCursorIfOverSelf() {
+         root_window, &root_window_point);
+   }
+ 
+-  if (root_window->GetEventHandlerForPoint(root_window_point) != window_)
+-    return;
++  // DOMICILE: on a tty the desk page spans every monitor but sits in the
++  // host monitor's window, so a pointer on another monitor is outside that
++  // window. The pointer is over the page wherever the page covers it. See
++  // ui/aura/domicile/desk_targeter.h.
++  const bool on_another_monitor =
++      aura::DeskPagePoint(root_window->bounds().size(),
++                          window_->GetBoundsInRootWindow(),
++                          gfx::PointF(root_window_point))
++          .has_value();
++  if (!on_another_monitor) {
++    if (ShouldSkipCursorUpdate()) {
++      return;
++    }
++    if (root_window->GetEventHandlerForPoint(root_window_point) != window_) {
++      return;
++    }
++  }
+ 
+   gfx::NativeCursor cursor = current_cursor_.GetNativeCursor();
+   // Do not show loading cursor when the cursor is currently hidden.
+-- 
+2.56.0
+
