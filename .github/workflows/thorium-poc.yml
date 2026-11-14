@@ -24,6 +24,9 @@ jobs:
       - name: Test Thorium integration ordering and required-stage failures
         run: scripts/thorium-poc/tests/test-integration.sh
 
+      - name: Test DEPS-pinned child source acquisition
+        run: scripts/thorium-poc/tests/test-child-sources.sh
+
       - name: Apply the Domicile patch series to pinned Chromium 156
         id: preflight
         continue-on-error: true

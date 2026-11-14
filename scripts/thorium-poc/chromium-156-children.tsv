@@ -1,0 +1,4 @@
+third_party/ffmpeg	https://chromium.googlesource.com/chromium/third_party/ffmpeg.git	9db86ce5b5b454dfc96c435f9f0723012980c37f	chromium/config/Chrome/** ffmpeg_generated.gni ffmpeg_options.gni libavcodec/**
+third_party/search_engines_data/resources	https://chromium.googlesource.com/external/search_engines_data.git	5dc9f1afd38a8ac2b26b1972eb4fc1bbd5754e8c	definitions/prepopulated_engines.json definitions/regional_settings.json
+third_party/zstd/src	https://chromium.googlesource.com/external/github.com/facebook/zstd.git	10da6ba6de05e29169261fa4b68eb99239f770dd	lib/common/portability_macros.h
+v8	https://chromium.googlesource.com/v8/v8.git	c9b3cfcab30ace06c21f9b48a0f0a34805e81e9d	BUILD.gn gni/snapshot_toolchain.gni

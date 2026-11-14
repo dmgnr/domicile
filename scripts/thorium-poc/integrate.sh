@@ -9,6 +9,7 @@ FIXTURE=false
 THORIUM_ROOT=""
 CHROMIUM_SRC=""
 DOMICILE_PATCHES="$ROOT/scripts/thorium-poc/patches"
+CHILD_MANIFEST="$ROOT/scripts/thorium-poc/chromium-156-children.tsv"
 PIN=""
 REQUIRED_CHILDREN=()
 REQUIRED_GRD=()
@@ -19,6 +20,7 @@ while (($# > 0)); do
     --thorium-root) THORIUM_ROOT="$2"; shift 2 ;;
     --chromium-src) CHROMIUM_SRC="$2"; shift 2 ;;
     --domicile-patches) DOMICILE_PATCHES="$2"; shift 2 ;;
+    --child-manifest) CHILD_MANIFEST="$2"; shift 2 ;;
     --pin) PIN="$2"; shift 2 ;;
     --require-child) REQUIRED_CHILDREN+=("$2"); shift 2 ;;
     --require-grd) REQUIRED_GRD+=("$2"); shift 2 ;;
@@ -61,6 +63,9 @@ done
 for component in chrome components content third_party ui; do
   cp -a "$THORIUM_ROOT/src/$component/." "$CHROMIUM_SRC/$component/"
 done
+if [[ "$FIXTURE" != true ]]; then
+  "$ROOT/scripts/thorium-poc/fetch-child-sources.sh" --root "$CHROMIUM_SRC" --manifest "$CHILD_MANIFEST"
+fi
 
 apply_fixture_series() {
   local series_file="$1" thorium_root="$2"
