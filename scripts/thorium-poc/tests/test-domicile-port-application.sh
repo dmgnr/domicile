@@ -234,4 +234,22 @@ fi
 grep -q 'layout.AddChild(views().infobar_container, gfx::Rect(), false);' "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" || fail "Domicile infobar remained visible in app layout"
 grep -q 'LayoutDownloadShelf(layout, params.visual_client_area)' "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" || fail "Thorium download shelf layout was lost"
 
+git -C "$TMP/layout-chromium" reset --hard -q "$LAYOUT_BASE"
+python3 - "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text().replace(
+    "  // Lay out contents container.\n",
+    "  params.visual_client_area =\n      LayoutDownloadShelf(layout, params.visual_client_area);\n\n"
+    "  // Lay out contents container.\n",
+)
+path.write_text(text)
+PY
+git -C "$TMP/layout-chromium" add .
+git -C "$TMP/layout-chromium" commit -qm thorium-download-shelf
+git -C "$TMP/layout-chromium" am --keep-non-patch "$TMP/layout-overrides/0095-domicile-a-shell-window-lays-out-no-infobar.patch" >"$TMP/layout-git-am.log" 2>&1 || fail "Domicile layout override is not accepted by git am: $(cat "$TMP/layout-git-am.log")"
+grep -q 'layout.AddChild(views().infobar_container, gfx::Rect(), false);' "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" || fail "git am lost Domicile's hidden infobar"
+grep -q 'LayoutDownloadShelf(layout, params.visual_client_area)' "$TMP/layout-chromium/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc" || fail "git am lost Thorium's download shelf"
+
 echo "Domicile port application tests passed"
