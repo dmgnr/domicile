@@ -100,4 +100,32 @@ grep -q '"//components/domicile:unit_tests",' "$TMP/chromium156/components/BUILD
 grep -q '"//components/domicile:browser",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted domicile browser target"
 grep -q '"domicile/domicile_frame_sink_broker.cc",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted frame sink broker source"
 grep -q '"domicile/domicile_frame_sink_broker.h",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted frame sink broker header"
+
+# Representative 156 hunks from the already-ported engine patches must carry
+# their behavior, not just have matching filenames. The chained preflight
+# applies these same artifacts to the pinned Chromium checkout.
+PORT_0002="$PORT_PATCH_DIR/0002-domicile-embed-a-brokered-surface-in-the-page.patch"
+[[ -f "$PORT_0002" ]] || fail "patch 0002 has no isolated Chromium 156 port"
+grep -q 'BindDomicileExternalSurfaceProvider' "$PORT_0002" || fail "patch 0002 omitted the renderer broker binding"
+grep -q 'name: "DomicileExternalSurface"' "$PORT_0002" || fail "patch 0002 omitted the external surface feature"
+
+PORT_0004="$PORT_PATCH_DIR/0004-domicile-open-the-producer-s-socket-at-startup.patch"
+[[ -f "$PORT_0004" ]] || fail "patch 0004 has no isolated Chromium 156 port"
+grep -q 'StartDomicileFrameSinkBroker' "$PORT_0004" || fail "patch 0004 omitted broker startup"
+
+PORT_0007="$PORT_PATCH_DIR/0007-domicile-define-app-and-webview-as-elements-the-fork.patch"
+[[ -f "$PORT_0007" ]] || fail "patch 0007 has no isolated Chromium 156 port"
+grep -q 'name: "app"' "$PORT_0007" || fail "patch 0007 omitted the app element tag"
+grep -q 'name: "webview"' "$PORT_0007" || fail "patch 0007 omitted the webview element tag"
+
+# The trusted command-line launch gates must opt in explicitly; the scheme
+# must not become generally web-safe or CORS-enabled.
+PATCH_0008="$PORT_PATCH_DIR/0008-domicile-serve-the-shell-over-domicile-and-bind-the-.patch"
+[[ -f "$PATCH_0008" ]] || fail "patch 0008 has no isolated Chromium 156 port"
+grep -q 'url.SchemeIs(domicile::kDomicileScheme)' "$PATCH_0008" || fail "patch 0008 omitted the explicit domicile launch exception"
+grep -q 'schemes->standard_schemes.push_back(domicile::kDomicileScheme)' "$PATCH_0008" || fail "patch 0008 omitted standard domicile scheme registration"
+grep -q 'schemes->secure_schemes.push_back(domicile::kDomicileScheme)' "$PATCH_0008" || fail "patch 0008 omitted secure domicile scheme registration"
+if grep -qE '^\+.*(web_safe_schemes|cors_enabled_schemes).*domicile' "$PATCH_0008"; then
+  fail "patch 0008 made domicile generally web-safe or CORS-enabled"
+fi
 echo "thorium preflight fixture tests passed"

@@ -1,0 +1,118 @@
+From b17802fbd798c35403de19dceef0e87cb0f69bcb Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:10:48 +0700
+Subject: [PATCH] domicile: port webview guest binder to Chromium 156
+
+---
+ chrome/browser/BUILD.gn                       |  1 +
+ .../chrome_browser_interface_binders.cc       | 25 +++++++++++++++++++
+ third_party/blink/renderer/core/BUILD.gn      |  5 ++++
+ third_party/blink/renderer/core/DEPS          |  2 ++
+ .../core/html/html_frame_element_base.h       |  7 +++++-
+ 5 files changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index fb847696..3bad3961 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2411,6 +2411,7 @@ source_set("browser") {
+     "//chrome/browser/domicile",
+     "//components/domicile:control_channel",
+     "//components/domicile:shell_scheme",
++    "//components/domicile:web_view_guest",
+     "//components/download/content/factory",
+     "//components/embedder_support:user_agent",
+     "//components/facilitated_payments/core/features",
+diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
+index 7b2aa32d..e634598d 100644
+--- a/chrome/browser/chrome_browser_interface_binders.cc
++++ b/chrome/browser/chrome_browser_interface_binders.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/chrome_browser_interface_binders.h"
+ 
+ #include "components/domicile/browser/control_channel.h"
++#include "components/domicile/browser/web_view_guest.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "mojo/public/cpp/bindings/message.h"
+ #include "components/domicile/common/domicile_scheme.h"
+@@ -500,6 +501,30 @@ void PopulateChromeFrameBinders(
+                                       std::move(receiver)));
+       }));
+ 
++  // Domicile's engine fork: a <webview> asking for a guest to put behind it.
++  //
++  // Registered unconditionally and gated at BIND time, exactly as the control
++  // channel above is and for the same reason -- this map is built before any
++  // document has committed, so an origin read here is empty and a binder that
++  // gates here registers nothing and gets the renderer killed.
++  //
++  // The check is the same one, and it is the same whole of the access control:
++  // only the shell may put a page in a guest, because a guest is a page that
++  // no framing header applies to and a document that could ask for one for an
++  // arbitrary frame could put anything anywhere. A shell that reaches this can
++  // already reach `Spawn`.
++  map->Add<domicile::mojom::WebViewGuestHost>(base::BindRepeating(
++      [](content::RenderFrameHost* frame,
++         mojo::PendingReceiver<domicile::mojom::WebViewGuestHost> receiver) {
++        if (frame->GetLastCommittedOrigin().scheme() !=
++            domicile::kDomicileScheme) {
++          mojo::ReportBadMessage(
++              "domicile: only a domicile:// document may ask for a guest.");
++          return;
++        }
++        domicile::BindWebViewGuestHost(frame, std::move(receiver));
++      }));
++
+   map->Add<image_annotation::mojom::Annotator>(&BindImageAnnotator);
+ 
+   map->Add<blink::mojom::ScriptToolHost>(
+diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
+index 056bd228..a20b9993 100644
+--- a/third_party/blink/renderer/core/BUILD.gn
++++ b/third_party/blink/renderer/core/BUILD.gn
+@@ -408,6 +408,11 @@ component("core") {
+     ":make_deprecation_info",
+     ":xml_ffi",
+     "//base",
++
++    # Domicile's engine fork: <webview> asks the browser for a guest over
++    # components/domicile/mojom's WebViewGuestHost.
++    "//components/domicile/mojom:mojom_blink",
++
+     "//components/paint_preview/common",
+     "//components/performance_manager/public/mojom:mojom_blink",
+     "//components/shared_highlighting/core/common",
+diff --git a/third_party/blink/renderer/core/DEPS b/third_party/blink/renderer/core/DEPS
+index db7a924b..0ac2815a 100644
+--- a/third_party/blink/renderer/core/DEPS
++++ b/third_party/blink/renderer/core/DEPS
+@@ -69,6 +69,8 @@ include_rules = [
+     "+cc/trees/target_property.h",
+     "+cc/trees/ukm_manager.h",
+     "+components/subresource_filter/core/common/scoped_rule.h",
++    # Domicile's engine fork: what <webview> asks for a guest over.
++    "+components/domicile/mojom/web_view_guest.mojom-blink.h",
+     "+components/performance_manager/public/mojom/coordination_unit.mojom-blink.h",
+     "+components/performance_manager/public/mojom/web_memory.mojom-blink.h",
+     "+components/viz/common/frame_timing_details.h",
+diff --git a/third_party/blink/renderer/core/html/html_frame_element_base.h b/third_party/blink/renderer/core/html/html_frame_element_base.h
+index e1a66380..cb6b1c2b 100644
+--- a/third_party/blink/renderer/core/html/html_frame_element_base.h
++++ b/third_party/blink/renderer/core/html/html_frame_element_base.h
+@@ -52,7 +52,12 @@ class CORE_EXPORT HTMLFrameElementBase : public HTMLFrameOwnerElement {
+   void ParseAttribute(const AttributeModificationParams&) override;
+ 
+   InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+-  void DidNotifySubtreeInsertionsToDocument() final;
++  // Domicile's engine fork: `override`, not `final`. <webview> creates the
++  // same nested browsing context this does and then does NOT navigate it --
++  // the frame is the attach point for a guest page instead -- so it has to run
++  // after this and ask the browser for one. See
++  // core/html/domicile/html_web_view_element.h.
++  void DidNotifySubtreeInsertionsToDocument() override;
+   void AttachLayoutTree(AttachContext&) override;
+ 
+   void SetScrollbarMode(mojom::blink::ScrollbarMode);
+-- 
+2.56.0
+

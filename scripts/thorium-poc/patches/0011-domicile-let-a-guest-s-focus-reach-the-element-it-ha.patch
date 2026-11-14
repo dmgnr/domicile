@@ -1,0 +1,134 @@
+From df4b65eec26126e0cbf18d3f0093cfd711968ded Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 13:14:41 +0700
+Subject: [PATCH] domicile: port guest focus handling to Chromium 156
+
+---
+ .../core/html/html_frame_element_base.h       |  9 ++-
+ .../renderer/core/page/focus_controller.cc    | 69 +++++++++++++++++++
+ 2 files changed, 77 insertions(+), 1 deletion(-)
+
+diff --git a/third_party/blink/renderer/core/html/html_frame_element_base.h b/third_party/blink/renderer/core/html/html_frame_element_base.h
+index cb6b1c2b..a2144301 100644
+--- a/third_party/blink/renderer/core/html/html_frame_element_base.h
++++ b/third_party/blink/renderer/core/html/html_frame_element_base.h
+@@ -60,6 +60,14 @@ class CORE_EXPORT HTMLFrameElementBase : public HTMLFrameOwnerElement {
+   void DidNotifySubtreeInsertionsToDocument() override;
+   void AttachLayoutTree(AttachContext&) override;
+ 
++  // Domicile's engine fork: protected and `override` rather than private and
++  // `final`, so that <webview> can hear its own focus and still hand the frame
++  // the focus this does. A subclass may override a private virtual; it may not
++  // call one. See core/html/domicile/html_web_view_element.h.
++  void SetFocused(bool,
++                  mojom::blink::FocusType,
++                  BlurEventBehavior) override;
++
+   void SetScrollbarMode(mojom::blink::ScrollbarMode);
+   void SetMarginWidth(int);
+   void SetMarginHeight(int);
+@@ -78,7 +86,6 @@ class CORE_EXPORT HTMLFrameElementBase : public HTMLFrameOwnerElement {
+     return FocusableState::kFocusable;
+   }
+   int DefaultTabIndex() const final;
+-  void SetFocused(bool, mojom::blink::FocusType, BlurEventBehavior) final;
+ 
+   bool IsURLAttribute(const Attribute&) const final;
+   bool HasLegalLinkAttribute(const QualifiedName&) const final;
+diff --git a/third_party/blink/renderer/core/page/focus_controller.cc b/third_party/blink/renderer/core/page/focus_controller.cc
+index 864c2c8e..0024c758 100644
+--- a/third_party/blink/renderer/core/page/focus_controller.cc
++++ b/third_party/blink/renderer/core/page/focus_controller.cc
+@@ -30,6 +30,7 @@
+ #include <optional>
+ #include <ranges>
+ 
++#include "base/logging.h"
+ #include "base/containers/adapters.h"
+ #include "base/memory/stack_allocated.h"
+ #include "third_party/blink/public/mojom/input/focus_type.mojom-blink.h"
+@@ -57,6 +58,8 @@
+ #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+ #include "third_party/blink/renderer/core/frame/remote_frame.h"
+ #include "third_party/blink/renderer/core/frame/settings.h"
++#include "third_party/blink/renderer/core/html/domicile/html_web_view_element.h"
++#include "third_party/blink/renderer/core/html/domicile/html_web_view_element.h"
+ #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
+ #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
+ #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
+@@ -1803,6 +1806,72 @@ void FocusController::SetFocusedFrame(Frame* frame, bool notify_embedder) {
+       // invocation of the function to run.
+       SetFocusedElement(fenced_frame, frame);
+     }
++
++    // Domicile's engine fork: a <webview>'s guest is the same shape of thing
++    // -- a page in another frame tree, reached through a placeholder remote
++    // frame -- and it wants the same answer, for the reason the comment below
++    // gives about remote frames generally: DOM focus events do not cross the
++    // process boundary to the owner, so without this nothing in the embedder's
++    // document knows that the user clicked into the page. A shell raises the
++    // window that was clicked, and a browser window is the only kind whose
++    // pointer events it never sees at all.
++    //
++    // THE FOCUS IS ALL THIS BUYS, and the element carries the rest.
++    // Document::SetFocusedElement dispatches `focus` and `focusin` only while
++    // the page is focused, and the embedder's page has ALREADY lost focus by
++    // the time this runs: WebContentsImpl::SetFocusedFrameTree sends the old
++    // tree's widget SetPageFocus(false) before FocusOuterFrameTrees reaches
++    // this renderer. Measured, not reasoned -- guard-webview-click.sh read
++    // `activeElement=webview` out of the embedder with no event beside it. So
++    // HTMLWebViewElement::SetFocused, which this reaches through
++    // Document::SetFocusedElement, is where the element says so itself. The
++    // move of HTMLFrameElementBase::SetFocused into `protected` is what lets
++    // it: a subclass may override a private virtual but cannot call it.
++    //
++    // THE TAG RATHER THAN THE TYPE, and that is a measurement rather than a
++    // preference. Engine run 194 read this out of a real click:
++    //
++    //   domicile: focus reached a frame owned by <webview>, webview=0
++    //
++    // The owner IS the element -- it is an HTMLFrameOwnerElement whose tag is
++    // `webview`, and an HTMLUnknownElement is not a frame owner, so nothing
++    // else it could be -- and DynamicTo<HTMLWebViewElement> said no anyway.
++    //
++    // THE ANOMALY THAT LEFT HERE HAS A NAME NOW, and this comment used to get
++    // it wrong in the one way that mattered: it said the generated
++    // DowncastTraits "works for <app>". It did not. Neither element overrode
++    // Node::GetElementType, so both answered `kHTMLElement`, and the generated
++    // AllowFrom compares against `kHTMLAppElement` / `kHTMLWebViewElement` --
++    // so every DynamicTo onto either class returned null. It cost `<app>` its
++    // window: LayoutAppSurface cast the node back to hand it the box, got
++    // null, and the element was never told a size to embed at. Both headers
++    // say their type now, and scripts/test-fork-elements-know-their-type.sh is
++    // what keeps them saying it.
++    //
++    // The tag check stays regardless, because it was never the workaround it
++    // looked like: what this branch has to know is whether the owner is a
++    // <webview> rather than an ordinary <iframe>, since focusing an
++    // <iframe>'s owner would change upstream's behavior for every frame, and
++    // the tag answers exactly that. SetFocusedElement takes an Element*, and
++    // the announcement is a virtual call on whatever the element really is, so
++    // no HTMLWebViewElement* is wanted anywhere.
++    //
++    // The cast stays in the log beside the tag, for the opposite reason it was
++    // put there: it read 0 against a `webview` tag once, and the day the two
++    // disagree again this line is where it shows.
++    auto* owner = To<HTMLFrameOwnerElement>(frame->Owner());
++    const bool is_web_view = owner->HasTagName(html_names::kWebviewTag);
++    LOG(INFO) << "domicile: focus reached a frame owned by <"
++              << owner->localName().Utf8() << ">, webview=" << is_web_view
++              << " cast=" << !!DynamicTo<HTMLWebViewElement>(owner);
++    if (is_web_view) {
++      // The result, which upstream's fenced-frame call above discards:
++      // Document::SetFocusedElement can refuse, and a refusal is the one way
++      // this branch can run and the element still never hear SetFocused.
++      const bool focused = SetFocusedElement(owner, frame);
++      LOG(INFO) << "domicile: focused the <webview> the guest hangs off: "
++                << focused;
++    }
+   }
+ 
+   auto* old_frame = DynamicTo<LocalFrame>(focused_frame_.Get());
+-- 
+2.56.0
+
