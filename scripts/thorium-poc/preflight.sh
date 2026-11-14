@@ -48,7 +48,10 @@ git -C "$CHECKOUT" config user.name "Domicile Thorium POC"
 git -C "$CHECKOUT" config user.email "domicile-thorium-poc@invalid.example"
 for patch in "${patches[@]}"; do
   override="${OVERRIDE_DIR:-}/$(basename "$patch")"
-  if [[ -n "$OVERRIDE_DIR" && -f "$override" ]]; then
+  baseline_exclusions="${OVERRIDE_DIR:-}/baseline-exclusions.txt"
+  if [[ -n "$OVERRIDE_DIR" && -f "$override" && -f "$baseline_exclusions" ]] && grep -Fxq "$(basename "$patch")" "$baseline_exclusions"; then
+    echo "Using source patch for Chromium-only preflight: $(basename "$patch")"
+  elif [[ -n "$OVERRIDE_DIR" && -f "$override" ]]; then
     patch="$override"
     echo "Using isolated Chromium 156 POC override: $(basename "$patch")"
   fi

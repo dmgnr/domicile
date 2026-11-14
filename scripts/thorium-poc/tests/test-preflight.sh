@@ -38,6 +38,21 @@ else
 fi
 grep -q '^ported$' "$TMP/base/file.txt" || fail "named patch override was not applied"
 
+# A Thorium-specific override must not replace the Chromium-only patch during
+# the independent base preflight.
+mkdir -p "$TMP/baseline-series/patches" "$TMP/baseline-overrides"
+cp "$TMP/series/patches/0001.patch" "$TMP/baseline-series/patches/0001.patch"
+sed 's/-before/-missing/' "$TMP/baseline-series/patches/0001.patch" > "$TMP/baseline-overrides/0001.patch"
+printf '0001.patch\n' > "$TMP/baseline-overrides/baseline-exclusions.txt"
+git -C "$TMP/base" reset --hard -q "$BASE"
+if HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 "$SCRIPT" --fixture "$TMP/baseline-series" "$TMP/base" "$TMP/baseline-overrides" >"$TMP/baseline.log" 2>&1; then
+  :
+else
+  fail "Chromium-only preflight selected a Thorium-specific override"
+fi
+grep -q '^after$' "$TMP/base/file.txt" || fail "Chromium-only preflight did not apply the source patch"
+grep -q 'Using source patch for Chromium-only preflight: 0001.patch' "$TMP/baseline.log" || fail "Chromium-only override exclusion was not reported"
+
 # A failing first patch exits nonzero and leaves actionable diagnostics.
 git -C "$TMP/base" reset --hard -q "$BASE"
 sed 's/-before/-missing/' "$TMP/series/patches/0001.patch" > "$TMP/series/patches/0001-bad.patch"
