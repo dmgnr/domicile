@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Mon, 7 Sep 2026 11:38:02 +0000
+Subject: [PATCH] domicile: open the producer's socket at startup
+
+A desktop cannot boot without this.
+
+The broker's socket was opened on first use, and first use was a page
+calling canvas.embedExternalSurface(). That is right for every spike page,
+which embeds as it loads. It is wrong for a shell, which mounts an <app>
+element when the host announces a window, learns of windows from the
+compositor, and reaches the compositor -- the producer -- over this socket.
+So the socket waited for an embed, the embed for a window, and the window
+for the socket.
+
+spike-shell.sh found it by being the first thing to drive a real shell
+rather than a page written for the guard.
+---
+ content/browser/browser_main_loop.cc | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/content/browser/browser_main_loop.cc b/content/browser/browser_main_loop.cc
+index 654641b..d3939e5 100644
+--- a/content/browser/browser_main_loop.cc
++++ b/content/browser/browser_main_loop.cc
+@@ -79,8 +79,9 @@
+ #include "content/browser/browser_thread_impl.h"
+ #include "content/browser/compositor/viz_process_transport_factory.h"
+ #include "content/browser/cpu_performance/cpu_performance.h"
++#include "content/browser/domicile/domicile_frame_sink_broker.h"
+ #include "content/browser/download/save_file_manager.h"
+ #include "content/browser/field_trial_synchronizer.h"
+ #include "content/browser/first_party_sets/first_party_set_parser.h"
+ #include "content/browser/first_party_sets/first_party_sets_handler_impl.h"
+ #include "content/browser/gpu/browser_gpu_channel_host_factory.h"
+@@ -1501,6 +1502,18 @@ void BrowserMainLoop::PostCreateThreadsImpl() {
+   transport_factory->ConnectHostFrameSinkManager();
+   ImageTransportFactory::SetFactory(std::move(transport_factory));
+ 
++  // Domicile's producer socket, if this browser was given a path for one.
++  //
++  // It has to be open before any page embeds. A shell's page mounts an <app>
++  // element only once a window exists, no window exists until the compositor
++  // has connected over this socket, so opening it on a page's first embed is a
++  // deadlock. Nothing happens without --domicile-broker-socket. See
++  // content/browser/domicile/domicile_frame_sink_broker.h.
++  //
++  // After ImageTransportFactory::SetFactory because GetHostFrameSinkManager()
++  // reads through it.
++  StartDomicileFrameSinkBroker();
++
+ #if defined(USE_AURA)
+   env_->set_context_factory(GetContextFactory());
+ #endif  // defined(USE_AURA)

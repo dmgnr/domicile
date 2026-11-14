@@ -21,15 +21,22 @@ printf 'after\n' > "$TMP/base/file.txt"
 git -C "$TMP/base" add file.txt
 git -C "$TMP/base" commit -qm change
 git -C "$TMP/base" format-patch -1 --stdout > "$TMP/series/patches/0001.patch"
+printf 'second\n' > "$TMP/base/file.txt"
+git -C "$TMP/base" add file.txt
+git -C "$TMP/base" commit -qm second
+git -C "$TMP/base" format-patch -1 --stdout > "$TMP/series/patches/0002.patch"
+sed -e 's/^-second$/-after/' -e 's/^+second$/+ported/' "$TMP/series/patches/0002.patch" > "$TMP/overrides-0002.patch"
+mkdir -p "$TMP/overrides"
+cp "$TMP/overrides-0002.patch" "$TMP/overrides/0002.patch"
 git -C "$TMP/base" checkout -q "$BASE"
 git -C "$TMP/base" config --unset user.email
 git -C "$TMP/base" config --unset user.name
-if HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 "$SCRIPT" --fixture "$TMP/series" "$TMP/base" >"$TMP/ok.log" 2>&1; then
+if HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 "$SCRIPT" --fixture "$TMP/series" "$TMP/base" "$TMP/overrides" >"$TMP/ok.log" 2>&1; then
   :
 else
   fail "applicable fixture patch failed"
 fi
-grep -q '^after$' "$TMP/base/file.txt" || fail "fixture patch did not apply"
+grep -q '^ported$' "$TMP/base/file.txt" || fail "named patch override was not applied"
 
 # A failing first patch exits nonzero and leaves actionable diagnostics.
 git -C "$TMP/base" reset --hard -q "$BASE"
@@ -85,10 +92,10 @@ if git -C "$TMP/chromium156" apply --check "$ROOT/packages/domicile-engine/patch
   fail "original Chromium GN contexts unexpectedly apply to the 156 fixture"
 fi
 grep -q 'does not apply' "$TMP/original.log" || fail "original patch failed for a reason other than its Chromium 156 contexts"
-PORT_PATCH="$ROOT/scripts/thorium-poc/patches/0001-domicile-build-the-non-renderer-frame-sink-broker.patch"
+PORT_PATCH_DIR="$ROOT/scripts/thorium-poc/patches"
 mkdir -p "$TMP/series156/patches"
 cp "$ROOT/packages/domicile-engine/patches/0001-domicile-build-the-non-renderer-frame-sink-broker.patch" "$TMP/series156/patches/"
-HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 "$SCRIPT" --fixture "$TMP/series156" "$TMP/chromium156" "$PORT_PATCH" >"$TMP/port-check.log" 2>&1 || fail "Chromium 156 GN port does not apply"
+HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 "$SCRIPT" --fixture "$TMP/series156" "$TMP/chromium156" "$PORT_PATCH_DIR" >"$TMP/port-check.log" 2>&1 || fail "Chromium 156 GN port does not apply"
 grep -q '"//components/domicile:unit_tests",' "$TMP/chromium156/components/BUILD.gn" || fail "port omitted domicile unit test target"
 grep -q '"//components/domicile:browser",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted domicile browser target"
 grep -q '"domicile/domicile_frame_sink_broker.cc",' "$TMP/chromium156/content/browser/BUILD.gn" || fail "port omitted frame sink broker source"

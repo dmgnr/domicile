@@ -1,0 +1,310 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Sat, 5 Sep 2026 11:43:51 -0700
+Subject: [PATCH] domicile: embed a brokered surface in the page
+
+Step 3 of the spike in docs/architecture/ENGINE-FORK.md. Moves the embedder
+from the browser's own window into Blink: canvas.embedExternalSurface() points
+the cc::SurfaceLayer HTMLCanvasElement already owns at a viz surface the
+browser brokered to a producer that is not a renderer.
+
+Not killed. The canvas does not refuse a surface it did not allocate, and
+nothing under it does either: SurfaceLayerBridge::EmbedSurface() takes a
+SurfaceId and never compares it to its own frame_sink_id_, and
+cc::SurfaceLayer::SetSurfaceId() stores a SurfaceRange without looking at the
+FrameSinkId's namespace.
+
+The two halves of the SurfaceId come from opposite sides, which is
+RemoteFrame's split. The browser owns the FrameSinkId because a brokered id is
+in its own namespace, client id 0, and EmbeddedFrameSinkProvider rejects any id
+whose client id is not the calling renderer's. The page owns the
+LocalSurfaceId because it is the embedder, and the embed_token in it is the
+capability the producer needs.
+
+The renderer gets ExternalSurfaceProvider, which is one method wide and can
+only grant. A FrameSinkBroker pipe is unrestricted authority to allocate frame
+sinks in viz and stays reachable only over the named socket.
+
+Deletes step 2's stand-in embedder and, with it, the call in
+browser_main_loop.cc: the broker and its socket are now created when a page
+first asks to embed, and Embed()'s reply is held until a producer connects. An
+<app> element exists before the window behind it does.
+
+Edits seven files Chromium owns, five of them Blink's. The design doc's
+"roughly four" was optimistic and is corrected there.
+---
+ content/browser/BUILD.gn                      |  5 +-
+ ...der_process_host_impl_receiver_bindings.cc |  9 +++
+ .../core/html/canvas/html_canvas_element.cc   | 64 +++++++++++++++++++
+ .../core/html/canvas/html_canvas_element.h    | 29 +++++++++
+ .../core/html/canvas/html_canvas_element.idl  |  9 +++
+ third_party/blink/renderer/platform/BUILD.gn  |  4 ++
+ .../platform/runtime_enabled_features.json5   | 10 +++
+ 7 files changed, 129 insertions(+), 1 deletion(-)
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index f0acbd4..cf7a3be 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -162,8 +162,9 @@ source_set("browser") {
+     "//components/cbor",
+     "//components/discardable_memory/common",
+     "//components/discardable_memory/service",
+-    "//components/download/database",
+     "//components/domicile:browser",
++    "//components/domicile/spike/mojom",
++    "//components/download/database",
+     "//components/download/public/common:public",
+     "//components/embedder_support",
+     "//components/embedder_support:user_agent",
+@@ -970,8 +971,10 @@ source_set("browser") {
+     "dom_storage/session_storage_namespace_handle_impl.h",
+     "domicile/domicile_frame_sink_broker.cc",
+     "domicile/domicile_frame_sink_broker.h",
++    "domicile/domicile_spike_probe.cc",
++    "domicile/domicile_spike_probe.h",
+     "download/data_url_blob_reader.cc",
+     "download/data_url_blob_reader.h",
+     "download/download_item_utils.cc",
+     "download/download_manager_impl.cc",
+     "download/download_manager_impl.h",
+diff --git a/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc b/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
+index 203eded..eb72f30 100644
+--- a/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
++++ b/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
+@@ -16,6 +16,7 @@
+ #include "content/browser/blob_storage/blob_registry_wrapper.h"
+ #include "content/browser/blob_storage/chrome_blob_storage_context.h"
+ #include "content/browser/compositor/surface_utils.h"
++#include "content/browser/domicile/domicile_frame_sink_broker.h"
+ #include "content/browser/field_trial_recorder.h"
+ #include "content/browser/file_system/file_system_manager_impl.h"
+ #include "content/browser/gpu/gpu_data_manager_impl.h"
+@@ -181,6 +182,14 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
+           &RenderProcessHostImpl::CreateEmbeddedFrameSinkProvider,
+           instance_weak_factory_.GetWeakPtr()));
+ 
++  // Domicile's counterpart of the line above, and deliberately not a method on
++  // this class: brokering a frame sink to a producer that is not a renderer
++  // hangs off nothing a RenderProcessHost owns. What the renderer gets here is
++  // only the embedding half — see components/domicile/mojom/external_surface.mojom.
++  AddUIThreadInterface(registry.get(),
++                       base::BindRepeating(
++                           &BindDomicileExternalSurfaceProvider));
++
+   AddUIThreadInterface(
+       registry.get(),
+       base::BindRepeating(&RenderProcessHostImpl::BindCompositingModeReporter,
+diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+index 09c4ad4..f90abb8 100644
+--- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
++++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+@@ -27,6 +27,8 @@
+ 
+ #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
+ 
++#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
++
+ #include <math.h>
+ 
+ #include <limits>
+@@ -2130,6 +2132,68 @@ bool HTMLCanvasElement::CreateLayer() {
+   return true;
+ }
+ 
++ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
++    const String& app_id,
++    ScriptState* script_state,
++    ExceptionState& exception_state) {
++  LocalFrame* frame = GetDocument().GetFrame();
++  if (!frame || !frame->GetPage()) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kInvalidStateError,
++        "A frame-less canvas has no layer tree to embed into.");
++    return EmptyPromise();
++  }
++
++  // The bridge, and so the cc::SurfaceLayer under it, may already exist —
++  // transferControlToOffscreen() and a desynchronized context both build one.
++  // Embedding then would point that layer somewhere else and strand whatever
++  // was submitting to it, which is a mistake worth refusing rather than
++  // resolving in some order.
++  if (surface_layer_bridge_) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kInvalidStateError,
++        "This canvas already has a surface of its own.");
++    return EmptyPromise();
++  }
++  if (!CreateLayer()) {
++    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
++                                      "Could not create a layer.");
++    return EmptyPromise();
++  }
++
++  auto* resolver =
++      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
++  auto promise = resolver->Promise();
++
++  external_surface_embedder_ = std::make_unique<ExternalSurfaceEmbedder>();
++  external_surface_embedder_->Embed(
++      app_id,
++      frame->GetPage()->GetChromeClient().GetFrameSinkId(frame), Size(),
++      BindOnce(&HTMLCanvasElement::OnExternalSurfaceEmbedded,
++                    WrapPersistent(this), WrapPersistent(resolver)));
++  return promise;
++}
++
++void HTMLCanvasElement::OnExternalSurfaceEmbedded(
++    ScriptPromiseResolver<IDLUndefined>* resolver,
++    const std::optional<viz::SurfaceId>& surface_id) {
++  if (!surface_id) {
++    resolver->RejectWithDOMException(
++        DOMExceptionCode::kInvalidStateError,
++        "The browser brokered no surface to embed.");
++    return;
++  }
++
++  // The whole of step 3 is this call. SurfaceLayerBridge::EmbedSurface() takes
++  // a SurfaceId and does not ask whose it is — and neither does
++  // cc::SurfaceLayer::SetSurfaceId under it, which stores a SurfaceRange and
++  // checks nothing about the FrameSinkId's namespace. From here the surface is
++  // an ordinary layer: HTMLCanvasPainter records it as a foreign layer, so the
++  // page's own property trees apply to it like any other.
++  surface_layer_bridge_->EmbedSurface(*surface_id);
++  resolver->Resolve();
++}
++
+ void HTMLCanvasElement::OnWebLayerUpdated() {
+   SetNeedsCompositingUpdate();
+ }
+diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.h b/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
+index c97d6d2..96c3ecb 100644
+--- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
++++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
+@@ -47,6 +47,7 @@
+ #include "third_party/blink/renderer/platform/graphics/graphics_types_3d.h"
+ #include "third_party/blink/renderer/platform/graphics/offscreen_canvas_placeholder.h"
+ #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
++#include "third_party/blink/renderer/platform/graphics/external_surface_embedder.h"
+ #include "third_party/blink/renderer/platform/graphics/surface_layer_bridge.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+@@ -77,6 +78,8 @@ class HTMLCanvasElement;
+ class ImageBitmapOptions;
+ class StaticBitmapImageToVideoFrameCopier;
+ class SharedContextRateLimiter;
++template <typename IDLResolvedType>
++class ScriptPromiseResolver;
+ class V8UnionElementOrElementImage;
+ 
+ class
+@@ -319,6 +322,22 @@ class CORE_EXPORT HTMLCanvasElement final
+   }
+   bool CreateLayer();
+ 
++  // Fills this canvas with a viz surface a producer outside this renderer
++  // submits to, rather than with anything a rendering context drew.
++  //
++  // The canvas already owns a cc::SurfaceLayer and knows how to size, position
++  // and composite it — that is how transferControlToOffscreen() works — and the
++  // layer does not care whose surface it names. What changes is only where the
++  // SurfaceId comes from: the browser's namespace by way of
++  // ExternalSurfaceEmbedder, instead of this renderer's own.
++  //
++  // Behind RuntimeEnabledFeatures::DomicileExternalSurfaceEnabled(). Resolves
++  // when the surface is embedded, which waits for a producer to connect.
++  ScriptPromise<IDLUndefined> embedExternalSurface(
++      ScriptState* script_state,
++      const String& app_id,
++      ExceptionState& exception_state);
++
+   void DetachContext() override { context_ = nullptr; }
+ 
+   ExecutionContext* GetTopExecutionContext() const override {
+@@ -428,6 +447,12 @@ class CORE_EXPORT HTMLCanvasElement final
+   static ContextFactoryVector& RenderingContextFactories();
+   static CanvasRenderingContextFactory* GetRenderingContextFactory(int);
+ 
++  // Continuation of embedExternalSurface(), run when the browser has answered
++  // with the SurfaceId to embed.
++  void OnExternalSurfaceEmbedded(
++      ScriptPromiseResolver<IDLUndefined>* resolver,
++      const std::optional<viz::SurfaceId>& surface_id);
++
+   bool ShouldAccelerate() const;
+   void ParseAttribute(const AttributeModificationParams&) override;
+   void AttributeChanged(const AttributeModificationParams&) override;
+@@ -508,6 +533,10 @@ class CORE_EXPORT HTMLCanvasElement final
+   // and for low latency mode.
+   std::unique_ptr<::blink::SurfaceLayerBridge> surface_layer_bridge_;
+ 
++  // Used for embedExternalSurface(). Owning it here is what cancels the
++  // browser's pending reply if this canvas goes away while waiting.
++  std::unique_ptr<ExternalSurfaceEmbedder> external_surface_embedder_;
++
+   // Used for low latency mode.
+   // TODO: rename to CanvasFrameDispatcher.
+   std::unique_ptr<CanvasResourceDispatcher> frame_dispatcher_;
+diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.idl b/third_party/blink/renderer/core/html/canvas/html_canvas_element.idl
+index 30b9f85..9e5ee58 100644
+--- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.idl
++++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.idl
+@@ -55,6 +55,15 @@
+     [MeasureAs=CanvasToBlob, RaisesException] void toBlob(BlobCallback _callback, optional DOMString type = "image/png", optional any quality);
+ 
+     [RuntimeEnabled=CanvasHDR, RaisesException] void configureHighDynamicRange(CanvasHighDynamicRangeOptions options);
++
++    // Fills this canvas with a viz surface submitted to from outside the
++    // renderer, instead of with anything drawn through a rendering context.
++    // Resolves once the surface is embedded, which waits for a producer.
++    //
++    // `appId` names which window. A desktop is several of them and each has a
++    // canvas of its own; without a name every canvas would embed whichever
++    // surface was brokered last.
++    [RuntimeEnabled=DomicileExternalSurface, CallWith=ScriptState, RaisesException] Promise<undefined> embedExternalSurface(DOMString appId);
+ };
+ 
+ // https://html.spec.whatwg.org/C/#blobcallback
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index cab74e3..ef0f564 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -305,6 +305,8 @@ group("blink_platform_public_deps") {
+     "//gpu/command_buffer/common",
+     "//gpu/command_buffer/common:gles2_utils",
+     "//net",
++    "//components/domicile:synced_frame",
++    "//components/domicile/mojom:mojom_blink",
+     "//services/device/public/mojom:generic_sensor_blink",
+     "//services/device/public/mojom:mojom_blink",
+     "//services/network/public/cpp",
+@@ -1035,6 +1037,8 @@ component("platform") {
+     "graphics/draw_looper_builder.h",
+     "graphics/exported_canvas_resource.cc",
+     "graphics/exported_canvas_resource.h",
++    "graphics/external_surface_embedder.cc",
++    "graphics/external_surface_embedder.h",
+     "graphics/filters/distant_light_source.cc",
+     "graphics/filters/distant_light_source.h",
+     "graphics/filters/fe_blend.cc",
+diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+index fadf4c8..28a1b82 100644
+--- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
++++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+@@ -2753,6 +2753,16 @@
+       name: "DocumentPolicyJSProfilingMode",
+       status: "experimental",
+     },
++    // Domicile's engine fork: canvas.embedExternalSurface(), which points a
++    // <canvas>'s cc::SurfaceLayer at a viz surface the browser brokered to a
++    // compositing producer outside this renderer. Deliberately statusless, so
++    // it is off in every configuration including experimental web platform
++    // features, and on only for a browser started with
++    // --enable-blink-features=DomicileExternalSurface.
++    // See docs/architecture/ENGINE-FORK.md in the Domicile repository.
++    {
++      name: "DomicileExternalSurface",
++    },
+     {
+       name: "DocumentPolicyNegotiation",
+       origin_trial_feature_name: "DocumentPolicyNegotiation",

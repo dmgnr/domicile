@@ -1,0 +1,273 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Mon, 7 Sep 2026 21:11:02 -0700
+Subject: [PATCH] domicile: define <app> and <webview> as elements the fork
+ owns
+
+A custom element's name must contain a hyphen, per spec, so the tags the shells
+are written against -- <app> and <webview> -- cannot be customElements.define()d
+at all. They have to be elements Blink defines, the way Electron's <webview>
+was. That is what this does.
+
+<app> is the design's element, arrived at properly instead of through a canvas:
+HTMLAppElement owns a SurfaceLayerBridge and an ExternalSurfaceEmbedder, and
+LayoutAppSurface -- a LayoutReplaced -- records its cc::SurfaceLayer as a
+foreign layer, which is what puts a window in the page's own property trees.
+app-id is a reflected content attribute, the way <img src> is, so setting it in
+markup and setting it from script are one operation. The layout box is the
+configure: LayoutAppSurface::UpdateAfterLayout reports the pixel-snapped box and
+the element re-embeds at the new size, ignoring layouts that did not move it.
+
+<webview> is a frame owner, so the nested browsing context is the one <iframe>
+creates and process allocation, site isolation and navigation are Chromium's.
+It reports FrameOwnerElementType::kIframe rather than a value of its own,
+because everything that switches on the type wants to treat it as an iframe and
+adding a case to a mojom enum shared with //content would put the fork in every
+one of those switches for no behavior it wants to differ.
+
+Two gaps in <webview>, both stated in the header rather than discovered later:
+X-Frame-Options and CSP frame-ancestors apply, because a frame owner is a
+frame, so a site that refuses framing refuses to load -- that is the one thing
+Electron's guest-view <webview> bought that this does not. And goBack()/
+goForward() reach the nested context's History directly, so they work only
+while it is in this process; driving history across a process boundary is the
+browser's to do and is not done here.
+
+The generated lists this touches are the cost the design avoided by putting
+embedExternalSurface() on <canvas>. Paying it was the decision; the tags are
+what shells write.
+
+New files are untracked and live in the series' src/.
+---
+ extensions/renderer/dispatcher.cc             | 11 +++++++++-
+ .../renderer/bindings/generated_in_core.gni   |  4 ++++
+ .../blink/renderer/bindings/idl_in_core.gni   |  2 ++
+ .../core/css/resolver/style_adjuster.cc       |  9 +++++++++
+ .../blink/renderer/core/html/build.gni        |  6 ++++++
+ .../core/html/html_attribute_names.json5      |  1 +
+ .../core/html/html_frame_element_base.h       |  4 +++-
+ .../renderer/core/html/html_tag_names.json5   | 20 +++++++++++++++++++
+ .../renderer/core/html/resources/html.css     | 13 +++++++++++-
+ .../platform/graphics/paint/display_item.cc   |  1 +
+ .../platform/graphics/paint/display_item.h    |  4 +++-
+ 11 files changed, 71 insertions(+), 4 deletions(-)
+
+diff --git a/extensions/renderer/dispatcher.cc b/extensions/renderer/dispatcher.cc
+index 27280d7..0375161 100644
+--- a/extensions/renderer/dispatcher.cc
++++ b/extensions/renderer/dispatcher.cc
+@@ -1464,7 +1464,16 @@ void Dispatcher::EnableCustomElementAllowlist() {
+   blink::WebCustomElement::AddEmbedderCustomElementName("appview");
+ #endif
+   blink::WebCustomElement::AddEmbedderCustomElementName("extensionoptions");
+-  blink::WebCustomElement::AddEmbedderCustomElementName("webview");
++  // Domicile's engine fork defines <webview> as a builtin HTML tag, so it
++  // cannot also be an embedder custom element name: the two are mutually
++  // exclusive by construction, and AddEmbedderCustomElementName() DCHECKs
++  // !IsKnownBuiltinTagName() to say so. Registering it here killed every
++  // renderer at startup.
++  //
++  // The name being taken is worth stating plainly: <webview> was already
++  // Chromium's, for guest views in Chrome Apps. This engine runs no
++  // extensions and no Chrome Apps, so the fork takes the tag; a build that
++  // wanted both would have to rename one of them.
+   for (const auto& api_provider : api_providers_) {
+     api_provider->EnableCustomElementAllowlist();
+   }
+diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
+index f76fd6f..c5c679e 100644
+--- a/third_party/blink/renderer/bindings/generated_in_core.gni
++++ b/third_party/blink/renderer/bindings/generated_in_core.gni
+@@ -1204,6 +1204,10 @@ generated_interface_sources_in_core = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_frame_element.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_frame_set_element.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_frame_set_element.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_app_element.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_app_element.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_web_view_element.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_web_view_element.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
+index 39ec818..e9bf0ff 100644
+--- a/third_party/blink/renderer/bindings/idl_in_core.gni
++++ b/third_party/blink/renderer/bindings/idl_in_core.gni
+@@ -460,6 +460,8 @@ static_idl_files_in_core = [
+   "//third_party/blink/renderer/core/html/html_font_element.idl",
+   "//third_party/blink/renderer/core/html/html_frame_element.idl",
+   "//third_party/blink/renderer/core/html/html_frame_set_element.idl",
++  "//third_party/blink/renderer/core/html/domicile/html_app_element.idl",
++  "//third_party/blink/renderer/core/html/domicile/html_web_view_element.idl",
+   "//third_party/blink/renderer/core/html/html_geolocation_element.idl",
+   "//third_party/blink/renderer/core/html/html_head_element.idl",
+   "//third_party/blink/renderer/core/html/html_heading_element.idl",
+diff --git a/third_party/blink/renderer/core/css/resolver/style_adjuster.cc b/third_party/blink/renderer/core/css/resolver/style_adjuster.cc
+index 59131ab..dd97e0f 100644
+--- a/third_party/blink/renderer/core/css/resolver/style_adjuster.cc
++++ b/third_party/blink/renderer/core/css/resolver/style_adjuster.cc
+@@ -1654,11 +1654,20 @@ StyleAdjuster::ElementTypeForCache StyleAdjuster::GetElementTypeCacheKey(
+     case ElementType::kHTMLIFrameElement:
+     case ElementType::kHTMLFencedFrameElement:
+     case ElementType::kHTMLPersistentWidgetElement:
++    // Domicile's engine fork: <webview> is an HTMLFrameOwnerElement too.
++    case ElementType::kHTMLWebViewElement:
+       // HTMLFrameOwnerElement descendants have special touch-action behavior.
+       // There is also special handling of position and zoom, but this is moot,
+       // as we exclude them anyway.
+       return {ElementType::kIsNotElement};
+ 
++    case ElementType::kHTMLAppElement:
++      // Domicile's engine fork. Excluded for the same reason <canvas> is: an
++      // <app> is backed by a cc::SurfaceLayer recorded as a foreign layer, so
++      // its compositing and stacking do not follow from its computed style the
++      // way a sharable element's do.
++      return {ElementType::kIsNotElement};
++
+     case ElementType::kHTMLFrameSetElement:
+       // Special handling of position.
+       return {element.GetElementType()};
+diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
+index cc2315b..2942afd 100644
+--- a/third_party/blink/renderer/core/html/build.gni
++++ b/third_party/blink/renderer/core/html/build.gni
+@@ -98,6 +98,12 @@ blink_core_sources_html = [
+   "document_all_name_collection.h",
+   "document_name_collection.cc",
+   "document_name_collection.h",
++  "domicile/html_app_element.cc",
++  "domicile/html_app_element.h",
++  "domicile/html_web_view_element.cc",
++  "domicile/html_web_view_element.h",
++  "domicile/layout_app_surface.cc",
++  "domicile/layout_app_surface.h",
+   "fenced_frame/fence.cc",
+   "fenced_frame/fence.h",
+   "fenced_frame/fenced_frame_config.cc",
+diff --git a/third_party/blink/renderer/core/html/html_attribute_names.json5 b/third_party/blink/renderer/core/html/html_attribute_names.json5
+index e294abc..9c6d21f 100644
+--- a/third_party/blink/renderer/core/html/html_attribute_names.json5
++++ b/third_party/blink/renderer/core/html/html_attribute_names.json5
+@@ -21,6 +21,7 @@
+     "allowpaymentrequest",
+     "alpha",
+     "alt",
++    "app-id",
+     "archive",
+     "as",
+     "async",
+diff --git a/third_party/blink/renderer/core/html/html_frame_element_base.h b/third_party/blink/renderer/core/html/html_frame_element_base.h
+index 145aad8..33bbfef 100644
+--- a/third_party/blink/renderer/core/html/html_frame_element_base.h
++++ b/third_party/blink/renderer/core/html/html_frame_element_base.h
+@@ -94,10 +94,11 @@
+ template <>
+ struct DowncastTraits<HTMLFrameElementBase> {
+   static bool AllowFrom(const Node& node) {
+     auto* html_element = DynamicTo<HTMLElement>(node);
+     return html_element && AllowFrom(*html_element);
+   }
+   static bool AllowFrom(const HTMLElement& html_element) {
+     return html_element.HasTagName(html_names::kFrameTag) ||
+-           html_element.HasTagName(html_names::kIFrameTag);
++           html_element.HasTagName(html_names::kIFrameTag) ||
++           html_element.HasTagName(html_names::kWebViewTag);
+   }
+ };
+ 
+diff --git a/third_party/blink/renderer/core/html/html_tag_names.json5 b/third_party/blink/renderer/core/html/html_tag_names.json5
+index c3ef34d..42a3091 100644
+--- a/third_party/blink/renderer/core/html/html_tag_names.json5
++++ b/third_party/blink/renderer/core/html/html_tag_names.json5
+@@ -36,6 +36,17 @@
+       name: "address",
+       interfaceName: "HTMLElement",
+     },
++    {
++      // Domicile's engine fork. <app> is a window: a cc::SurfaceLayer
++      // embedding a viz surface that a Wayland compositor outside this
++      // renderer submits a client's dmabuf to. It cannot be a custom element,
++      // because a custom element's name must contain a hyphen, and the tag the
++      // shell authors write is <app>.
++      name: "app",
++      interfaceName: "HTMLAppElement",
++      interfaceHeaderDir: "third_party/blink/renderer/core/html/domicile",
++      runtimeEnabled: "DomicileExternalSurface",
++    },
+     {
+       name: "applet",
+       interfaceName: "HTMLUnknownElement",
+@@ -617,6 +628,15 @@
+       JSInterfaceName: "HTMLElement",
+       interfaceName: "HTMLWBRElement",
+     },
++    {
++      // Domicile's engine fork. <webview> is web content in a browsing context
++      // of its own, the tag Electron's shells were written against. Same
++      // reason as <app> for not being a custom element: no hyphen.
++      name: "webview",
++      interfaceName: "HTMLWebViewElement",
++      interfaceHeaderDir: "third_party/blink/renderer/core/html/domicile",
++      runtimeEnabled: "DomicileExternalSurface",
++    },
+     {
+       name: "xmp",
+       interfaceName: "HTMLPreElement",
+diff --git a/third_party/blink/renderer/core/html/resources/html.css b/third_party/blink/renderer/core/html/resources/html.css
+index 58adaaf..64b6158 100644
+--- a/third_party/blink/renderer/core/html/resources/html.css
++++ b/third_party/blink/renderer/core/html/resources/html.css
+@@ -177,7 +177,7 @@ video, canvas, img {
+   overflow-clip-margin: content-box;
+ }
+ 
+-iframe, embed, object, fencedframe {
++iframe, embed, object, fencedframe, webview {
+    overflow: clip !important;
+    overflow-clip-margin: content-box !important;
+ }
+@@ -1899,6 +1899,17 @@ iframe {
+     border: 2px inset
+ }
+ 
++/* Domicile's engine fork. Both are replaced elements, so they take a box the
++   way an <img> does; neither gets a border, because a shell draws its own
++   chrome and a default frame border would be inside the window. */
++app {
++    display: inline-block
++}
++
++webview {
++    display: inline-block
++}
++
+ fencedframe {
+     border: 2px inset;
+     object-fit: contain !important;
+diff --git a/third_party/blink/renderer/platform/graphics/paint/display_item.cc b/third_party/blink/renderer/platform/graphics/paint/display_item.cc
+index 9566d34..402e9cb 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/display_item.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/display_item.cc
+@@ -167,6 +167,7 @@ static String ForeignLayerTypeAsDebugString(DisplayItem::Type type) {
+     DEBUG_STRING_CASE(ForeignLayerViewportScroll);
+     DEBUG_STRING_CASE(ForeignLayerViewportScrollbar);
+     DEBUG_STRING_CASE(ForeignLayerViewTransitionContent);
++    DEBUG_STRING_CASE(ForeignLayerAppSurface);
+     DEFAULT_CASE;
+   }
+ }
+diff --git a/third_party/blink/renderer/platform/graphics/paint/display_item.h b/third_party/blink/renderer/platform/graphics/paint/display_item.h
+index fe4a5a8..f79c414 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/display_item.h
++++ b/third_party/blink/renderer/platform/graphics/paint/display_item.h
+@@ -105,7 +105,9 @@ class PLATFORM_EXPORT DisplayItem {
+     kForeignLayerViewportScroll,
+     kForeignLayerViewportScrollbar,
+     kForeignLayerViewTransitionContent,
+-    kForeignLayerLast = kForeignLayerViewTransitionContent,
++    // Domicile's engine fork: an <app>'s window.
++    kForeignLayerAppSurface,
++    kForeignLayerLast = kForeignLayerAppSurface,
+ 
+     kClipPaintPhaseFirst,
+     kClipPaintPhaseLast = kClipPaintPhaseFirst + kPaintPhaseMax,
