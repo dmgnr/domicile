@@ -106,14 +106,7 @@ else
   python3 "$THORIUM_ROOT/patch_scripts/series/apply_series.py" \
     --thorium-root "$THORIUM_ROOT" --source-tree "$CHROMIUM_SRC" --apply
 fi
-shopt -s nullglob
-domicile=()
-for patch in "$DOMICILE_PATCHES"/*.patch; do domicile+=("$patch"); done
-((${#domicile[@]} > 0)) || { echo "Domicile port patch series is empty" >&2; exit 1; }
-for patch in "${domicile[@]}"; do
-  git -C "$CHROMIUM_SRC" apply --3way "$patch" || { echo "Domicile/Thorium overlap needs an explicit port: $(basename "$patch")" >&2; exit 1; }
-  echo "Applied Domicile $(basename "$patch") after Thorium"
-done
+"$ROOT/scripts/thorium-poc/apply-domicile-ports.sh" --root "$CHROMIUM_SRC" --patches "$DOMICILE_PATCHES"
 if [[ "$FIXTURE" == true ]]; then
   [[ ${#REQUIRED_GRD[@]} -eq 0 ]] || { echo "required GRD stage inputs are missing: ${REQUIRED_GRD[*]}" >&2; exit 1; }
 else
