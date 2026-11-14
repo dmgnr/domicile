@@ -13,13 +13,16 @@ jobs:
   source-patch-preflight:
     if: github.repository == 'dmgnr/domicile'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out Domicile
         uses: actions/checkout@v4
 
       - name: Test the preflight against synthetic patch fixtures
         run: scripts/thorium-poc/tests/test-preflight.sh
+
+      - name: Test Thorium integration ordering and required-stage failures
+        run: scripts/thorium-poc/tests/test-integration.sh
 
       - name: Apply the Domicile patch series to pinned Chromium 156
         id: preflight
@@ -37,6 +40,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Apply pinned Thorium and Domicile source layers
+        id: integration
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          scripts/thorium-poc/integrate.sh 2>&1 | tee "$RUNNER_TEMP/thorium-poc-integration.log"
+
+      - name: Preserve integration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thorium-poc-source-integration
+          path: ${{ runner.temp }}/thorium-poc-integration.log
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Report preflight result
-        if: steps.preflight.outcome == 'failure'
+        if: steps.preflight.outcome == 'failure' || steps.integration.outcome == 'failure'
         run: exit 1
