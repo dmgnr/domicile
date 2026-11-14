@@ -1,0 +1,1322 @@
+From 53163904f0d26a0ce209af6c3e3e2cbfca456e6e Mon Sep 17 00:00:00 2001
+From: OpenCode <opencode@localhost>
+Date: Sat, 14 Nov 2026 18:50:43 +0700
+Subject: [PATCH] domicile: share libinput devices and native typing
+
+---
+ ui/events/ozone/evdev/BUILD.gn                |   4 +
+ ui/events/ozone/evdev/event_converter_evdev.h |   4 +-
+ .../ozone/evdev/event_converter_evdev_impl.h  |   7 +-
+ .../event_converter_evdev_impl_unittest.cc    |  51 ++++
+ ui/events/ozone/evdev/event_device_info.cc    |   7 +-
+ .../ozone/evdev/event_device_info_unittest.cc |  26 ++
+ .../ozone/evdev/input_device_factory_evdev.cc |  37 ++-
+ .../ozone/evdev/input_device_factory_evdev.h  |   9 +
+ .../input_device_factory_evdev_unittest.cc    | 108 ++++++-
+ ui/events/ozone/evdev/input_device_opener.h   |   7 +
+ .../ozone/evdev/input_device_opener_evdev.cc  |  45 +--
+ .../ozone/evdev/libinput_event_converter.cc   | 269 ++++++------------
+ .../ozone/evdev/libinput_event_converter.h    |  87 ++----
+ ui/ozone/platform/drm/BUILD.gn                | 113 ++++----
+ 14 files changed, 439 insertions(+), 335 deletions(-)
+
+diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
+index 1d369b8d1..8247f44ae 100644
+--- a/ui/events/ozone/evdev/BUILD.gn
++++ b/ui/events/ozone/evdev/BUILD.gn
+@@ -216,6 +216,10 @@ component("evdev") {
+     public_configs += [ ":libinput_config" ]
+ 
+     sources += [
++      "domicile/libinput_keyboard_event_converter.cc",
++      "domicile/libinput_keyboard_event_converter.h",
++      "domicile/libinput_seat.cc",
++      "domicile/libinput_seat.h",
+       "libinput_event_converter.cc",
+       "libinput_event_converter.h",
+     ]
+diff --git a/ui/events/ozone/evdev/event_converter_evdev.h b/ui/events/ozone/evdev/event_converter_evdev.h
+index 347de4d5a..46e2e1e0e 100644
+--- a/ui/events/ozone/evdev/event_converter_evdev.h
++++ b/ui/events/ozone/evdev/event_converter_evdev.h
+@@ -76,10 +76,10 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdev
+   virtual void ApplyDeviceSettings(const InputDeviceSettingsEvdev& settings);
+ 
+   // Start reading events.
+-  void Start();
++  virtual void Start();
+ 
+   // Stop reading events.
+-  void Stop();
++  virtual void Stop();
+ 
+   // Enable or disable this device. A disabled device still polls for
+   // input and can update state but must not dispatch any events to UI.
+diff --git a/ui/events/ozone/evdev/event_converter_evdev_impl.h b/ui/events/ozone/evdev/event_converter_evdev_impl.h
+index c1277331c..1d81fd7a7 100644
+--- a/ui/events/ozone/evdev/event_converter_evdev_impl.h
++++ b/ui/events/ozone/evdev/event_converter_evdev_impl.h
+@@ -69,6 +69,10 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
+ 
+   std::ostream& DescribeForLog(std::ostream& os) const override;
+ 
++ protected:
++  // Shared libinput keyboard adapters keep the existing typing notification.
++  void SetTypingGuard(TypingGuard* guard) override;
++
+  private:
+   void ConvertKeyEvent(const input_event& input);
+   void ConvertMouseMoveEvent(const input_event& input);
+@@ -93,9 +97,6 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
+   void SetReceivedValidInputCallback(
+       ReceivedValidInputCallback callback) override;
+ 
+-  // DOMICILE: this keyboard's keys rest the touchpads.
+-  void SetTypingGuard(TypingGuard* guard) override;
+-
+   // Input device file descriptor.
+   const base::ScopedFD input_device_fd_;
+ 
+diff --git a/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc b/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc
+index 5c81ab388..30ffa0bff 100644
+--- a/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc
++++ b/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc
+@@ -25,6 +25,9 @@
+ #include "ui/events/ozone/evdev/event_device_test_util.h"
+ #include "ui/events/ozone/evdev/event_factory_evdev.h"
+ #include "ui/events/ozone/evdev/keyboard_evdev.h"
++#if defined(USE_LIBINPUT)
++#include "ui/events/ozone/evdev/domicile/libinput_keyboard_event_converter.h"
++#endif
+ #include "ui/events/ozone/evdev/testing/fake_cursor_delegate_evdev.h"
+ #include "ui/events/ozone/features.h"
+ #include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
+@@ -342,6 +345,54 @@ TEST_F(EventConverterEvdevImplTest, BlockTelephonyMicMuteKeyByDefault) {
+   EXPECT_EQ(0u, size());
+ }
+ 
++#if defined(USE_LIBINPUT)
++using LibInputKeyboardPathTest = EventConverterEvdevImplTest;
++
++TEST_F(LibInputKeyboardPathTest, NativeMicMuteUsesItsKeycodeWithoutAScanCode) {
++  const auto key =
++      ui::LibInputKeyboardKey(KEY_MICMUTE, true, base::TimeTicks());
++  device()->ProcessEvents(&key, 1);
++  ASSERT_EQ(size(), 1u);
++  EXPECT_EQ(dispatched_event(0)->type(), ui::EventType::kKeyPressed);
++  EXPECT_EQ(dispatched_event(0)->key_code(), ui::VKEY_MICROPHONE_MUTE_TOGGLE);
++  EXPECT_EQ(dispatched_event(0)->scan_code(), 0u);
++  device()->SetEnabled(false);
++  ASSERT_EQ(size(), 2u);
++  EXPECT_EQ(dispatched_event(1)->type(), ui::EventType::kKeyReleased);
++  EXPECT_EQ(dispatched_event(1)->key_code(), ui::VKEY_MICROPHONE_MUTE_TOGGLE);
++}
++
++TEST_F(LibInputKeyboardPathTest, NativeKeysKeepFiltersTimeAndReleaseState) {
++  SetTestNowSeconds(2);
++  const auto timestamp = base::TimeTicks() + base::Microseconds(1234567);
++  device()->SetKeyFilter(true, {ui::DomCode::BACKSPACE});
++  for (const auto& input :
++       {ui::LibInputKeyboardKey(KEY_A, true, timestamp),
++        ui::LibInputKeyboardKey(KEY_BACKSPACE, true, timestamp),
++        ui::LibInputKeyboardKey(KEY_BACKSPACE, true, timestamp)}) {
++    device()->ProcessEvents(&input, 1);
++  }
++  ASSERT_EQ(size(), 1u);
++  EXPECT_EQ(dispatched_event(0)->type(), ui::EventType::kKeyPressed);
++  EXPECT_EQ(dispatched_event(0)->key_code(), ui::VKEY_BACK);
++  EXPECT_EQ(dispatched_event(0)->time_stamp(), timestamp);
++  EXPECT_EQ(dispatched_event(0)->scan_code(), 0u);
++
++  device()->SetKeyFilter(false, {});
++  device()->SetBlockModifiers(true);
++  const auto modifier = ui::LibInputKeyboardKey(KEY_LEFTSHIFT, true, timestamp);
++  device()->ProcessEvents(&modifier, 1);
++  EXPECT_EQ(size(), 1u);
++
++  device()->SetEnabled(false);
++  ASSERT_EQ(size(), 2u);
++  EXPECT_EQ(dispatched_event(1)->type(), ui::EventType::kKeyReleased);
++  EXPECT_EQ(dispatched_event(1)->key_code(), ui::VKEY_BACK);
++  device()->SetEnabled(false);
++  EXPECT_EQ(size(), 2u);
++}
++#endif
++
+ TEST_F(EventConverterEvdevImplTest, KeyPress) {
+   ui::MockEventConverterEvdevImpl* dev = device();
+ 
+diff --git a/ui/events/ozone/evdev/event_device_info.cc b/ui/events/ozone/evdev/event_device_info.cc
+index 96c62fc0e..3bd2ef381 100644
+--- a/ui/events/ozone/evdev/event_device_info.cc
++++ b/ui/events/ozone/evdev/event_device_info.cc
+@@ -804,10 +804,9 @@ bool EventDeviceInfo::UseLibinput() const {
+     }
+   }
+ 
+-  // A mouse left to `EventConverterEvdevImpl` is raw: one count to one pixel,
+-  // no acceleration, and no `REL_WHEEL` case at all. A node that is also a
+-  // keyboard stays there, because libinput's converter reads no keys.
+-  if (HasMouse() && !HasKeyboard()) {
++  // Relative pointers share libinput acceleration and scrolling, including
++  // devices that also expose keyboard keys.
++  if (HasMouse() || HasPointingStick()) {
+     useLibinput = base::FeatureList::IsEnabled(ui::kLibinputHandleMouse);
+   }
+ 
+diff --git a/ui/events/ozone/evdev/event_device_info_unittest.cc b/ui/events/ozone/evdev/event_device_info_unittest.cc
+index e2bba9e7c..56ed50299 100644
+--- a/ui/events/ozone/evdev/event_device_info_unittest.cc
++++ b/ui/events/ozone/evdev/event_device_info_unittest.cc
+@@ -8,10 +8,12 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
++#include "base/test/scoped_feature_list.h"
+ #include "event_device_test_util.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/events/ozone/evdev/event_device_test_util.h"
+ #include "ui/events/ozone/evdev/event_device_util.h"
++#include "ui/events/ozone/features.h"
+ 
+ namespace ui {
+ 
+@@ -132,6 +134,18 @@ TEST(EventDeviceInfoTest, BasicCrosPointingStick) {
+   EXPECT_FALSE(devinfo.HasKeyboard());
+   EXPECT_FALSE(devinfo.HasMouse());
+   EXPECT_TRUE(devinfo.HasPointingStick());
++#if defined(USE_LIBINPUT)
++  {
++    base::test::ScopedFeatureList features;
++    features.InitAndEnableFeature(kLibinputHandleMouse);
++    EXPECT_TRUE(devinfo.UseLibinput());
++  }
++  {
++    base::test::ScopedFeatureList features;
++    features.InitAndDisableFeature(kLibinputHandleMouse);
++    EXPECT_FALSE(devinfo.UseLibinput());
++  }
++#endif
+   EXPECT_FALSE(devinfo.HasTouchpad());
+   EXPECT_FALSE(devinfo.HasHapticTouchpad());
+   EXPECT_FALSE(devinfo.HasTouchscreen());
+@@ -255,6 +269,18 @@ TEST(EventDeviceInfoTest, HybridKeyboardWithMouse) {
+   // The touchpad actually exposes mouse (relative) Events.
+   EXPECT_TRUE(devinfo.HasKeyboard());
+   EXPECT_TRUE(devinfo.HasMouse());
++#if defined(USE_LIBINPUT)
++  {
++    base::test::ScopedFeatureList features;
++    features.InitAndEnableFeature(kLibinputHandleMouse);
++    EXPECT_TRUE(devinfo.UseLibinput());
++  }
++  {
++    base::test::ScopedFeatureList features;
++    features.InitAndDisableFeature(kLibinputHandleMouse);
++    EXPECT_FALSE(devinfo.UseLibinput());
++  }
++#endif
+   EXPECT_FALSE(devinfo.HasPointingStick());
+   EXPECT_FALSE(devinfo.HasTouchpad());
+   EXPECT_FALSE(devinfo.HasHapticTouchpad());
+diff --git a/ui/events/ozone/evdev/input_device_factory_evdev.cc b/ui/events/ozone/evdev/input_device_factory_evdev.cc
+index 0dcbb5a4e..086e1bac6 100644
+--- a/ui/events/ozone/evdev/input_device_factory_evdev.cc
++++ b/ui/events/ozone/evdev/input_device_factory_evdev.cc
+@@ -51,6 +51,7 @@
+ #endif
+ 
+ #if defined(USE_LIBINPUT)
++#include "ui/events/ozone/evdev/domicile/libinput_seat.h"
+ #include "ui/events/ozone/evdev/libinput_event_converter.h"
+ #endif
+ 
+@@ -110,6 +111,9 @@ InputDeviceFactoryEvdev::InputDeviceFactoryEvdev(
+       dispatcher_(std::move(dispatcher)),
+       keyboard_used_palm_suppression_enabled_(
+           base::FeatureList::IsEnabled(kEnableKeyboardUsedPalmSuppression)),
++#if defined(USE_LIBINPUT)
++      libinput_seat_(std::make_unique<LibInputSeat>()),
++#endif
+       imposter_checker_(new ImposterCheckerEvdev()),
+       input_device_opener_(std::move(input_device_opener)),
+       input_controller_(input_controller) {
+@@ -127,8 +131,10 @@ InputDeviceFactoryEvdev::InputDeviceFactoryEvdev(
+   // later, which would leave the dead converter watching in between.
+   input_device_opener_->SetDeviceReopener(base::BindRepeating(
+       [](InputDeviceFactoryEvdev* factory, int id, const base::FilePath& path) {
+-        factory->RemoveInputDevice(path);
+-        factory->AddInputDevice(id, path);
++        if (factory->open_requests_.contains(path)) {
++          factory->RemoveInputDevice(path);
++          factory->AddInputDevice(id, path);
++        }
+       },
+       base::Unretained(this)));
+ }
+@@ -137,7 +143,24 @@ InputDeviceFactoryEvdev::~InputDeviceFactoryEvdev() = default;
+ 
+ void InputDeviceFactoryEvdev::AddInputDevice(int id,
+                                              const base::FilePath& path) {
++  DetachInputDevice(path);
++  const auto request = base::UnguessableToken::Create();
++  open_requests_.insert_or_assign(path, request);
+   OpenInputDeviceParams params;
++  params.is_current = base::BindRepeating(
++      [](base::WeakPtr<InputDeviceFactoryEvdev> factory,
++         const base::FilePath& path, base::UnguessableToken request) {
++        if (factory) {
++          const auto current = factory->open_requests_.find(path);
++          return current != factory->open_requests_.end() &&
++                 current->second == request;
++        }
++        return false;
++      },
++      weak_ptr_factory_.GetWeakPtr(), path, request);
++#if defined(USE_LIBINPUT)
++  params.libinput_seat = libinput_seat_.get();
++#endif
+   params.id = id;
+   params.path = path;
+   params.cursor = cursor_;
+@@ -150,15 +173,15 @@ void InputDeviceFactoryEvdev::AddInputDevice(int id,
+ 
+   ++pending_device_changes_;
+ 
+-  // DOMICILE: the opener may answer later, so the attach is its answer.
+-  // Posted either way, as it always was.
++  // The opener answers on this sequence. Attach before another open can
++  // register the same path with the shared libinput seat.
+   input_device_opener_->OpenInputDevice(
+-      params, base::BindPostTaskToCurrentDefault(
+-                  base::BindOnce(&InputDeviceFactoryEvdev::AttachInputDevice,
+-                                 weak_ptr_factory_.GetWeakPtr())));
++      params, base::BindOnce(&InputDeviceFactoryEvdev::AttachInputDevice,
++                             weak_ptr_factory_.GetWeakPtr()));
+ }
+ 
+ void InputDeviceFactoryEvdev::RemoveInputDevice(const base::FilePath& path) {
++  open_requests_.erase(path);
+   DetachInputDevice(path);
+ }
+ 
+diff --git a/ui/events/ozone/evdev/input_device_factory_evdev.h b/ui/events/ozone/evdev/input_device_factory_evdev.h
+index fe69e37ee..19c46e882 100644
+--- a/ui/events/ozone/evdev/input_device_factory_evdev.h
++++ b/ui/events/ozone/evdev/input_device_factory_evdev.h
+@@ -17,6 +17,7 @@
+ #include "base/memory/weak_ptr.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
++#include "base/unguessable_token.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "ui/events/devices/haptic_touchpad_effects.h"
+ #include "ui/events/ozone/evdev/domicile/typing_guard.h"
+@@ -37,6 +38,8 @@
+ 
+ namespace ui {
+ 
++class LibInputSeat;
++
+ class CursorDelegateEvdev;
+ class DeviceEventDispatcherEvdev;
+ struct InProgressStylusState;
+@@ -219,6 +222,12 @@ class COMPONENT_EXPORT(EVDEV) InputDeviceFactoryEvdev {
+   // types. Declared before `converters_`, which point at it.
+   TypingGuard typing_guard_;
+ 
++#if defined(USE_LIBINPUT)
++  // Outlives the converters that subscribe to its device events.
++  std::unique_ptr<LibInputSeat> libinput_seat_;
++#endif
++  std::map<base::FilePath, base::UnguessableToken> open_requests_;
++
+   // Checks if a device is mis-identifying as another device.
+   const std::unique_ptr<ImposterCheckerEvdev> imposter_checker_;
+ 
+diff --git a/ui/events/ozone/evdev/input_device_factory_evdev_unittest.cc b/ui/events/ozone/evdev/input_device_factory_evdev_unittest.cc
+index 846b13af2..7421178cb 100644
+--- a/ui/events/ozone/evdev/input_device_factory_evdev_unittest.cc
++++ b/ui/events/ozone/evdev/input_device_factory_evdev_unittest.cc
+@@ -15,6 +15,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/test/bind.h"
+ #include "base/test/metrics/histogram_tester.h"
++#include "base/test/mock_log.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/task_environment.h"
+ #include "testing/gmock/include/gmock/gmock.h"
+@@ -29,6 +30,7 @@
+ #include "ui/events/ozone/evdev/input_controller_evdev.h"
+ #include "ui/events/ozone/evdev/input_device_factory_evdev_metrics.h"
+ #include "ui/events/ozone/evdev/input_device_opener.h"
++#include "ui/events/ozone/evdev/input_device_opener_evdev.h"
+ #include "ui/events/ozone/features.h"
+ 
+ using ::testing::AllOf;
+@@ -168,7 +170,8 @@ class StubDeviceEventDispatcherEvdev : public DeviceEventDispatcherEvdev {
+       const std::vector<InputDevice>& devices) override {}
+   void DispatchUncategorizedDevicesUpdated(
+       const std::vector<InputDevice>& devices) override {}
+-  void DispatchDeviceListsComplete() override {}
++  void DispatchDeviceListsComplete() override { ++complete_count_; }
++  unsigned complete_count() const { return complete_count_; }
+   void DispatchStylusStateChanged(StylusState stylus_state) override {}
+   void DispatchAnyKeysPressedUpdated(bool any) override {}
+ 
+@@ -179,6 +182,7 @@ class StubDeviceEventDispatcherEvdev : public DeviceEventDispatcherEvdev {
+       base::flat_map<int, std::vector<uint64_t>> key_bits_mapping) override {}
+ 
+  private:
++  unsigned complete_count_ = 0;
+   base::RepeatingCallback<void(const std::vector<KeyboardDevice>& devices)>
+       keyboard_callback_;
+   base::RepeatingCallback<void(const std::vector<InputDevice>& devices)>
+@@ -202,6 +206,38 @@ class FakeInputDeviceOpenerEvdev : public InputDeviceOpener {
+   }
+ };
+ 
++class DeferredInputDeviceOpenerEvdev : public InputDeviceOpenerEvdev {
++ public:
++  void Complete(size_t index, base::ScopedFD fd) {
++    std::move(opened_[index]).Run(std::move(fd));
++  }
++
++ protected:
++  void OpenDeviceFd(const OpenInputDeviceParams&,
++                    OpenedDeviceFd opened) override {
++    opened_.push_back(std::move(opened));
++  }
++
++ private:
++  std::vector<OpenedDeviceFd> opened_;
++};
++
++class ReopeningInputDeviceOpenerEvdev : public InputDeviceOpener {
++ public:
++  void OpenInputDevice(const OpenInputDeviceParams&,
++                       OpenInputDeviceCallback opened) override {
++    ++open_count_;
++    std::move(opened).Run(nullptr);
++  }
++  void Reopen(int id, const base::FilePath& path) {
++    reopen_device().Run(id, path);
++  }
++  unsigned open_count() const { return open_count_; }
++
++ private:
++  unsigned open_count_ = 0;
++};
++
+ class InputDeviceFactoryEvdevTest : public testing::Test {
+  public:
+   InputDeviceFactoryEvdevTest() = default;
+@@ -272,6 +308,76 @@ class InputDeviceFactoryEvdevTest : public testing::Test {
+   base::RunLoop fetch_run_loop_;
+ };
+ 
++using InputDeviceOpenCancellationTest = InputDeviceFactoryEvdevTest;
++
++TEST_F(InputDeviceOpenCancellationTest,
++       RemovedDevicesCancelBeforeInspectingTheDescriptor) {
++  auto opener = std::make_unique<DeferredInputDeviceOpenerEvdev>();
++  auto* pending = opener.get();
++  auto* dispatcher =
++      static_cast<StubDeviceEventDispatcherEvdev*>(dispatcher_.get());
++  InputDeviceFactoryEvdev factory(std::move(dispatcher_), nullptr,
++                                  std::move(opener), &input_controller_);
++  const base::FilePath path("/dev/input/canceled-keyboard");
++  factory.AddInputDevice(1, path);
++  factory.OnStartupScanComplete();
++  factory.RemoveInputDevice(path);
++
++  base::ScopedFD read_fd, write_fd;
++  ASSERT_TRUE(base::CreatePipe(&read_fd, &write_fd));
++  base::test::MockLog log;
++  EXPECT_CALL(log, Log(logging::LOGGING_ERROR, testing::_, testing::_,
++                       testing::_, testing::_))
++      .Times(0);
++  log.StartCapturingLogs();
++  pending->Complete(0, std::move(read_fd));
++  task_environment.RunUntilIdle();
++  log.StopCapturingLogs();
++  EXPECT_EQ(dispatcher->complete_count(), 1u);
++  EXPECT_TRUE(keyboards_.empty());
++}
++
++TEST_F(InputDeviceOpenCancellationTest, RemovedDevicesIgnoreALateReopen) {
++  auto opener = std::make_unique<ReopeningInputDeviceOpenerEvdev>();
++  auto* reopening = opener.get();
++  InputDeviceFactoryEvdev factory(std::move(dispatcher_), nullptr,
++                                  std::move(opener), &input_controller_);
++  const base::FilePath path("/dev/input/removed-keyboard");
++  factory.AddInputDevice(1, path);
++  factory.RemoveInputDevice(path);
++  reopening->Reopen(1, path);
++  task_environment.RunUntilIdle();
++  EXPECT_EQ(reopening->open_count(), 1u);
++}
++
++TEST_F(InputDeviceOpenCancellationTest,
++       SupersededOpensCancelBeforeInspectingTheDescriptor) {
++  auto opener = std::make_unique<DeferredInputDeviceOpenerEvdev>();
++  auto* pending = opener.get();
++  auto* dispatcher =
++      static_cast<StubDeviceEventDispatcherEvdev*>(dispatcher_.get());
++  InputDeviceFactoryEvdev factory(std::move(dispatcher_), nullptr,
++                                  std::move(opener), &input_controller_);
++  const base::FilePath path("/dev/input/replaced-keyboard");
++  factory.AddInputDevice(1, path);
++  factory.AddInputDevice(2, path);
++  factory.OnStartupScanComplete();
++
++  base::ScopedFD read_fd, write_fd;
++  ASSERT_TRUE(base::CreatePipe(&read_fd, &write_fd));
++  base::test::MockLog log;
++  EXPECT_CALL(log, Log(logging::LOGGING_ERROR, testing::_, testing::_,
++                       testing::_, testing::_))
++      .Times(0);
++  log.StartCapturingLogs();
++  pending->Complete(0, std::move(read_fd));
++  pending->Complete(1, base::ScopedFD());
++  task_environment.RunUntilIdle();
++  log.StopCapturingLogs();
++  EXPECT_EQ(dispatcher->complete_count(), 1u);
++  EXPECT_TRUE(keyboards_.empty());
++}
++
+ TEST_F(InputDeviceFactoryEvdevTest,
+        AttachSingularKeyboardFakeKeyboardHeuristicEnabled) {
+   scoped_feature_list_.InitAndEnableFeature(kEnableFakeKeyboardHeuristic);
+diff --git a/ui/events/ozone/evdev/input_device_opener.h b/ui/events/ozone/evdev/input_device_opener.h
+index ce0052b9e..7c7be270e 100644
+--- a/ui/events/ozone/evdev/input_device_opener.h
++++ b/ui/events/ozone/evdev/input_device_opener.h
+@@ -22,6 +22,7 @@ namespace ui {
+ 
+ class CursorDelegateEvdev;
+ class DeviceEventDispatcherEvdev;
++class LibInputSeat;
+ 
+ struct OpenInputDeviceParams {
+   // Unique identifier for the new device.
+@@ -30,6 +31,12 @@ struct OpenInputDeviceParams {
+   // Device path to open.
+   base::FilePath path;
+ 
++  // Cancels a late descriptor reply after removal or a newer open request.
++  base::RepeatingCallback<bool()> is_current;
++#if defined(USE_LIBINPUT)
++  raw_ptr<LibInputSeat> libinput_seat = nullptr;
++#endif
++
+   // Dispatcher for events.
+   raw_ptr<DeviceEventDispatcherEvdev> dispatcher;
+ 
+diff --git a/ui/events/ozone/evdev/input_device_opener_evdev.cc b/ui/events/ozone/evdev/input_device_opener_evdev.cc
+index 1102a9e6f..994e03c52 100644
+--- a/ui/events/ozone/evdev/input_device_opener_evdev.cc
++++ b/ui/events/ozone/evdev/input_device_opener_evdev.cc
+@@ -31,6 +31,7 @@
+ #endif
+ 
+ #if defined(USE_LIBINPUT)
++#include "ui/events/ozone/evdev/domicile/libinput_keyboard_event_converter.h"
+ #include "ui/events/ozone/evdev/libinput_event_converter.h"
+ #endif
+ 
+@@ -47,15 +48,13 @@ std::unique_ptr<EventConverterEvdev> CreateConverter(
+     base::ScopedFD fd,
+     const EventDeviceInfo& devinfo) {
+ #if defined(USE_LIBINPUT)
+-  // Use LibInputEventConverter for odd touchpads
++  // Pointer converters also handle keyboard events on composite devices.
+   if (devinfo.UseLibinput()) {
+-    // THE DESCRIPTOR GOES WITH IT. Every other converter below is handed the
+-    // `fd` this function was called with; this branch used to drop it and let
+-    // libinput open the path itself, which on a console is the one thing that
+-    // cannot work -- see `LibInputContext::OpenRestricted`.
+-    return LibInputEventConverter::Create(std::move(fd), params.path, params.id,
+-                                          devinfo, params.cursor,
+-                                          params.dispatcher);
++    // The seat duplicates the authorized descriptor; it never opens a node
++    // by name.
++    return LibInputEventConverter::Create(*params.libinput_seat, std::move(fd),
++                                          params.path, params.id, devinfo,
++                                          params.cursor, params.dispatcher);
+   }
+ #endif
+ 
+@@ -112,6 +111,16 @@ std::unique_ptr<EventConverterEvdev> CreateConverter(
+         std::move(fd), params.path, params.id, devinfo, params.dispatcher);
+   }
+ 
++#if defined(USE_LIBINPUT)
++  // Keep specialized converters and an explicitly disabled pointer backend.
++  if (devinfo.HasKeyboard() && !devinfo.HasMouse() &&
++      !devinfo.HasPointingStick() && !devinfo.HasTouchpad()) {
++    return LibInputKeyboardEventConverter::Create(
++        *params.libinput_seat, std::move(fd), params.path, params.id, devinfo,
++        params.cursor, params.dispatcher);
++  }
++#endif
++
+   // Everything else: use EventConverterEvdevImpl.
+   return std::make_unique<EventConverterEvdevImpl>(
+       std::move(fd), params.path, params.id, devinfo, params.cursor,
+@@ -149,14 +158,18 @@ void InputDeviceOpenerEvdev::OpenInputDevice(const OpenInputDeviceParams& params
+                                              OpenInputDeviceCallback opened) {
+   TRACE_EVENT1("evdev", "OpenInputDevice", "path", params.path.value());
+ 
+-  OpenDeviceFd(params, base::BindOnce(
+-                           [](const OpenInputDeviceParams& params,
+-                              OpenInputDeviceCallback opened,
+-                              base::ScopedFD fd) {
+-                             std::move(opened).Run(
+-                                 ConvertOpenedDevice(params, std::move(fd)));
+-                           },
+-                           params, std::move(opened)));
++  OpenDeviceFd(
++      params,
++      base::BindOnce(
++          [](const OpenInputDeviceParams& params,
++             OpenInputDeviceCallback opened, base::ScopedFD fd) {
++            if (params.is_current && !params.is_current.Run()) {
++              std::move(opened).Run(nullptr);
++            } else {
++              std::move(opened).Run(ConvertOpenedDevice(params, std::move(fd)));
++            }
++          },
++          params, std::move(opened)));
+ }
+ 
+ void InputDeviceOpenerEvdev::OpenDeviceFd(const OpenInputDeviceParams& params,
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.cc b/ui/events/ozone/evdev/libinput_event_converter.cc
+index f23b82492..88cf4c573 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.cc
++++ b/ui/events/ozone/evdev/libinput_event_converter.cc
+@@ -4,23 +4,19 @@
+ 
+ #include "ui/events/ozone/evdev/libinput_event_converter.h"
+ 
+-#include <errno.h>
+-#include <fcntl.h>
+-
+ #include <array>
+ #include <memory>
+ #include <ostream>
+ #include <string>
+ #include <utility>
+ 
+-#include "base/compiler_specific.h"
+ #include "base/logging.h"
+ #include "base/notreached.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/strings/string_util.h"
+-#include "base/strings/stringprintf.h"
+ #include "ui/events/ozone/evdev/cursor_delegate_evdev.h"
+ #include "ui/events/ozone/evdev/device_event_dispatcher_evdev.h"
++#include "ui/events/ozone/evdev/domicile/libinput_seat.h"
+ #include "ui/events/ozone/evdev/domicile/scroll_accelerator.h"
+ #include "ui/events/ozone/evdev/domicile/scroll_factor.h"
+ #include "ui/events/ozone/evdev/domicile/wheel_ticks.h"
+@@ -66,11 +62,7 @@ LibInputEventConverter::LibInputEvent::LibInputEvent(
+     libinput_event* const event)
+     : event_(event) {}
+ 
+-LibInputEventConverter::LibInputEvent::~LibInputEvent() {
+-  if (event_) {
+-    libinput_event_destroy(event_.ExtractAsDangling());
+-  }
+-}
++LibInputEventConverter::LibInputEvent::~LibInputEvent() = default;
+ 
+ libinput_event_pointer* LibInputEventConverter::LibInputEvent::PointerEvent()
+     const {
+@@ -113,6 +105,15 @@ void LibInputEventConverter::LibInputDevice::ApplySettings(
+     const InputDeviceSettingsEvdev& settings) const {
+   const auto& pad = settings.domicile_input.touchpad;
+   ApplyCommonSettings(pad);
++  const bool native_typing =
++      pad.disable_while_typing == DomicileTypingPolicy::kLibinput &&
++      settings.domicile_disable_while_typing;
++  if (libinput_device_config_dwt_is_available(device_)) {
++    LogConfigStatus(libinput_device_config_dwt_set_enabled(
++                        device_, native_typing ? LIBINPUT_CONFIG_DWT_ENABLED
++                                                : LIBINPUT_CONFIG_DWT_DISABLED),
++                    "disable-while-typing", native_typing);
++  }
+   if (libinput_device_config_tap_get_finger_count(device_) > 0) {
+     SetTapToClickEnabled(pad.tap);
+     LogConfigStatus(
+@@ -281,179 +282,44 @@ void LibInputEventConverter::LibInputDevice::SetTapToClickEnabled(
+   LogConfigStatus(status, "tap-to-click", arg);
+ }
+ 
+-LibInputEventConverter::LibInputContext::LibInputContext(
+-    LibInputContext&& other)
+-    : li_(other.li_), opened_(std::move(other.opened_)) {
+-  other.li_ = nullptr;
+-}
+-
+-LibInputEventConverter::LibInputContext::LibInputContext(
+-    libinput* const li,
+-    std::unique_ptr<OpenedDevice> opened)
+-    : li_(li), opened_(std::move(opened)) {
+-  DCHECK(li_);
+-  libinput_log_set_handler(li_, LogHandler);
+-  libinput_log_set_priority(li_, LIBINPUT_LOG_PRIORITY_DEBUG);
+-}
+-
+-LibInputEventConverter::LibInputContext::~LibInputContext() {
+-  if (li_) {
+-    libinput_unref(li_.ExtractAsDangling());
+-  }
+-}
+-
+-std::optional<LibInputEventConverter::LibInputContext>
+-LibInputEventConverter::LibInputContext::Create(base::ScopedFD fd) {
+-  // THE POINTER, NOT THE CONTEXT, IS WHAT libinput KEEPS. It stores this as
+-  // its user data and hands it back to `OpenRestricted` below; the context
+-  // that owns the allocation is moved out of this function, so anything
+-  // addressed relative to `this` would dangle by the time libinput asked.
+-  auto opened = std::make_unique<OpenedDevice>();
+-  opened->fd = std::move(fd);
+-
+-  libinput* const li = libinput_path_create_context(&interface_, opened.get());
+-  if (!li) {
+-    LOG(ERROR) << "libinput_path_create_context failed";
+-    return std::nullopt;
+-  }
+-
+-  return std::make_optional(
+-      LibInputEventConverter::LibInputContext(li, std::move(opened)));
+-}
+-
+-std::optional<LibInputEventConverter::LibInputDevice>
+-LibInputEventConverter::LibInputContext::AddDevice(
+-    int id,
+-    const base::FilePath& path) const {
+-  auto* const dev = libinput_path_add_device(li_, path.value().c_str());
+-  if (!dev) {
+-    LOG(ERROR) << "libinput_path_add_device failed with device: " << path;
+-    return std::nullopt;
+-  }
+-
+-  return std::make_optional(LibInputDevice(id, dev));
+-}
+-
+-bool LibInputEventConverter::LibInputContext::Dispatch() const {
+-  const auto rc = libinput_dispatch(li_);
+-  if (rc != 0) {
+-    LOG(ERROR) << "libinput_dispatch failed: " << rc;
+-    return false;
+-  }
+-  return true;
+-}
+-
+-int LibInputEventConverter::LibInputContext::Fd() {
+-  return libinput_get_fd(li_);
+-}
+-
+-std::optional<LibInputEventConverter::LibInputEvent>
+-LibInputEventConverter::LibInputContext::NextEvent() const {
+-  libinput_event* const event = libinput_get_event(li_);
+-  if (!event) {
+-    return std::nullopt;
+-  }
+-  return std::make_optional(LibInputEvent(event));
+-}
+-
+-int LibInputEventConverter::LibInputContext::OpenRestricted(const char* path,
+-                                                            int flags,
+-                                                            void* user_data) {
+-  // NOT `open(path, flags)`, WHICH IS WHAT THIS USED TO BE. On a console the
+-  // browser is not root and holds no device node: logind opened this one and
+-  // passed the descriptor over, and opening it again by name answers EACCES.
+-  // One device per context is this class's own rule -- its header says so --
+-  // so there is exactly one descriptor to hand over and a second ask is a bug
+-  // rather than a case to fall back for.
+-  auto* const opened = static_cast<OpenedDevice*>(user_data);
+-  if (!opened || !opened->fd.is_valid()) {
+-    LOG(ERROR) << "libinput asked for " << path
+-               << " and this context has no descriptor left to give it";
+-    return -EACCES;
+-  }
+-
+-  VLOG(1) << "Open input: " << path << " (on the descriptor logind gave us)";
+-  return opened->fd.release();
+-}
+-
+-void LibInputEventConverter::LibInputContext::CloseRestricted(int fd,
+-                                                              void* user_data) {
+-  close(fd);
+-}
+-
+-void LibInputEventConverter::LibInputContext::LogHandler(
+-    libinput* libinput,
+-    enum libinput_log_priority priority,
+-    const char* format,
+-    va_list args) {
+-  // SAFETY: `format` and `args` are libinput's own, handed to the log handler
+-  // it was given: libinput's contract is a null-terminated printf format and
+-  // the arguments that go with it, and this callback is reachable from
+-  // nowhere else. The compiler cannot see that, so it refuses a format
+-  // function whose format is not a literal -- a refusal that had never fired
+-  // here because this file had never been compiled outside ChromeOS.
+-  switch (priority) {
+-    case LIBINPUT_LOG_PRIORITY_DEBUG:
+-      VLOG(4) << "libinput: "
+-              << UNSAFE_BUFFERS(base::StringPrintV(format, args));
+-      break;
+-
+-    case LIBINPUT_LOG_PRIORITY_INFO:
+-      VLOG(1) << "libinput: "
+-              << UNSAFE_BUFFERS(base::StringPrintV(format, args));
+-      break;
+-
+-    case LIBINPUT_LOG_PRIORITY_ERROR:
+-      LOG(ERROR) << "libinput: "
+-                 << UNSAFE_BUFFERS(base::StringPrintV(format, args));
+-      break;
+-  }
+-}
+-
+-constexpr libinput_interface
+-    LibInputEventConverter::LibInputContext::interface_;
+-
+ std::unique_ptr<LibInputEventConverter> LibInputEventConverter::Create(
++    LibInputSeat& seat,
+     base::ScopedFD fd,
+     const base::FilePath& path,
+     int id,
+     const EventDeviceInfo& devinfo,
+     CursorDelegateEvdev* cursor,
+     DeviceEventDispatcherEvdev* dispatcher) {
+-  auto context = LibInputContext::Create(std::move(fd));
+-  if (!context) {
+-    LOG(ERROR) << "LibInputContext::Create failed";
++  const auto device = seat.AddDevice(fd, path);
++  if (!device.has_value()) {
++    LOG(ERROR) << "libinput " << devinfo.name() << " (" << path << "): "
++               << device.error();
+     return nullptr;
+   }
+-
+   return std::make_unique<LibInputEventConverter>(
+-      std::move(context.value()), path, id, devinfo, cursor, dispatcher);
++      seat, std::move(fd), *device, path, id, devinfo, cursor, dispatcher);
+ }
+ 
+ LibInputEventConverter::LibInputEventConverter(
+-    LibInputEventConverter::LibInputContext&& ctx,
++    LibInputSeat& seat,
++    base::ScopedFD fd,
++    libinput_device* device,
+     const base::FilePath& path,
+     int id,
+     const EventDeviceInfo& devinfo,
+     CursorDelegateEvdev* cursor,
+     DeviceEventDispatcherEvdev* dispatcher)
+-    : EventConverterEvdev(ctx.Fd(),
+-                          path,
+-                          id,
+-                          devinfo.device_type(),
+-                          devinfo.name(),
+-                          devinfo.phys(),
+-                          devinfo.vendor_id(),
+-                          devinfo.product_id(),
+-                          devinfo.version()),
++    : LibInputKeyboardEventConverter(seat, std::move(fd), device, path, id,
++                                     devinfo, cursor, dispatcher),
+       dispatcher_(dispatcher),
+       cursor_(cursor),
+       has_keyboard_(devinfo.HasKeyboard()),
+       has_mouse_(devinfo.HasMouse()),
++      has_pointing_stick_(devinfo.HasPointingStick()),
+       has_touchpad_(devinfo.HasTouchpad()),
+       has_touchscreen_(devinfo.HasTouchscreen()),
+-      context_(std::move(ctx)),
+-      device_(context_.AddDevice(id, path)) {}
++      pointer_device_(LibInputDevice(id, device)) {}
++
+ 
+ LibInputEventConverter::~LibInputEventConverter() {
+   if (typing_guard_) {
+@@ -472,16 +338,41 @@ void LibInputEventConverter::ApplyDeviceSettings(
+   typing_applies_ = DomicileTypingDeviceEligible(
+       settings.domicile_input.touchpad.disable_while_typing,
+       type() == InputDeviceType::INPUT_DEVICE_INTERNAL);
+-  if (device_ && has_mouse_) {
++  if (has_mouse_ || has_pointing_stick_) {
+     // A mouse has a mouse's settings. The touchpad's would ask it for
+     // tap-to-click, which libinput refuses and this logs as an error on
+     // every settings change.
+-    device_->ApplyMouseSettings(settings);
+-  } else if (device_) {
+-    device_->ApplySettings(settings);
++    pointer_device_.ApplyMouseSettings(settings);
+   } else {
+-    LOG(ERROR)
+-        << "Unable to apply settings due to libinput_path_add_device failure";
++    pointer_device_.ApplySettings(settings);
++  }
++}
++
++void LibInputEventConverter::OnDisabled() {
++  const auto time = base::TimeTicks::Now();
++  if (auto stop = active_scroll_axes_.TakeStop()) {
++    ScrollEventParams params(input_device_.id, EventType::kScroll,
++                             cursor_->GetLocation(), gfx::Vector2dF(),
++                             gfx::Vector2dF(), 2, time);
++    params.native_scroll_source = stop->source;
++    params.axis_stop_x = stop->stop_x;
++    params.axis_stop_y = stop->stop_y;
++    params.native_axis_distance = stop->axis_distance;
++    dispatcher_->DispatchScrollEvent(params);
++  }
++  scroll_accelerator_.Stop(true, true);
++  LibInputKeyboardEventConverter::OnDisabled();
++  for (unsigned int button : pressed_buttons_) {
++    if (typing_guard_) {
++      typing_guard_->DropsButton(button, false, time, false, input_device_.id);
++    }
++    dispatcher_->DispatchMouseButtonEvent(
++        {input_device_.id, EF_NONE, cursor_->GetLocation(), button, false,
++         ButtonMap(), PointerDetails(EventPointerType::kMouse), time});
++  }
++  pressed_buttons_.clear();
++  if (typing_guard_) {
++    typing_guard_->RemoveDevice(input_device_.id);
+   }
+ }
+ 
+@@ -493,6 +384,10 @@ bool LibInputEventConverter::HasMouse() const {
+   return has_mouse_;
+ }
+ 
++bool LibInputEventConverter::HasPointingStick() const {
++  return has_pointing_stick_;
++}
++
+ bool LibInputEventConverter::HasTouchpad() const {
+   return has_touchpad_;
+ }
+@@ -502,23 +397,21 @@ bool LibInputEventConverter::HasTouchscreen() const {
+ }
+ 
+ void LibInputEventConverter::SetTypingGuard(TypingGuard* guard) {
++  LibInputKeyboardEventConverter::SetTypingGuard(guard);
+   if (has_touchpad_) {
+     typing_guard_ = guard;
+   }
+ }
+ 
+-void LibInputEventConverter::OnFileCanReadWithoutBlocking(int fd) {
+-  if (!context_.Dispatch()) {
+-    LOG(ERROR) << "LibInputContext::Dispatch failed";
++void LibInputEventConverter::HandleEvent(libinput_event* native_event) {
++  if (libinput_event_get_type(native_event) == LIBINPUT_EVENT_KEYBOARD_KEY) {
++    LibInputKeyboardEventConverter::HandleEvent(native_event);
+     return;
+   }
+-
+-  while (auto event = context_.NextEvent()) {
+-    HandleEvent(*event);
++  if (!IsEnabled()) {
++    return;
+   }
+-}
+-
+-void LibInputEventConverter::HandleEvent(const LibInputEvent& event) {
++  const LibInputEvent event(native_event);
+   switch (event.Type()) {
+     case LIBINPUT_EVENT_POINTER_MOTION:
+       HandlePointerMotion(event);
+@@ -565,15 +458,6 @@ void LibInputEventConverter::HandlePointerButton(const LibInputEvent& evt) {
+   const bool down = libinput_event_pointer_get_button_state(event) ==
+                     LIBINPUT_BUTTON_STATE_PRESSED;
+ 
+-  // allow_remap: Controls whether or not remapping buttons is allowed; in
+-  // this case whether or not it should respect the "Swap Left/Right Mouse
+-  // Button" option in the ChromeOS settings.
+-  //
+-  // Since we only deal with touchpad buttons here, this should be false,
+-  // but if we expand this to handle mice in the future we may need to
+-  // have more intricate logic.
+-  const MouseButtonMapType allow_remap = MouseButtonMapType::kNone;
+-
+   DVLOG(3) << "Button: " << button << ", pressed: " << down;
+ 
+   if (typing_guard_ &&
+@@ -582,9 +466,23 @@ void LibInputEventConverter::HandlePointerButton(const LibInputEvent& evt) {
+     return;
+   }
+ 
++  if (down) {
++    pressed_buttons_.insert(button);
++  } else if (pressed_buttons_.erase(button) == 0) {
++    return;
++  }
+   dispatcher_->DispatchMouseButtonEvent(
+       {input_device_.id, flags, cursor_->GetLocation(), button, down,
+-       allow_remap, PointerDetails(EventPointerType::kMouse), Timestamp(evt)});
++       ButtonMap(), PointerDetails(EventPointerType::kMouse), Timestamp(evt)});
++}
++
++MouseButtonMapType LibInputEventConverter::ButtonMap() const {
++  // Pads keep libinput's click mapping; relative pointers use Chromium's
++  // configured button maps for both presses and releases.
++  if (has_pointing_stick_) {
++    return MouseButtonMapType::kPointingStick;
++  }
++  return has_mouse_ ? MouseButtonMapType::kMouse : MouseButtonMapType::kNone;
+ }
+ 
+ void LibInputEventConverter::HandlePointerAxis(const LibInputEvent& evt) {
+@@ -641,6 +539,8 @@ void LibInputEventConverter::HandlePointerAxis(const LibInputEvent& evt) {
+   params.native_axis_distance =
+       std::array<double, 2>{ScaleScrollAxis(raw_delta.x(), scroll_factor_),
+                             ScaleScrollAxis(raw_delta.y(), scroll_factor_)};
++  active_scroll_axes_.Observe(params.native_scroll_source, delta.x() != 0,
++                              delta.y() != 0, stop_x, stop_y);
+   dispatcher_->DispatchScrollEvent(params);
+ }
+ 
+@@ -680,6 +580,7 @@ std::ostream& LibInputEventConverter::DescribeForLog(std::ostream& os) const {
+   os << "class=ui::LibInputEventConverter id=" << input_device_.id << std::endl
+      << " has_keyboard=" << has_keyboard_ << std::endl
+      << " has_mouse=" << has_mouse_ << std::endl
++     << " has_pointing_stick=" << has_pointing_stick_ << std::endl
+      << " has_touchpad=" << has_touchpad_ << std::endl
+      << " has_touchscreen=" << has_touchscreen_ << std::endl
+      << "base ";
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.h b/ui/events/ozone/evdev/libinput_event_converter.h
+index 205942d9e..6c6a772f6 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.h
++++ b/ui/events/ozone/evdev/libinput_event_converter.h
+@@ -8,30 +8,28 @@
+ #include <libinput.h>
+ 
+ #include <memory>
+-#include <optional>
+ #include <ostream>
++#include <set>
+ 
+ #include "base/files/scoped_file.h"
+ #include "base/memory/raw_ptr.h"
++#include "ui/events/ozone/evdev/domicile/active_scroll_axes.h"
+ #include "ui/events/ozone/evdev/domicile/input_settings.h"
++#include "ui/events/ozone/evdev/domicile/libinput_keyboard_event_converter.h"
+ #include "ui/events/ozone/evdev/domicile/scroll_accelerator.h"
+ #include "ui/events/ozone/evdev/domicile/typing_guard.h"
+-#include "ui/events/ozone/evdev/event_converter_evdev.h"
+ 
+ namespace ui {
+ 
+ class CursorDelegateEvdev;
+ class DeviceEventDispatcherEvdev;
+ class EventDeviceInfo;
++enum class MouseButtonMapType : int;
+ 
+-// Use libinput (freedesktop.org/wiki/Software/libinput) to read events from
+-// old touchpads that are not supported by libgestures.
+-//
+-// Note that although libinput can read inputs from any number of devices, this
+-// implementation only attaches one device per libinput context.
+-class LibInputEventConverter : public EventConverterEvdev {
++// Converts pointer events from the factory's shared libinput seat.
++class LibInputEventConverter : public LibInputKeyboardEventConverter {
+  public:
+-  // This class wraps the libinput_event struct from libinput library.
++  // Borrows an event for the duration of the seat callback.
+   class LibInputEvent {
+    public:
+     LibInputEvent(LibInputEvent&& other);
+@@ -44,13 +42,7 @@ class LibInputEventConverter : public EventConverterEvdev {
+     libinput_event_type Type() const;
+ 
+    private:
+-    // `raw_ptr` on a handle libinput allocated and libinput frees: the
+-    // checker asks for it on every pointer member. libinput's `malloc` is
+-    // PartitionAlloc's, so the protection applies here too, and every
+-    // destructor below hands the handle over with `ExtractAsDangling` rather
+-    // than holding it while libinput frees it. This file had never been
+-    // compiled outside ChromeOS, where the plugin does not run, which is why
+-    // upstream reads as it does.
++    // The seat destroys the event after its subscribed converter returns.
+     raw_ptr<libinput_event> event_;
+   };
+ 
+@@ -80,53 +72,8 @@ class LibInputEventConverter : public EventConverterEvdev {
+     raw_ptr<libinput_device> device_;
+   };
+ 
+-  // This class wraps the libinput struct from libinput library. Any operations
+-  // that uses libinput struct are implemented here.
+-  class LibInputContext {
+-   public:
+-    // `fd` is the device this context will read, ALREADY OPEN. On a console
+-    // the browser does not own `/dev/input/*` and never opens one itself:
+-    // logind does, and hands the descriptor over. See
+-    // `ui/ozone/platform/drm/domicile/drm_logind_input.cc`.
+-    static std::optional<LibInputContext> Create(base::ScopedFD fd);
+-    LibInputContext(LibInputContext&& other);
+-    LibInputContext(const LibInputContext& other) = delete;
+-    LibInputContext& operator=(const LibInputContext& other) = delete;
+-    ~LibInputContext();
+-
+-    std::optional<LibInputEventConverter::LibInputDevice> AddDevice(
+-        int id,
+-        const base::FilePath& path) const;
+-    bool Dispatch() const;
+-    int Fd();
+-    std::optional<LibInputEventConverter::LibInputEvent> NextEvent() const;
+-
+-   private:
+-    // The descriptor logind handed this process, parked where the callback
+-    // below can find it. On the heap because libinput keeps the pointer as its
+-    // user data for the life of the context, and the context itself is moved
+-    // on its way out of `Create`.
+-    struct OpenedDevice {
+-      base::ScopedFD fd;
+-    };
+-
+-    LibInputContext(libinput* const li, std::unique_ptr<OpenedDevice> opened);
+-
+-    static int OpenRestricted(const char* path, int flags, void* user_data);
+-    static void CloseRestricted(int fd, void* user_data);
+-    static void LogHandler(libinput* libinput,
+-                           enum libinput_log_priority priority,
+-                           const char* format,
+-                           va_list args);
+-
+-    static constexpr libinput_interface interface_ = {OpenRestricted,
+-                                                      CloseRestricted};
+-
+-    raw_ptr<libinput> li_;
+-    std::unique_ptr<OpenedDevice> opened_;
+-  };
+-
+   static std::unique_ptr<LibInputEventConverter> Create(
++      LibInputSeat& seat,
+       base::ScopedFD fd,
+       const base::FilePath& path,
+       int id,
+@@ -134,7 +81,9 @@ class LibInputEventConverter : public EventConverterEvdev {
+       CursorDelegateEvdev* cursor,
+       DeviceEventDispatcherEvdev* dispatcher);
+ 
+-  LibInputEventConverter(LibInputEventConverter::LibInputContext&& ctx,
++  LibInputEventConverter(LibInputSeat& seat,
++                         base::ScopedFD fd,
++                         libinput_device* device,
+                          const base::FilePath& path,
+                          int id,
+                          const EventDeviceInfo& devinfo,
+@@ -146,10 +95,12 @@ class LibInputEventConverter : public EventConverterEvdev {
+   ~LibInputEventConverter() override;
+ 
+   void ApplyDeviceSettings(const InputDeviceSettingsEvdev& settings) final;
++  void OnDisabled() override;
+ 
+   bool HasKeyboard() const final;
+ 
+   bool HasMouse() const final;
++  bool HasPointingStick() const final;
+ 
+   bool HasTouchpad() const final;
+ 
+@@ -162,10 +113,10 @@ class LibInputEventConverter : public EventConverterEvdev {
+   std::ostream& DescribeForLog(std::ostream& os) const override;
+ 
+  private:
+-  void OnFileCanReadWithoutBlocking(int fd) final;
+-  void HandleEvent(const LibInputEvent& event);
++  void HandleEvent(libinput_event* native_event) override;
+   void HandlePointerMotion(const LibInputEvent& evt);
+   void HandlePointerButton(const LibInputEvent& evt);
++  MouseButtonMapType ButtonMap() const;
+   void HandlePointerAxis(const LibInputEvent& evt);
+   void HandleWheel(const LibInputEvent& evt);
+   base::TimeTicks Timestamp(const LibInputEvent& evt);
+@@ -175,12 +126,14 @@ class LibInputEventConverter : public EventConverterEvdev {
+ 
+   const bool has_keyboard_;
+   const bool has_mouse_;
++  const bool has_pointing_stick_;
+   const bool has_touchpad_;
+   const bool has_touchscreen_;
+ 
+-  const LibInputContext context_;
+-  const std::optional<LibInputDevice> device_;
++  const LibInputDevice pointer_device_;
++  std::set<unsigned int> pressed_buttons_;
+ 
++  ActiveScrollAxes active_scroll_axes_;
+   ScrollAccelerator scroll_accelerator_;
+   double scroll_factor_ = 1;
+   bool typing_applies_ = true;
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 4729fb40a..f382b1c65 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -39,6 +39,40 @@ source_set("gbm") {
+     "common/scoped_drm_types.cc",
+     "common/scoped_drm_types.h",
+     "common/tile_property.h",
++    "domicile/connector_name.cc",
++    "domicile/connector_name.h",
++    "domicile/drm_canvas.cc",
++    "domicile/drm_canvas.h",
++    "domicile/drm_clipboard.cc",
++    "domicile/drm_clipboard.h",
++    "domicile/drm_cursor_factory.cc",
++    "domicile/drm_cursor_factory.h",
++    "domicile/drm_desk_input.cc",
++    "domicile/drm_desk_input.h",
++    "domicile/drm_fullscreen.cc",
++    "domicile/drm_fullscreen.h",
++    "domicile/drm_input_devices.cc",
++    "domicile/drm_input_devices.h",
++    "domicile/drm_input_opens.cc",
++    "domicile/drm_input_opens.h",
++    "domicile/drm_logind_input.cc",
++    "domicile/drm_logind_input.h",
++    "domicile/drm_logind_session.cc",
++    "domicile/drm_logind_session.h",
++    "domicile/drm_modeset.cc",
++    "domicile/drm_modeset.h",
++    "domicile/drm_pointer_crossing.cc",
++    "domicile/drm_pointer_crossing.h",
++    "domicile/drm_pointer_targets.cc",
++    "domicile/drm_pointer_targets.h",
++    "domicile/drm_screen.cc",
++    "domicile/drm_screen.h",
++    "domicile/drm_sleep.cc",
++    "domicile/drm_sleep.h",
++    "domicile/drm_vt_switcher.cc",
++    "domicile/drm_vt_switcher.h",
++    "domicile/edid_name.cc",
++    "domicile/edid_name.h",
+     "gpu/crtc_commit_request.cc",
+     "gpu/crtc_commit_request.h",
+     "gpu/crtc_controller.cc",
+@@ -120,38 +154,6 @@ source_set("gbm") {
+     "host/drm_window_host.cc",
+     "host/drm_window_host.h",
+     "host/drm_window_host_manager.cc",
+-    "domicile/connector_name.cc",
+-    "domicile/connector_name.h",
+-    "domicile/drm_cursor_factory.cc",
+-    "domicile/drm_cursor_factory.h",
+-    "domicile/drm_desk_input.cc",
+-    "domicile/drm_desk_input.h",
+-    "domicile/drm_fullscreen.cc",
+-    "domicile/drm_fullscreen.h",
+-    "domicile/drm_input_devices.cc",
+-    "domicile/drm_input_devices.h",
+-    "domicile/drm_logind_input.cc",
+-    "domicile/drm_logind_input.h",
+-    "domicile/drm_logind_session.cc",
+-    "domicile/drm_logind_session.h",
+-    "domicile/drm_modeset.cc",
+-    "domicile/drm_modeset.h",
+-    "domicile/drm_pointer_crossing.cc",
+-    "domicile/drm_pointer_crossing.h",
+-    "domicile/drm_pointer_targets.cc",
+-    "domicile/drm_pointer_targets.h",
+-    "domicile/drm_canvas.cc",
+-    "domicile/drm_canvas.h",
+-    "domicile/drm_clipboard.cc",
+-    "domicile/drm_clipboard.h",
+-    "domicile/drm_screen.cc",
+-    "domicile/drm_screen.h",
+-    "domicile/drm_sleep.cc",
+-    "domicile/drm_sleep.h",
+-    "domicile/drm_vt_switcher.cc",
+-    "domicile/drm_vt_switcher.h",
+-    "domicile/edid_name.cc",
+-    "domicile/edid_name.h",
+     "host/drm_window_host_manager.h",
+     "host/gpu_thread_adapter.h",
+     "host/gpu_thread_observer.h",
+@@ -261,6 +263,25 @@ source_set("gbm_unittests") {
+   sources = [
+     "common/drm_util_unittest.cc",
+     "common/hardware_display_controller_info_unittest.cc",
++    "domicile/connector_name_unittest.cc",
++    "domicile/drm_canvas_unittest.cc",
++    "domicile/drm_clipboard_unittest.cc",
++    "domicile/drm_color_commit_unittest.cc",
++    "domicile/drm_cursor_factory_unittest.cc",
++    "domicile/drm_desk_input_unittest.cc",
++    "domicile/drm_fullscreen_unittest.cc",
++    "domicile/drm_input_controller_unittest.cc",
++    "domicile/drm_input_devices_unittest.cc",
++    "domicile/drm_input_opens_unittest.cc",
++    "domicile/drm_modeset_unittest.cc",
++    "domicile/drm_no_gbm_modeset_unittest.cc",
++    "domicile/drm_pointer_crossing_unittest.cc",
++    "domicile/drm_pointer_targets_unittest.cc",
++    "domicile/drm_screen_unittest.cc",
++    "domicile/drm_sleep_unittest.cc",
++    "domicile/drm_vt_switcher_unittest.cc",
++    "domicile/edid_name_unittest.cc",
++    "domicile/gbm_pixmap_scanout_unittest.cc",
+     "gpu/drm_gpu_display_manager_unittest.cc",
+     "gpu/drm_gpu_util_unittest.cc",
+     "gpu/drm_overlay_manager_unittest.cc",
+@@ -278,33 +299,22 @@ source_set("gbm_unittests") {
+     "gpu/mock_drm_modifiers_filter.cc",
+     "gpu/mock_drm_modifiers_filter.h",
+     "gpu/proxy_helpers_unittest.cc",
+-    "domicile/connector_name_unittest.cc",
+-    "domicile/drm_canvas_unittest.cc",
+-    "domicile/drm_no_gbm_modeset_unittest.cc",
+-    "domicile/drm_cursor_factory_unittest.cc",
+-    "domicile/drm_desk_input_unittest.cc",
+-    "domicile/drm_fullscreen_unittest.cc",
+-    "domicile/drm_input_controller_unittest.cc",
+-    "domicile/drm_input_devices_unittest.cc",
+-    "domicile/drm_modeset_unittest.cc",
+-    "domicile/drm_pointer_crossing_unittest.cc",
+-    "domicile/drm_pointer_targets_unittest.cc",
+-    "domicile/drm_clipboard_unittest.cc",
+-    "domicile/drm_color_commit_unittest.cc",
+-    "domicile/drm_screen_unittest.cc",
+-    "domicile/drm_sleep_unittest.cc",
+-    "domicile/drm_vt_switcher_unittest.cc",
+-    "domicile/edid_name_unittest.cc",
+-    "domicile/gbm_pixmap_scanout_unittest.cc",
+ 
+     # evdev's, not this platform's: `//ui/events/ozone/evdev:unittests` is
+     # linked only into `events_unittests`, which no job here builds, and the
+     # console is the one platform whose touchpad goes through libinput.
+     "//ui/events/ozone/evdev/domicile/absolute_mouse_event_converter_evdev_unittest.cc",
+-    "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
++    "//ui/events/ozone/evdev/domicile/active_scroll_axes_unittest.cc",
+     "//ui/events/ozone/evdev/domicile/input_settings_unittest.cc",
++    "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
+     "//ui/events/ozone/evdev/domicile/typing_guard_unittest.cc",
+     "//ui/events/ozone/evdev/domicile/wheel_ticks_unittest.cc",
++    "//ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc",
++    "//ui/events/ozone/evdev/event_converter_test_util.cc",
++    "//ui/events/ozone/evdev/event_converter_test_util.h",
++    "//ui/events/ozone/evdev/event_device_info_unittest.cc",
++    "//ui/events/ozone/evdev/input_device_factory_evdev_unittest.cc",
++    "//ui/events/ozone/evdev/testing/fake_cursor_delegate_evdev.h",
+   ]
+ 
+   # `ui/display/manager/test/fake_display_snapshot.h` is the one thing this
+@@ -329,6 +339,7 @@ source_set("gbm_unittests") {
+     "//base/test:test_support",
+     "//components/viz/common/resources:shared_image_format",
+     "//skia",
++    "//testing/gmock",
+     "//testing/gtest",
+ 
+     # We're using this instead of the config to ensure that our tests built for
+-- 
+2.56.0
+
