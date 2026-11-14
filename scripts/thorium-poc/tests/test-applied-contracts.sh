@@ -43,10 +43,12 @@ SOURCE
     cat >> "$source_root/chrome/browser/chrome_browser_interface_binders.cc" <<SOURCE
 map->Add<domicile::mojom::$interface>(base::BindRepeating(
     [](content::RenderFrameHost* frame) {
-      if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
-        mojo::ReportBadMessage("only the shell may bind this interface");
-        return;
-      }
+if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
+  // Reject the frame before resolving the interface receiver.
+  mojo::ReportBadMessage("only the shell may bind this interface");
+  // Do not continue after reporting an untrusted origin.
+  return;
+}
       Bind$interface(frame);
     }));
 SOURCE

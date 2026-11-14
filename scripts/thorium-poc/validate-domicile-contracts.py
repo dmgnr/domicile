@@ -32,7 +32,7 @@ def require_shell_binder(source: str, interface: str) -> None:
     binder = source[start:end]
     require_match(
         binder,
-        r"if\s*\(!domicile::IsShellOrigin\(frame->GetLastCommittedOrigin\(\)\)\)\s*\{\s*mojo::ReportBadMessage\([\s\S]*?\);\s*return;",
+        r"if\s*\(!domicile::IsShellOrigin\(frame->GetLastCommittedOrigin\(\)\)\)\s*\{(?:\s|//[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)*mojo::ReportBadMessage\([\s\S]*?\);(?:\s|//[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)*return;",
         f"Domicile binder {interface} must require the shell origin",
     )
 
