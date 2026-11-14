@@ -1,0 +1,28 @@
+From 673abefe0aaf1cd35b8db65a1b6122bea0c59311 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 20:19:30 +0700
+Subject: [PATCH] domicile: guard page activation teardown
+
+---
+ content/browser/devtools/protocol/page_handler.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/content/browser/devtools/protocol/page_handler.cc b/content/browser/devtools/protocol/page_handler.cc
+index c750e9a4e..6982c1772 100644
+--- a/content/browser/devtools/protocol/page_handler.cc
++++ b/content/browser/devtools/protocol/page_handler.cc
+@@ -1832,7 +1832,11 @@ Response PageHandler::BringToFront() {
+ 
+   WebContentsImpl* web_contents =
+       static_cast<WebContentsImpl*>(WebContents::FromRenderFrameHost(host_));
++  base::WeakPtr<PageHandler> weak_self = weak_factory_.GetWeakPtr();
+   web_contents->Activate();
++  if (!weak_self || !host_) {
++    return Response::ServerError(kErrorNotAttached);
++  }
+   web_contents->GetOutermostWebContents()->Focus();
+   return Response::Success();
+ }
+-- 
+2.56.0
+

@@ -1,0 +1,122 @@
+From f44a02cc6bd4ab25d7acb643e125c400ccdff9a4 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 20:30:37 +0700
+Subject: [PATCH] domicile: scope DRM damage clips to each plane frame
+
+---
+ ui/ozone/platform/drm/BUILD.gn                |  1 +
+ ui/ozone/platform/drm/gpu/fake_drm_device.cc  |  1 +
+ ui/ozone/platform/drm/gpu/fake_drm_device.h   |  1 +
+ .../drm/gpu/hardware_display_plane.cc         |  9 ++++----
+ .../drm/gpu/hardware_display_plane_atomic.cc  | 23 ++++++++++++++-----
+ .../drm/gpu/hardware_display_plane_atomic.h   |  4 ++++
+ 6 files changed, 29 insertions(+), 10 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index c54f0c33b..6c0732ec5 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -268,6 +268,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_clipboard_unittest.cc",
+     "domicile/drm_color_commit_unittest.cc",
+     "domicile/drm_cursor_factory_unittest.cc",
++    "domicile/drm_damage_clips_unittest.cc",
+     "domicile/drm_desk_input_unittest.cc",
+     "domicile/drm_fullscreen_unittest.cc",
+     "domicile/drm_input_controller_unittest.cc",
+diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.cc b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
+index dda3b375e..837fca321 100644
+--- a/ui/ozone/platform/drm/gpu/fake_drm_device.cc
++++ b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
+@@ -85,6 +85,7 @@ const std::map<uint32_t, std::string> kPlaneOptionalPropertyNames = {
+     {kColorEncodingPropId, "COLOR_ENCODING"},
+     {kColorRangePropId, "COLOR_RANGE"},
+     {kSizeHintsPropId, "SIZE_HINTS"},
++    {kFbDamageClipsPropId, "FB_DAMAGE_CLIPS"},
+ };
+ 
+ template <class T>
+diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.h b/ui/ozone/platform/drm/gpu/fake_drm_device.h
+index 0d70b3d07..1a819011f 100644
+--- a/ui/ozone/platform/drm/gpu/fake_drm_device.h
++++ b/ui/ozone/platform/drm/gpu/fake_drm_device.h
+@@ -105,6 +105,7 @@ inline constexpr uint32_t kRotationPropId = 5003;
+ inline constexpr uint32_t kColorEncodingPropId = 5004;
+ inline constexpr uint32_t kColorRangePropId = 5005;
+ inline constexpr uint32_t kSizeHintsPropId = 5006;
++inline constexpr uint32_t kFbDamageClipsPropId = 5007;
+ 
+ // Blob IDs:
+ inline constexpr uint32_t kBaseBlobId = 6000;
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane.cc
+index 5bdbaba2f..23d823d4d 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_plane.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_plane.cc
+@@ -335,10 +335,11 @@ void HardwareDisplayPlane::InitializeProperties(DrmDevice* drm) {
+                         &properties_.plane_color_encoding);
+   GetDrmPropertyForName(drm, props.get(), "COLOR_RANGE",
+                         &properties_.plane_color_range);
+-  if (display::features::IsPanelSelfRefresh2Enabled()) {
+-    GetDrmPropertyForName(drm, props.get(), "FB_DAMAGE_CLIPS",
+-                          &properties_.plane_fb_damage_clips);
+-  }
++  // DOMICILE: every frame says what changed, not only with ChromeOS's PSR2
++  // flag. Without a clip, evdi tells DisplayLink the whole screen changed on
++  // every flip.
++  GetDrmPropertyForName(drm, props.get(), "FB_DAMAGE_CLIPS",
++                        &properties_.plane_fb_damage_clips);
+   GetDrmPropertyForName(drm, props.get(), "SIZE_HINTS",
+                         &properties_.size_hints);
+ }
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc
+index 80bf68d8a..950ea1b9e 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc
+@@ -142,12 +142,23 @@ bool HardwareDisplayPlaneAtomic::AssignPlaneProps(
+                << " not contained inside display bounds"
+                << " crtc: " << crtc_rect.ToString();
+   }
+-  if (drm && assigned_props_.plane_fb_damage_clips.id) {
+-    ScopedDrmModeRectPtr dmg_clip_blob_data = CreateDCBlob(damage_rect);
+-    // dmg_clip_blob needs to live long enough to be committed.
+-    static ScopedDrmPropertyBlob dmg_clip_blob = drm->CreatePropertyBlob(
+-        dmg_clip_blob_data.get(), sizeof(drm_mode_rect));
+-    assigned_props_.plane_fb_damage_clips.value = dmg_clip_blob->id();
++  // DOMICILE: each frame names what changed, on its own plane's device.
++  // Upstream sent the first frame's rect, made on the first device, for every
++  // frame on every plane (crbug.com/572557701). No clip (0) means the whole
++  // plane changed: an empty rect, or a turned plane, whose damage may not be
++  // in its framebuffer's coordinates.
++  damage_clips_blob_.reset();
++  assigned_props_.plane_fb_damage_clips.value = 0;
++  ScopedDrmModeRectPtr dmg_clip_blob_data =
++      transform == gfx::OVERLAY_TRANSFORM_NONE ? CreateDCBlob(damage_rect)
++                                               : nullptr;
++  if (drm && assigned_props_.plane_fb_damage_clips.id && dmg_clip_blob_data) {
++    damage_clips_blob_ = drm->CreatePropertyBlob(dmg_clip_blob_data.get(),
++                                                 sizeof(drm_mode_rect));
++    if (!damage_clips_blob_) {
++      return false;
++    }
++    assigned_props_.plane_fb_damage_clips.value = damage_clips_blob_->id();
+   }
+ 
+   if (assigned_props_.plane_color_encoding.id) {
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h
+index cc4bca6c8..c8633b824 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h
++++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h
+@@ -54,6 +54,10 @@ class HardwareDisplayPlaneAtomic : public HardwareDisplayPlane {
+  private:
+   // Intermediate variable between Assign()ment and Set()ting.
+   HardwareDisplayPlane::Properties assigned_props_;
++
++  // DOMICILE: the FB_DAMAGE_CLIPS blob of the last assignment. A commit that
++  // names it holds its own reference, so the next assignment may drop it.
++  ScopedDrmPropertyBlob damage_clips_blob_;
+ };
+ 
+ }  // namespace ui
+-- 
+2.56.0
+

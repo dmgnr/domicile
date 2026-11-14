@@ -1,0 +1,48 @@
+From 6cfd66a9fefc3e7815fd1977bfbbf2183c08bb6c Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 19:46:18 +0700
+Subject: [PATCH] domicile: wait for GPU thread exit in proc
+
+---
+ sandbox/policy/linux/sandbox_linux.cc | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/sandbox/policy/linux/sandbox_linux.cc b/sandbox/policy/linux/sandbox_linux.cc
+index 7e1dfcd17..2618abaf8 100644
+--- a/sandbox/policy/linux/sandbox_linux.cc
++++ b/sandbox/policy/linux/sandbox_linux.cc
+@@ -32,6 +32,7 @@
+ #include "base/system/sys_info.h"
+ #include "base/threading/platform_thread.h"
+ #include "base/threading/thread_id_name_manager.h"
++#include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "sandbox/constants.h"
+ #include "sandbox/linux/seccomp-bpf-helpers/sigsys_handlers.h"
+@@ -360,7 +361,22 @@ bool SandboxLinux::InitializeSandbox(sandbox::mojom::Sandbox sandbox_type,
+     CheckForBrokenPromises(sandbox_type);
+   };
+ 
+-  const bool has_threads = !IsSingleThreaded();
++  bool has_threads = !IsSingleThreaded();
++
++  // Domicile's engine fork: the kernel wakes a thread's joiner before it
++  // drops the thread from /proc/self/task, so a thread the GPU process
++  // joined just before can still be counted here. Counted, it cost the GPU
++  // process its seccomp filter, at random. Wait up to a second for /proc to
++  // catch up; a thread still there after that is real.
++  if (has_threads && process_type == switches::kGpuProcess) {
++    const base::TimeTicks start = base::TimeTicks::Now();
++    while (has_threads && base::TimeTicks::Now() - start < base::Seconds(1)) {
++      base::PlatformThread::Sleep(base::Milliseconds(1));
++      has_threads = !IsSingleThreaded();
++    }
++    LOG(INFO) << "domicile: waited " << base::TimeTicks::Now() - start
++              << " for the GPU process's other threads to leave /proc";
++  }
+ 
+   // For now, restrict the |options.allow_threads_during_sandbox_init| option to
+   // the GPU process
+-- 
+2.56.0
+

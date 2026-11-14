@@ -1,0 +1,74 @@
+From e9585da4e7d277b872d198c4beafe2b6f18e8b9c Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 19:59:54 +0700
+Subject: [PATCH] domicile: disable main frames for animations
+
+---
+ .../variations/fieldtrial_testing_config.json | 51 -------------------
+ 1 file changed, 51 deletions(-)
+
+diff --git a/testing/variations/fieldtrial_testing_config.json b/testing/variations/fieldtrial_testing_config.json
+index 9c380b9d4..2b3a7fbef 100644
+--- a/testing/variations/fieldtrial_testing_config.json
++++ b/testing/variations/fieldtrial_testing_config.json
+@@ -5197,57 +5197,6 @@
+             ]
+         }
+     ],
+-    "CompositedAnimationsForceMainFrames": [
+-        {
+-            "platforms": [
+-                "android",
+-                "android_webview",
+-                "chromeos",
+-                "fuchsia",
+-                "linux",
+-                "mac",
+-                "windows"
+-            ],
+-            "experiments": [
+-                {
+-                    "name": "Enabled",
+-                    "params": {
+-                        "anchor-transform": "true",
+-                        "intersection-observer": "true"
+-                    },
+-                    "enable_features": [
+-                        "CompositedAnimationsForceMainFrames"
+-                    ]
+-                },
+-                {
+-                    "name": "IntersectionObserverOnly",
+-                    "params": {
+-                        "anchor-transform": "false",
+-                        "intersection-observer": "true"
+-                    },
+-                    "enable_features": [
+-                        "CompositedAnimationsForceMainFrames"
+-                    ]
+-                },
+-                {
+-                    "name": "AnchorTransformOnly",
+-                    "params": {
+-                        "anchor-transform": "true",
+-                        "intersection-observer": "false"
+-                    },
+-                    "enable_features": [
+-                        "CompositedAnimationsForceMainFrames"
+-                    ]
+-                },
+-                {
+-                    "name": "Disabled",
+-                    "disable_features": [
+-                        "CompositedAnimationsForceMainFrames"
+-                    ]
+-                }
+-            ]
+-        }
+-    ],
+     "CompressionDictionaryPreload": [
+         {
+             "platforms": [
+-- 
+2.56.0
+

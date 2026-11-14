@@ -1,0 +1,815 @@
+From 05a8fad5555a462e32ece36bbb59f9b8aabdefc3 Mon Sep 17 00:00:00 2001
+From: Domicile Port <port@example.invalid>
+Date: Sat, 14 Nov 2026 19:28:15 +0700
+Subject: [PATCH] domicile: preserve native touchpad pinches through app input
+
+---
+ .../input/touchpad_pinch_event_queue.cc       | 48 +++++++++--
+ .../web_coalesced_input_event_mojom_traits.cc | 50 +++++++++++
+ .../common/input/web_mouse_wheel_event.cc     |  3 +-
+ .../public/common/input/web_gesture_event.h   |  4 +
+ .../common/input/web_mouse_wheel_event.h      |  4 +
+ .../public/mojom/input/input_handler.mojom    | 14 ++++
+ .../core/input/mouse_wheel_event_manager.cc   | 29 ++++++-
+ .../core/input/mouse_wheel_event_manager.h    |  1 +
+ ui/events/blink/web_input_event.cc            |  7 +-
+ .../evdev/device_event_dispatcher_evdev.h     |  2 +
+ ui/events/ozone/evdev/event_factory_evdev.cc  |  6 +-
+ .../ozone/evdev/libinput_event_converter.cc   | 82 +++++++++++++++++++
+ .../ozone/evdev/libinput_event_converter.h    |  4 +
+ ui/events/types/BUILD.gn                      |  1 +
+ .../wayland/host/wayland_event_source.cc      |  7 +-
+ .../wayland/host/wayland_event_source.h       |  3 +-
+ .../host/wayland_zwp_pointer_gestures.cc      | 18 ++--
+ .../host/wayland_zwp_pointer_gestures.h       |  4 +-
+ .../wayland_zwp_pointer_gestures_unittest.cc  | 38 +++++----
+ 19 files changed, 290 insertions(+), 35 deletions(-)
+
+diff --git a/components/input/touchpad_pinch_event_queue.cc b/components/input/touchpad_pinch_event_queue.cc
+index c5f2c17e0..c6773d003 100644
+--- a/components/input/touchpad_pinch_event_queue.cc
++++ b/components/input/touchpad_pinch_event_queue.cc
+@@ -21,6 +21,9 @@ blink::WebMouseWheelEvent CreateSyntheticWheelFromTouchpadPinchEvent(
+     blink::WebMouseWheelEvent::Phase phase,
+     bool cancelable) {
+   DCHECK(
++      (pinch_event.has_native_pinch &&
++       pinch_event.GetType() ==
++           blink::WebInputEvent::Type::kGesturePinchBegin) ||
+       pinch_event.GetType() ==
+           blink::WebInputEvent::Type::kGesturePinchUpdate ||
+       pinch_event.GetType() == blink::WebInputEvent::Type::kGesturePinchEnd ||
+@@ -56,6 +59,8 @@ blink::WebMouseWheelEvent CreateSyntheticWheelFromTouchpadPinchEvent(
+   wheel_event.SetPositionInWidget(pinch_event.PositionInWidget());
+   wheel_event.SetPositionInScreen(pinch_event.PositionInScreen());
+   wheel_event.delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
++  wheel_event.has_native_pinch = pinch_event.has_native_pinch;
++  wheel_event.native_pinch = pinch_event.native_pinch;
+   wheel_event.delta_x = 0;
+   wheel_event.delta_y = delta_y;
+ 
+@@ -112,7 +117,8 @@ void TouchpadPinchEventQueue::QueueEvent(
+ 
+   if (!pinch_queue_.empty()) {
+     QueuedTouchpadPinchEvent* last_event = pinch_queue_.back().get();
+-    if (last_event->CanCoalesceWith(event)) {
++    if (!event.event.has_native_pinch && !last_event->event.has_native_pinch &&
++        last_event->CanCoalesceWith(event)) {
+       // Terminate the LatencyInfo of the event before it gets coalesced away.
+       event.latency.Terminate();
+ 
+@@ -141,11 +147,30 @@ void TouchpadPinchEventQueue::ProcessMouseWheelAck(
+   if (!pinch_event_awaiting_ack_)
+     return;
+ 
++  const auto& pinch = pinch_event_awaiting_ack_->event;
++  if (pinch.has_native_pinch) {
++    if (pinch.GetType() == blink::WebInputEvent::Type::kGesturePinchBegin) {
++      first_event_prevented_.reset();
++    }
++    // A removed native app can lose its blocking wheel region. Its remaining
++    // pinch updates must stay consumed instead of zooming the containing page.
++    if (ack_result == blink::mojom::InputEventResultState::kConsumed) {
++      first_event_prevented_ = true;
++    }
++    if (first_event_prevented_.value_or(false)) {
++      ack_result = blink::mojom::InputEventResultState::kConsumed;
++    }
++    if (pinch.GetType() == blink::WebInputEvent::Type::kGesturePinchEnd) {
++      first_event_prevented_.reset();
++    }
++  }
++
+   if (pinch_event_awaiting_ack_->event.GetType() ==
+           blink::WebInputEvent::Type::kGesturePinchUpdate &&
+-      !first_event_prevented_.has_value())
++      !first_event_prevented_.has_value()) {
+     first_event_prevented_ =
+         (ack_result == blink::mojom::InputEventResultState::kConsumed);
++  }
+ 
+   pinch_event_awaiting_ack_->latency.AddNewLatencyFrom(ack_event.latency);
+   auto weak_this = weak_ptr_factory_.GetWeakPtr();
+@@ -170,7 +195,8 @@ void TouchpadPinchEventQueue::TryForwardNextEventToRenderer() {
+   pinch_queue_.pop_front();
+ 
+   if (pinch_event_awaiting_ack_->event.GetType() ==
+-      blink::WebInputEvent::Type::kGesturePinchBegin) {
++          blink::WebInputEvent::Type::kGesturePinchBegin &&
++      !pinch_event_awaiting_ack_->event.has_native_pinch) {
+     auto weak_this = weak_ptr_factory_.GetWeakPtr();
+     auto dispatch_callback =
+         std::move(pinch_event_awaiting_ack_->dispatch_callback);
+@@ -198,9 +224,18 @@ void TouchpadPinchEventQueue::TryForwardNextEventToRenderer() {
+ 
+   if (pinch_event_awaiting_ack_->event.GetType() ==
+       blink::WebInputEvent::Type::kGesturePinchEnd) {
+-    first_event_prevented_.reset();
++    if (!pinch_event_awaiting_ack_->event.has_native_pinch) {
++      first_event_prevented_.reset();
++    }
+     phase = blink::WebMouseWheelEvent::kPhaseEnded;
+     cancelable = false;
++    if (pinch_event_awaiting_ack_->event.has_native_pinch &&
++        pinch_event_awaiting_ack_->event.native_pinch.canceled) {
++      phase = blink::WebMouseWheelEvent::kPhaseCancelled;
++    }
++  } else if (pinch_event_awaiting_ack_->event.GetType() ==
++             blink::WebInputEvent::Type::kGesturePinchBegin) {
++    phase = blink::WebMouseWheelEvent::kPhaseBegan;
+   } else if (pinch_event_awaiting_ack_->event.GetType() ==
+              blink::WebInputEvent::Type::kGestureDoubleTap) {
+     phase = blink::WebMouseWheelEvent::kPhaseNone;
+@@ -210,12 +245,13 @@ void TouchpadPinchEventQueue::TryForwardNextEventToRenderer() {
+               blink::WebInputEvent::Type::kGesturePinchUpdate);
+     // The first pinch update event should send a synthetic wheel with phase
+     // began.
+-    if (!first_event_prevented_.has_value()) {
++    if (!first_event_prevented_.has_value() &&
++        !pinch_event_awaiting_ack_->event.has_native_pinch) {
+       phase = blink::WebMouseWheelEvent::kPhaseBegan;
+       cancelable = true;
+     } else {
+       phase = blink::WebMouseWheelEvent::kPhaseChanged;
+-      cancelable = first_event_prevented_.value();
++      cancelable = first_event_prevented_.value_or(true);
+     }
+   }
+ 
+diff --git a/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc b/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc
+index 7389432c6..5fa0dfcea 100644
+--- a/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc
++++ b/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc
+@@ -20,6 +20,39 @@
+ namespace mojo {
+ namespace {
+ 
++blink::mojom::NativePinchDataPtr PinchToMojo(bool present,
++                                             const ui::NativePinch& pinch) {
++  if (!present) {
++    return nullptr;
++  }
++  return blink::mojom::NativePinchData::New(
++      static_cast<uint8_t>(pinch.phase), pinch.device, pinch.time,
++      pinch.fingers, pinch.dx, pinch.dy, pinch.scale, pinch.rotation,
++      pinch.canceled);
++}
++
++bool PinchFromMojo(const blink::mojom::NativePinchData& data,
++                   ui::NativePinch& pinch) {
++  if (data.phase > static_cast<uint8_t>(ui::NativePinchPhase::kEnd) ||
++      (data.phase == static_cast<uint8_t>(ui::NativePinchPhase::kBegin) &&
++       data.fingers == 0) ||
++      !std::isfinite(data.dx) || !std::isfinite(data.dy) ||
++      !std::isfinite(data.scale) || data.scale <= 0 ||
++      !std::isfinite(data.rotation)) {
++    return false;
++  }
++  pinch = {static_cast<ui::NativePinchPhase>(data.phase),
++           data.device,
++           data.time,
++           data.fingers,
++           data.dx,
++           data.dy,
++           data.scale,
++           data.rotation,
++           data.canceled};
++  return true;
++}
++
+ blink::mojom::PointerDataPtr PointerDataFromPointerProperties(
+     const blink::WebPointerProperties& pointer,
+     blink::mojom::MouseDataPtr mouse_data) {
+@@ -136,6 +169,13 @@ bool StructTraits<blink::mojom::EventDataView,
+ 
+     blink::WebGestureEvent* gesture_event =
+         static_cast<blink::WebGestureEvent*>(input_event.get());
++    if (gesture_data->native_pinch) {
++      if (!PinchFromMojo(*gesture_data->native_pinch,
++                         gesture_event->native_pinch)) {
++        return false;
++      }
++      gesture_event->has_native_pinch = true;
++    }
+     gesture_event->SetPositionInWidget(gesture_data->widget_position);
+     gesture_event->SetPositionInScreen(gesture_data->screen_position);
+     gesture_event->is_source_touch_event_set_blocking =
+@@ -359,6 +399,13 @@ bool StructTraits<blink::mojom::EventDataView,
+             static_cast<blink::WebMouseWheelEvent*>(mouse_event);
+         blink::mojom::WheelDataPtr& wheel_data =
+             pointer_data->mouse_data->wheel_data;
++        if (wheel_data->native_pinch) {
++          if (!PinchFromMojo(*wheel_data->native_pinch,
++                             wheel_event->native_pinch)) {
++            return false;
++          }
++          wheel_event->has_native_pinch = true;
++        }
+         if (wheel_data->native_scroll_source >
+             static_cast<uint8_t>(ui::NativeScrollSource::kWheelTilt)) {
+           return false;
+@@ -459,6 +506,7 @@ StructTraits<blink::mojom::EventDataView,
+     const blink::WebMouseWheelEvent* wheel_event =
+         static_cast<const blink::WebMouseWheelEvent*>(mouse_event);
+     wheel_data = blink::mojom::WheelData::New(
++        PinchToMojo(wheel_event->has_native_pinch, wheel_event->native_pinch),
+         static_cast<uint8_t>(wheel_event->native_scroll_source),
+         wheel_event->axis_stop_x, wheel_event->axis_stop_y,
+         wheel_event->has_native_axis_distance,
+@@ -488,6 +536,8 @@ StructTraits<blink::mojom::EventDataView,
+   const blink::WebGestureEvent* gesture_event =
+       static_cast<const blink::WebGestureEvent*>(event->EventPointer());
+   auto gesture_data = blink::mojom::GestureData::New();
++  gesture_data->native_pinch =
++      PinchToMojo(gesture_event->has_native_pinch, gesture_event->native_pinch);
+   gesture_data->screen_position = gesture_event->PositionInScreen();
+   gesture_data->widget_position = gesture_event->PositionInWidget();
+   gesture_data->source_device = gesture_event->SourceDevice();
+diff --git a/third_party/blink/common/input/web_mouse_wheel_event.cc b/third_party/blink/common/input/web_mouse_wheel_event.cc
+index 3dcb76c80..600ab954e 100644
+--- a/third_party/blink/common/input/web_mouse_wheel_event.cc
++++ b/third_party/blink/common/input/web_mouse_wheel_event.cc
+@@ -32,7 +32,8 @@ bool WebMouseWheelEvent::CanCoalesce(const WebInputEvent& event) const {
+   const WebMouseWheelEvent& mouse_wheel_event =
+       static_cast<const WebMouseWheelEvent&>(event);
+ 
+-  return GetModifiers() == mouse_wheel_event.GetModifiers() &&
++  return !has_native_pinch && !mouse_wheel_event.has_native_pinch &&
++         GetModifiers() == mouse_wheel_event.GetModifiers() &&
+          delta_units == mouse_wheel_event.delta_units &&
+          native_scroll_source == mouse_wheel_event.native_scroll_source &&
+          has_native_axis_distance ==
+diff --git a/third_party/blink/public/common/input/web_gesture_event.h b/third_party/blink/public/common/input/web_gesture_event.h
+index f2bc6b343..0fb83c31f 100644
+--- a/third_party/blink/public/common/input/web_gesture_event.h
++++ b/third_party/blink/public/common/input/web_gesture_event.h
+@@ -16,6 +16,7 @@
+ #include "third_party/blink/public/common/input/web_pointer_properties.h"
+ #include "third_party/blink/public/mojom/input/gesture_event.mojom-shared.h"
+ #include "ui/events/event_constants.h"
++#include "ui/events/types/native_pinch.h"
+ #include "ui/events/types/scroll_input_type.h"
+ #include "ui/events/types/scroll_types.h"
+ #include "ui/gfx/geometry/point_f.h"
+@@ -27,6 +28,9 @@ namespace blink {
+ 
+ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
+  public:
++  bool has_native_pinch = false;
++  ui::NativePinch native_pinch;
++
+   using InertialPhaseState = mojom::InertialPhaseState;
+ 
+   bool is_source_touch_event_set_blocking = false;
+diff --git a/third_party/blink/public/common/input/web_mouse_wheel_event.h b/third_party/blink/public/common/input/web_mouse_wheel_event.h
+index 7de440750..853eda6ae 100644
+--- a/third_party/blink/public/common/input/web_mouse_wheel_event.h
++++ b/third_party/blink/public/common/input/web_mouse_wheel_event.h
+@@ -6,6 +6,7 @@
+ #define THIRD_PARTY_BLINK_PUBLIC_COMMON_INPUT_WEB_MOUSE_WHEEL_EVENT_H_
+ 
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
++#include "ui/events/types/native_pinch.h"
+ #include "ui/events/types/native_scroll_source.h"
+ #include "ui/events/types/scroll_types.h"
+ 
+@@ -15,6 +16,9 @@ namespace blink {
+ 
+ class BLINK_COMMON_EXPORT WebMouseWheelEvent : public WebMouseEvent {
+  public:
++  bool has_native_pinch = false;
++  ui::NativePinch native_pinch;
++
+   enum Phase {
+     // No phase information is avaiable.
+     kPhaseNone = 0,
+diff --git a/third_party/blink/public/mojom/input/input_handler.mojom b/third_party/blink/public/mojom/input/input_handler.mojom
+index 1ca5f0a3a..fb9188c44 100644
+--- a/third_party/blink/public/mojom/input/input_handler.mojom
++++ b/third_party/blink/public/mojom/input/input_handler.mojom
+@@ -72,7 +72,20 @@ struct PointerData {
+   int32 device_id;
+ };
+ 
++struct NativePinchData {
++  uint8 phase;
++  uint32 device;
++  uint32 time;
++  uint32 fingers;
++  double dx;
++  double dy;
++  double scale;
++  double rotation;
++  bool canceled;
++};
++
+ struct WheelData {
++  NativePinchData? native_pinch;
+   uint8 native_scroll_source;
+   bool axis_stop_x;
+   bool axis_stop_y;
+@@ -154,6 +167,7 @@ struct TapDownData {
+ };
+ 
+ struct GestureData {
++  NativePinchData? native_pinch;
+   gfx.mojom.PointF screen_position;
+   gfx.mojom.PointF widget_position;
+   blink.mojom.GestureDevice source_device;
+diff --git a/third_party/blink/renderer/core/input/mouse_wheel_event_manager.cc b/third_party/blink/renderer/core/input/mouse_wheel_event_manager.cc
+index ea0aa44d9..1045412b4 100644
+--- a/third_party/blink/renderer/core/input/mouse_wheel_event_manager.cc
++++ b/third_party/blink/renderer/core/input/mouse_wheel_event_manager.cc
+@@ -49,6 +49,17 @@ WebInputEventResult MouseWheelEventManager::HandleWheelEvent(
+   if (!view)
+     return WebInputEventResult::kNotHandled;
+ 
++  if (event.has_native_pinch &&
++      event.native_pinch.phase == ui::NativePinchPhase::kBegin) {
++    native_pinch_claimed_ = false;
++  }
++  if (event.has_native_pinch && native_pinch_claimed_ && !wheel_target_) {
++    if (event.native_pinch.phase == ui::NativePinchPhase::kEnd) {
++      native_pinch_claimed_ = false;
++    }
++    return WebInputEventResult::kHandledSuppressed;
++  }
++
+   const int kWheelEventPhaseEndedEventMask =
+       WebMouseWheelEvent::kPhaseEnded | WebMouseWheelEvent::kPhaseCancelled;
+ 
+@@ -56,13 +67,16 @@ WebInputEventResult MouseWheelEventManager::HandleWheelEvent(
+       (event.momentum_phase & kWheelEventPhaseEndedEventMask)) {
+     // Native clients need axis termination; browser content keeps its existing
+     // phase-end handling without a DOM wheel event.
+-    if ((event.axis_stop_x || event.axis_stop_y) &&
++    const bool consumed_pinch = event.has_native_pinch && native_pinch_claimed_;
++    if ((event.axis_stop_x || event.axis_stop_y || event.has_native_pinch) &&
+         IsA<HTMLAppElement>(wheel_target_.Get())) {
+       wheel_target_->DispatchEvent(*WheelEvent::Create(
+           event, *wheel_target_->GetDocument().domWindow()));
+     }
+     UpdateWheelTarget(/*wheel_target=*/nullptr);
+-    return WebInputEventResult::kNotHandled;
++    native_pinch_claimed_ = false;
++    return consumed_pinch ? WebInputEventResult::kHandledSystem
++                          : WebInputEventResult::kNotHandled;
+   }
+ 
+   if (Element* pointer_locked_element =
+@@ -121,7 +135,11 @@ WebInputEventResult MouseWheelEventManager::HandleWheelEvent(
+     if (dom_event_result != DispatchEventResult::kNotCanceled) {
+       // Reset the target if the dom event is cancelled to make sure that new
+       // targeting happens for the next wheel event.
+-      UpdateWheelTarget(nullptr);
++      if (event.has_native_pinch && dom_event->DefaultHandled()) {
++        native_pinch_claimed_ = true;
++      } else if (!event.has_native_pinch) {
++        UpdateWheelTarget(nullptr);
++      }
+ 
+       bool is_vertical = dom_event->NativeEvent().event_action ==
+                          WebMouseWheelEvent::EventAction::kScrollVertical;
+@@ -136,6 +154,11 @@ WebInputEventResult MouseWheelEventManager::HandleWheelEvent(
+     }
+   }
+ 
++  // A listener can remove an already claimed <app> during this dispatch.
++  // Its cancellation retires the client, while this update remains claimed.
++  if (event.has_native_pinch && native_pinch_claimed_) {
++    return WebInputEventResult::kHandledSuppressed;
++  }
+   return WebInputEventResult::kNotHandled;
+ }
+ 
+diff --git a/third_party/blink/renderer/core/input/mouse_wheel_event_manager.h b/third_party/blink/renderer/core/input/mouse_wheel_event_manager.h
+index 3f11f8277..42ef2fa07 100644
+--- a/third_party/blink/renderer/core/input/mouse_wheel_event_manager.h
++++ b/third_party/blink/renderer/core/input/mouse_wheel_event_manager.h
+@@ -44,6 +44,7 @@ class MouseWheelEventManager final
+ 
+   const Member<LocalFrame> frame_;
+   Member<Node> wheel_target_;
++  bool native_pinch_claimed_ = false;
+   Member<ScrollManager> scroll_manager_;
+   // Keeps scrollables that contains a scrollbar deferred fade-out after
+   // faded-in at kPhaseMayBegin wheel event.
+diff --git a/ui/events/blink/web_input_event.cc b/ui/events/blink/web_input_event.cc
+index f3046cebd..f44cd5bb7 100644
+--- a/ui/events/blink/web_input_event.cc
++++ b/ui/events/blink/web_input_event.cc
+@@ -3,7 +3,6 @@
+ // found in the LICENSE file.
+ 
+ #include "ui/events/blink/web_input_event.h"
+-#include "ui/events/domicile/scroll_metadata.h"
+ 
+ #include <utility>
+ 
+@@ -14,6 +13,8 @@
+ #include "ui/base/ui_base_features.h"
+ #include "ui/events/blink/blink_event_util.h"
+ #include "ui/events/blink/blink_features.h"
++#include "ui/events/domicile/pinch_metadata.h"
++#include "ui/events/domicile/scroll_metadata.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_target.h"
+ #include "ui/events/event_utils.h"
+@@ -367,6 +368,10 @@ blink::WebKeyboardEvent MakeWebKeyboardEvent(const KeyEvent& event) {
+ 
+ blink::WebGestureEvent MakeWebGestureEvent(const GestureEvent& event) {
+   blink::WebGestureEvent gesture_event = MakeWebGestureEventFromUIEvent(event);
++  if (const auto pinch = GetPinchMetadata(event)) {
++    gesture_event.has_native_pinch = true;
++    gesture_event.native_pinch = *pinch;
++  }
+ 
+   gesture_event.SetPositionInWidget(event.location_f());
+ 
+diff --git a/ui/events/ozone/evdev/device_event_dispatcher_evdev.h b/ui/events/ozone/evdev/device_event_dispatcher_evdev.h
+index 9236885e7..abd90ab5b 100644
+--- a/ui/events/ozone/evdev/device_event_dispatcher_evdev.h
++++ b/ui/events/ozone/evdev/device_event_dispatcher_evdev.h
+@@ -17,6 +17,7 @@
+ #include "ui/events/event.h"
+ #include "ui/events/ozone/gamepad/gamepad_event.h"
+ #include "ui/events/types/event_type.h"
++#include "ui/events/types/native_pinch.h"
+ #include "ui/events/types/native_scroll_source.h"
+ #include "ui/gfx/geometry/point_f.h"
+ #include "ui/gfx/geometry/vector2d.h"
+@@ -137,6 +138,7 @@ struct COMPONENT_EXPORT(EVDEV) PinchEventParams {
+   EventType type;
+   const gfx::PointF location;
+   float scale;
++  std::optional<NativePinch> native_pinch;
+   const base::TimeTicks timestamp;
+ };
+ 
+diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
+index 3393743ab..782b069b4 100644
+--- a/ui/events/ozone/evdev/event_factory_evdev.cc
++++ b/ui/events/ozone/evdev/event_factory_evdev.cc
+@@ -3,7 +3,6 @@
+ // found in the LICENSE file.
+ 
+ #include "ui/events/ozone/evdev/event_factory_evdev.h"
+-#include "ui/events/domicile/scroll_metadata.h"
+ 
+ #include <utility>
+ 
+@@ -18,6 +17,8 @@
+ #include "ui/events/devices/keyboard_device.h"
+ #include "ui/events/devices/microphone_mute_switch_monitor.h"
+ #include "ui/events/devices/touchpad_device.h"
++#include "ui/events/domicile/pinch_metadata.h"
++#include "ui/events/domicile/scroll_metadata.h"
+ #include "ui/events/event_utils.h"
+ #include "ui/events/ozone/device/device_event.h"
+ #include "ui/events/ozone/device/device_manager.h"
+@@ -389,6 +390,9 @@ void EventFactoryEvdev::DispatchPinchEvent(const PinchEventParams& params) {
+   }
+   GestureEvent event(params.location.x(), params.location.y(), 0,
+                      params.timestamp, details);
++  if (params.native_pinch) {
++    SetPinchMetadata(event, *params.native_pinch);
++  }
+   event.set_source_device_id(params.device_id);
+   DispatchUiEvent(&event);
+ }
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.cc b/ui/events/ozone/evdev/libinput_event_converter.cc
+index 88cf4c573..6bd1d1247 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.cc
++++ b/ui/events/ozone/evdev/libinput_event_converter.cc
+@@ -350,6 +350,7 @@ void LibInputEventConverter::ApplyDeviceSettings(
+ 
+ void LibInputEventConverter::OnDisabled() {
+   const auto time = base::TimeTicks::Now();
++  CancelPinch(time);
+   if (auto stop = active_scroll_axes_.TakeStop()) {
+     ScrollEventParams params(input_device_.id, EventType::kScroll,
+                              cursor_->GetLocation(), gfx::Vector2dF(),
+@@ -411,6 +412,13 @@ void LibInputEventConverter::HandleEvent(libinput_event* native_event) {
+   if (!IsEnabled()) {
+     return;
+   }
++  const auto type = libinput_event_get_type(native_event);
++  if (type == LIBINPUT_EVENT_GESTURE_PINCH_BEGIN ||
++      type == LIBINPUT_EVENT_GESTURE_PINCH_UPDATE ||
++      type == LIBINPUT_EVENT_GESTURE_PINCH_END) {
++    HandlePinch(native_event);
++    return;
++  }
+   const LibInputEvent event(native_event);
+   switch (event.Type()) {
+     case LIBINPUT_EVENT_POINTER_MOTION:
+@@ -570,6 +578,80 @@ void LibInputEventConverter::HandleWheel(const LibInputEvent& evt) {
+   dispatcher_->DispatchMouseWheelEvent(params);
+ }
+ 
++void LibInputEventConverter::HandlePinch(libinput_event* native_event) {
++  auto* event = libinput_event_get_gesture_event(native_event);
++  const auto type = libinput_event_get_type(native_event);
++  const auto time =
++      base::TimeTicks() +
++      base::Microseconds(libinput_event_gesture_get_time_usec(event));
++  const bool blocked = typing_guard_ && typing_applies_ &&
++                       typing_guard_->DropsMotion(time, input_device_.id);
++  if (blocked) {
++    CancelPinch(time);
++    return;
++  }
++  NativePinch pinch;
++  pinch.device = input_device_.id;
++  pinch.time = libinput_event_gesture_get_time(event);
++  EventType event_type;
++  float incremental_scale = 1;
++  switch (type) {
++    case LIBINPUT_EVENT_GESTURE_PINCH_BEGIN:
++      CancelPinch(time);
++      pinch.phase = NativePinchPhase::kBegin;
++      pinch.fingers = libinput_event_gesture_get_finger_count(event);
++      pinch_scale_ = 1;
++      event_type = EventType::kGesturePinchBegin;
++      break;
++    case LIBINPUT_EVENT_GESTURE_PINCH_UPDATE:
++      // A gesture suppressed while typing stays suppressed until the next
++      // begin.
++      if (!pinch_scale_) {
++        return;
++      }
++      pinch.phase = NativePinchPhase::kUpdate;
++      pinch.dx = libinput_event_gesture_get_dx(event);
++      pinch.dy = libinput_event_gesture_get_dy(event);
++      pinch.scale = libinput_event_gesture_get_scale(event);
++      pinch.rotation = libinput_event_gesture_get_angle_delta(event);
++      incremental_scale = pinch.scale / *pinch_scale_;
++      pinch_scale_ = pinch.scale;
++      event_type = EventType::kGesturePinchUpdate;
++      break;
++    case LIBINPUT_EVENT_GESTURE_PINCH_END:
++      if (!pinch_scale_) {
++        return;
++      }
++      pinch.phase = NativePinchPhase::kEnd;
++      pinch.canceled = libinput_event_gesture_get_cancelled(event);
++      pinch_scale_.reset();
++      event_type = EventType::kGesturePinchEnd;
++      break;
++    default:
++      NOTREACHED();
++  }
++  PinchEventParams params(input_device_.id, event_type, cursor_->GetLocation(),
++                          incremental_scale, time);
++  params.native_pinch = pinch;
++  dispatcher_->DispatchPinchEvent(params);
++}
++
++void LibInputEventConverter::CancelPinch(base::TimeTicks time) {
++  if (!pinch_scale_) {
++    return;
++  }
++  pinch_scale_.reset();
++  NativePinch pinch;
++  pinch.phase = NativePinchPhase::kEnd;
++  pinch.device = input_device_.id;
++  pinch.time = static_cast<uint32_t>(time.since_origin().InMilliseconds());
++  pinch.canceled = true;
++  PinchEventParams params(input_device_.id, EventType::kGesturePinchEnd,
++                          cursor_->GetLocation(), 1, time);
++  params.native_pinch = pinch;
++  dispatcher_->DispatchPinchEvent(params);
++}
++
+ base::TimeTicks LibInputEventConverter::Timestamp(const LibInputEvent& evt) {
+   libinput_event_pointer* event = evt.PointerEvent();
+   uint64_t time_usec = libinput_event_pointer_get_time_usec(event);
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.h b/ui/events/ozone/evdev/libinput_event_converter.h
+index 6c6a772f6..9a689b9e5 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.h
++++ b/ui/events/ozone/evdev/libinput_event_converter.h
+@@ -8,6 +8,7 @@
+ #include <libinput.h>
+ 
+ #include <memory>
++#include <optional>
+ #include <ostream>
+ #include <set>
+ 
+@@ -119,6 +120,8 @@ class LibInputEventConverter : public LibInputKeyboardEventConverter {
+   MouseButtonMapType ButtonMap() const;
+   void HandlePointerAxis(const LibInputEvent& evt);
+   void HandleWheel(const LibInputEvent& evt);
++  void HandlePinch(libinput_event* event);
++  void CancelPinch(base::TimeTicks time);
+   base::TimeTicks Timestamp(const LibInputEvent& evt);
+ 
+   const raw_ptr<DeviceEventDispatcherEvdev> dispatcher_;
+@@ -136,6 +139,7 @@ class LibInputEventConverter : public LibInputKeyboardEventConverter {
+   ActiveScrollAxes active_scroll_axes_;
+   ScrollAccelerator scroll_accelerator_;
+   double scroll_factor_ = 1;
++  std::optional<double> pinch_scale_;
+   bool typing_applies_ = true;
+ 
+   // DOMICILE: null for a mouse, and until the factory attaches this.
+diff --git a/ui/events/types/BUILD.gn b/ui/events/types/BUILD.gn
+index bada31536..461d3dfd4 100644
+--- a/ui/events/types/BUILD.gn
++++ b/ui/events/types/BUILD.gn
+@@ -5,6 +5,7 @@
+ source_set("headers") {
+   sources = [
+     "event_type.h",
++    "native_pinch.h",
+     "native_scroll_source.h",
+     "scroll_input_type.h",
+     "scroll_types.h",
+diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.cc b/ui/ozone/platform/wayland/host/wayland_event_source.cc
+index 628cf300f..a315be5c7 100644
+--- a/ui/ozone/platform/wayland/host/wayland_event_source.cc
++++ b/ui/ozone/platform/wayland/host/wayland_event_source.cc
+@@ -20,6 +20,7 @@
+ #include "base/trace_event/trace_event.h"
+ #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+ #include "ui/events/base_event_utils.h"
++#include "ui/events/domicile/pinch_metadata.h"
+ #include "ui/events/domicile/scroll_metadata.h"
+ #include "ui/events/event_utils.h"
+ #include "ui/events/keycodes/dom/dom_code.h"
+@@ -936,7 +937,8 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
+                                       const gfx::Vector2dF& delta,
+                                       base::TimeTicks timestamp,
+                                       int device_id,
+-                                      std::optional<float> scale_delta) {
++                                      std::optional<float> scale_delta,
++                                      std::optional<NativePinch> native_pinch) {
+   GestureEventDetails details(event_type);
+   details.set_device_type(GestureDeviceType::DEVICE_TOUCHPAD);
+   if (scale_delta) {
+@@ -947,6 +949,9 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
+   GestureEvent event(location.x(), location.y(), 0 /* flags */, timestamp,
+                      details);
+   event.set_source_device_id(device_id);
++  if (native_pinch) {
++    SetPinchMetadata(event, *native_pinch);
++  }
+ 
+   auto* target = window_manager_->GetCurrentPointerFocusedWindow();
+   // A window may be deleted when the event arrived from the server.
+diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.h b/ui/ozone/platform/wayland/host/wayland_event_source.h
+index 42cdf06b4..59b488b58 100644
+--- a/ui/ozone/platform/wayland/host/wayland_event_source.h
++++ b/ui/ozone/platform/wayland/host/wayland_event_source.h
+@@ -181,7 +181,8 @@ class WaylandEventSource : public PlatformEventSource,
+                     const gfx::Vector2dF& delta,
+                     base::TimeTicks timestamp,
+                     int device_id,
+-                    std::optional<float> scale_delta) override;
++                    std::optional<float> scale_delta,
++                    std::optional<NativePinch> native_pinch = std::nullopt) override;
+   void OnHoldEvent(EventType event_type,
+                    uint32_t finger_count,
+                    base::TimeTicks timestamp,
+diff --git a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.cc b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.cc
+index c41e15d5c..d5a96b2a7 100644
+--- a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.cc
++++ b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.cc
+@@ -105,7 +105,8 @@ void WaylandZwpPointerGestures::OnPinchBegin(
+ 
+   self->delegate_->OnPinchEvent(
+       EventType::kGesturePinchBegin, gfx::Vector2dF() /*delta*/,
+-      wl::EventMillisecondsToTimeTicks(time), self->obj_.id());
++      wl::EventMillisecondsToTimeTicks(time), self->obj_.id(), std::nullopt,
++      NativePinch{NativePinchPhase::kBegin, self->obj_.id(), time, fingers});
+ }
+ 
+ // static
+@@ -130,9 +131,12 @@ void WaylandZwpPointerGestures::OnPinchUpdate(
+ 
+   gfx::Vector2dF delta = {static_cast<float>(wl_fixed_to_double(dx)),
+                           static_cast<float>(wl_fixed_to_double(dy))};
+-  self->delegate_->OnPinchEvent(EventType::kGesturePinchUpdate, delta,
+-                                wl::EventMillisecondsToTimeTicks(time),
+-                                self->obj_.id(), scale_delta);
++  self->delegate_->OnPinchEvent(
++      EventType::kGesturePinchUpdate, delta,
++      wl::EventMillisecondsToTimeTicks(time), self->obj_.id(), scale_delta,
++      NativePinch{NativePinchPhase::kUpdate, self->obj_.id(), time, 0,
++                  wl_fixed_to_double(dx), wl_fixed_to_double(dy), new_scale,
++                  wl_fixed_to_double(rotation)});
+ }
+ 
+ void WaylandZwpPointerGestures::OnPinchEnd(
+@@ -140,12 +144,14 @@ void WaylandZwpPointerGestures::OnPinchEnd(
+     struct zwp_pointer_gesture_pinch_v1* zwp_pointer_gesture_pinch_v1,
+     uint32_t serial,
+     uint32_t time,
+-    int32_t cancelled) {
++    int32_t canceled) {
+   auto* self = static_cast<WaylandZwpPointerGestures*>(data);
+ 
+   self->delegate_->OnPinchEvent(
+       EventType::kGesturePinchEnd, gfx::Vector2dF() /*delta*/,
+-      wl::EventMillisecondsToTimeTicks(time), self->obj_.id());
++      wl::EventMillisecondsToTimeTicks(time), self->obj_.id(), std::nullopt,
++      NativePinch{NativePinchPhase::kEnd, self->obj_.id(), time, 0, 0, 0, 1, 0,
++                  canceled != 0});
+ }
+ 
+ #if defined(ZWP_POINTER_GESTURE_HOLD_V1_BEGIN_SINCE_VERSION)
+diff --git a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.h b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.h
+index 294f40e24..506a6ee13 100644
+--- a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.h
++++ b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.h
+@@ -12,6 +12,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/time/time.h"
+ #include "ui/events/types/event_type.h"
++#include "ui/events/types/native_pinch.h"
+ #include "ui/ozone/platform/wayland/common/wayland_object.h"
+ #include "ui/ozone/platform/wayland/common/wayland_util.h"
+ 
+@@ -115,7 +116,8 @@ class WaylandZwpPointerGestures::Delegate {
+       const gfx::Vector2dF& delta,
+       base::TimeTicks timestamp,
+       int device_id,
+-      std::optional<float> scale_delta = std::nullopt) = 0;
++      std::optional<float> scale_delta = std::nullopt,
++      std::optional<NativePinch> native_pinch = std::nullopt) = 0;
+ 
+   virtual void OnHoldEvent(EventType event_type,
+                            uint32_t finger_count,
+diff --git a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures_unittest.cc b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures_unittest.cc
+index 8cf409ac4..28b62fb48 100644
+--- a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures_unittest.cc
++++ b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures_unittest.cc
+@@ -9,6 +9,7 @@
+ 
+ #include <array>
+ 
++#include "ui/events/domicile/scroll_metadata.h"
+ #include "ui/events/event.h"
+ #include "ui/events/platform/platform_event_observer.h"
+ #include "ui/ozone/platform/wayland/host/wayland_event_source.h"
+@@ -149,12 +150,13 @@ TEST_F(WaylandPointerGesturesTest, PinchZoomScale) {
+ TEST_F(WaylandPointerGesturesTest, HoldEventCancelsFling) {
+   // Enter cursor to surface.
+   EnterPoint();
+-  std::unique_ptr<Event> event1, event2, event3;
++  std::unique_ptr<Event> event1, event2, event3, event4;
+   EXPECT_CALL(delegate_, DispatchEvent(testing::_))
+-      .Times(3)
++      .Times(4)
+       .WillOnce(CloneEvent(&event1))
+       .WillOnce(CloneEvent(&event2))
+-      .WillOnce(CloneEvent(&event3));
++      .WillOnce(CloneEvent(&event3))
++      .WillOnce(CloneEvent(&event4));
+   // Send vertical scroll event.
+   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
+     auto* const pointer = server->seat()->pointer()->resource();
+@@ -199,21 +201,29 @@ TEST_F(WaylandPointerGesturesTest, HoldEventCancelsFling) {
+   // One axis event should follow before the fling event.
+   ASSERT_TRUE(event1);
+   ASSERT_TRUE(event1->IsScrollEvent());
+-  // We expect a FLING_START event.
++  // Native axis termination precedes Chromium's fling events.
+   ASSERT_TRUE(event2);
+   ASSERT_TRUE(event2->IsScrollEvent());
+-  auto* scroll_event2 = event2->AsScrollEvent();
+-  EXPECT_EQ(EventType::kScrollFlingStart, scroll_event2->type());
+-  // Finally, FLING_CANCEL is expected.
++  EXPECT_EQ(EventType::kScroll, event2->type());
++  const auto stop = GetScrollMetadata(*event2, NativeScrollSource::kWheel);
++  EXPECT_EQ(NativeScrollSource::kFinger, stop.source);
++  EXPECT_TRUE(stop.stop_x);
++  EXPECT_TRUE(stop.stop_y);
++  EXPECT_EQ(0.0f, event2->AsScrollEvent()->x_offset());
++  EXPECT_EQ(0.0f, event2->AsScrollEvent()->y_offset());
++  // We expect a FLING_START event.
+   ASSERT_TRUE(event3);
+   ASSERT_TRUE(event3->IsScrollEvent());
+-  auto* scroll_event3 = event3->AsScrollEvent();
+-  EXPECT_EQ(EventType::kScrollFlingCancel, scroll_event3->type());
+-  // Check the offset direction. It should be zero in both axes.
+-  EXPECT_EQ(0.0f, scroll_event3->x_offset());
+-  EXPECT_EQ(0.0f, scroll_event3->y_offset());
+-  EXPECT_EQ(0.0f, scroll_event3->x_offset_ordinal());
+-  EXPECT_EQ(0.0f, scroll_event3->y_offset_ordinal());
++  EXPECT_EQ(EventType::kScrollFlingStart, event3->type());
++  // Finally, the hold must cancel the fling with zero offsets.
++  ASSERT_TRUE(event4);
++  ASSERT_TRUE(event4->IsScrollEvent());
++  auto* scroll_event4 = event4->AsScrollEvent();
++  EXPECT_EQ(EventType::kScrollFlingCancel, scroll_event4->type());
++  EXPECT_EQ(0.0f, scroll_event4->x_offset());
++  EXPECT_EQ(0.0f, scroll_event4->y_offset());
++  EXPECT_EQ(0.0f, scroll_event4->x_offset_ordinal());
++  EXPECT_EQ(0.0f, scroll_event4->y_offset_ordinal());
+ }
+ 
+ }  // namespace ui
+-- 
+2.56.0
+

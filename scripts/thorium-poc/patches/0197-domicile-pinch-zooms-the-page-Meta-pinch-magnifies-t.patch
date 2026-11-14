@@ -1,0 +1,178 @@
+From 44aa1c9f8c7a5aab4f4d589f0dd4700faed9c632 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 20:09:57 +0700
+Subject: [PATCH] domicile: route page and desk pinch zoom
+
+---
+ .../render_widget_host_input_event_router.cc  | 54 +++++++++++++++++++
+ .../render_widget_host_input_event_router.h   | 12 +++++
+ .../render_widget_host_view_aura.cc           |  5 +-
+ ui/events/ozone/evdev/event_factory_evdev.cc  |  6 ++-
+ .../wayland/host/wayland_event_source.cc      |  6 ++-
+ 5 files changed, 78 insertions(+), 5 deletions(-)
+
+diff --git a/components/input/render_widget_host_input_event_router.cc b/components/input/render_widget_host_input_event_router.cc
+index 4f4887a27..ac88efbfb 100644
+--- a/components/input/render_widget_host_input_event_router.cc
++++ b/components/input/render_widget_host_input_event_router.cc
+@@ -5,6 +5,7 @@
+ #include "components/input/render_widget_host_input_event_router.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <deque>
+ #include <memory>
+ #include <optional>
+@@ -776,9 +777,42 @@ void RenderWidgetHostInputEventRouter::RouteMouseWheelEvent(
+   if (!IsViewInMap(root_view)) {
+     return;
+   }
++  // domicile: Meta+scroll magnifies the desk, the outermost page, around the
++  // pointer, as Meta+pinch does. No page or app sees it. Momentum after the
++  // fingers lift is dropped, so the zoom stops with them.
++  if (event->GetModifiers() & blink::WebInputEvent::kMetaKey) {
++    if (event->momentum_phase == blink::WebMouseWheelEvent::kPhaseNone &&
++        event->delta_y != 0) {
++      ZoomDeskBy(root_view, *event,
++                 std::exp2(event->delta_y / kDeskZoomPixelsPerDoubling),
++                 latency);
++    }
++    return;
++  }
+   event_targeter_->FindTargetAndDispatch(root_view, *event, latency);
+ }
+ 
++void RenderWidgetHostInputEventRouter::ZoomDeskBy(
++    RenderWidgetHostViewInput* root_view,
++    const blink::WebMouseWheelEvent& wheel,
++    float scale,
++    const ui::LatencyInfo& latency) {
++  auto pinch = [&](blink::WebInputEvent::Type type) {
++    blink::WebGestureEvent event(type, wheel.GetModifiers(),
++                                 wheel.TimeStamp(),
++                                 blink::WebGestureDevice::kTouchpad);
++    event.SetPositionInWidget(wheel.PositionInWidget());
++    event.SetPositionInScreen(wheel.PositionInScreen());
++    if (type == blink::WebInputEvent::Type::kGesturePinchUpdate) {
++      event.data.pinch_update.scale = scale;
++    }
++    root_view->ProcessGestureEvent(event, latency);
++  };
++  pinch(blink::WebInputEvent::Type::kGesturePinchBegin);
++  pinch(blink::WebInputEvent::Type::kGesturePinchUpdate);
++  pinch(blink::WebInputEvent::Type::kGesturePinchEnd);
++}
++
+ // TODO(crbug.com/346629231): Temporary for debugging.
+ static const char* PhaseToString(blink::WebMouseWheelEvent::Phase phase) {
+   switch (phase) {
+@@ -1873,6 +1907,26 @@ void RenderWidgetHostInputEventRouter::RouteTouchpadGestureEvent(
+     const blink::WebGestureEvent* event,
+     const ui::LatencyInfo& latency) {
+   DCHECK_EQ(blink::WebGestureDevice::kTouchpad, event->SourceDevice());
++  // domicile: a pinch begun with Meta held magnifies the desk, the outermost
++  // page, around the pointer, whatever window is under it. It skips hit
++  // testing and the synthetic ctrl+wheel, so no page or app sees it. A pinch
++  // without Meta goes to the window under the pointer.
++  if (event->GetType() == blink::WebInputEvent::Type::kGesturePinchBegin) {
++    desk_pinch_ = event->GetModifiers() & blink::WebInputEvent::kMetaKey;
++  }
++  if (desk_pinch_ &&
++      (event->GetType() == blink::WebInputEvent::Type::kGesturePinchBegin ||
++       event->GetType() == blink::WebInputEvent::Type::kGesturePinchUpdate ||
++       event->GetType() == blink::WebInputEvent::Type::kGesturePinchEnd)) {
++    if (event->GetType() == blink::WebInputEvent::Type::kGesturePinchEnd) {
++      desk_pinch_ = false;
++    }
++    blink::WebGestureEvent pinch(*event);
++    pinch.SetNeedsWheelEvent(false);
++    pinch.has_native_pinch = false;
++    root_view->ProcessGestureEvent(pinch, latency);
++    return;
++  }
+   event_targeter_->FindTargetAndDispatch(root_view, *event, latency);
+ }
+ 
+diff --git a/components/input/render_widget_host_input_event_router.h b/components/input/render_widget_host_input_event_router.h
+index 46683f5ac..d26604f1e 100644
+--- a/components/input/render_widget_host_input_event_router.h
++++ b/components/input/render_widget_host_input_event_router.h
+@@ -295,6 +295,15 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
+   void RouteTouchpadGestureEvent(RenderWidgetHostViewInput* root_view,
+                                  const blink::WebGestureEvent* event,
+                                  const ui::LatencyInfo& latency);
++  // domicile: magnifies `root_view`'s page by `scale` around `wheel`'s
++  // position, as one touchpad pinch, for Meta+scroll.
++  void ZoomDeskBy(RenderWidgetHostViewInput* root_view,
++                  const blink::WebMouseWheelEvent& wheel,
++                  float scale,
++                  const ui::LatencyInfo& latency);
++  // domicile: how far Meta+scroll scrolls, in pixels, to double the desk's
++  // magnification.
++  static constexpr float kDeskZoomPixelsPerDoubling = 300.0f;
+   void DispatchTouchpadGestureEvent(
+       RenderWidgetHostViewInput* root_view,
+       RenderWidgetHostViewInput* target,
+@@ -430,6 +439,9 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
+   bool touchscreen_gesture_target_moved_recently_ = false;
+   bool touchscreen_gesture_target_moved_recently_for_iov2_ = false;
+   raw_ptr<RenderWidgetHostViewInput> touchpad_gesture_target_ = nullptr;
++  // domicile: whether the touchpad pinch in progress began with Meta held,
++  // and so magnifies the desk.
++  bool desk_pinch_ = false;
+   raw_ptr<RenderWidgetHostViewInput> bubbling_gesture_scroll_target_ = nullptr;
+   raw_ptr<RenderWidgetHostViewInput> bubbling_gesture_scroll_origin_ = nullptr;
+   // Used to target wheel events for the duration of a scroll.
+diff --git a/content/browser/renderer_host/render_widget_host_view_aura.cc b/content/browser/renderer_host/render_widget_host_view_aura.cc
+index 07abe54a2..24cebdb28 100644
+--- a/content/browser/renderer_host/render_widget_host_view_aura.cc
++++ b/content/browser/renderer_host/render_widget_host_view_aura.cc
+@@ -1417,7 +1417,10 @@ void RenderWidgetHostViewAura::GestureEventAck(
+ 
+   event_handler_->GestureEventAck(event, ack_result);
+ 
+-  ForwardTouchpadZoomEventIfNecessary(event, ack_result);
++  // domicile: no ForwardTouchpadZoomEventIfNecessary. The outermost page is
++  // the desk, which a plain touchpad pinch never magnifies: a <webview>
++  // magnifies its own page, and Meta+pinch reaches the desk without a wheel
++  // (see RenderWidgetHostInputEventRouter::RouteTouchpadGestureEvent).
+ }
+ 
+ void RenderWidgetHostViewAura::ProcessAckedTouchEvent(
+diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
+index cb0473cb5..93b0b51a9 100644
+--- a/ui/events/ozone/evdev/event_factory_evdev.cc
++++ b/ui/events/ozone/evdev/event_factory_evdev.cc
+@@ -391,8 +391,10 @@ void EventFactoryEvdev::DispatchPinchEvent(const PinchEventParams& params) {
+   if (params.type == EventType::kGesturePinchUpdate) {
+     details.set_scale(params.scale);
+   }
+-  GestureEvent event(params.location.x(), params.location.y(), 0,
+-                     params.timestamp, details);
++  // domicile: with the keyboard's modifiers, so Meta+pinch can magnify the
++  // desk.
++  GestureEvent event(params.location.x(), params.location.y(),
++                     modifiers_.GetModifierFlags(), params.timestamp, details);
+   if (params.native_pinch) {
+     SetPinchMetadata(event, *params.native_pinch);
+   }
+diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.cc b/ui/ozone/platform/wayland/host/wayland_event_source.cc
+index 1faf0dd82..6761e85bb 100644
+--- a/ui/ozone/platform/wayland/host/wayland_event_source.cc
++++ b/ui/ozone/platform/wayland/host/wayland_event_source.cc
+@@ -946,8 +946,10 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
+   }
+ 
+   auto location = pointer_location_ + delta;
+-  GestureEvent event(location.x(), location.y(), 0 /* flags */, timestamp,
+-                     details);
++  // domicile: with the keyboard's modifiers, so Meta+pinch can magnify the
++  // desk.
++  GestureEvent event(location.x(), location.y(), keyboard_modifiers_,
++                     timestamp, details);
+   event.set_source_device_id(device_id);
+   if (native_pinch) {
+     SetPinchMetadata(event, *native_pinch);
+-- 
+2.56.0
+

@@ -1,0 +1,277 @@
+From d43df00b2f21a8964e7ff1b8a81be84c78e64055 Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 19:07:52 +0700
+Subject: [PATCH] domicile: a webview's prompts ask the shell
+
+---
+ .../chrome_bluetooth_delegate_impl_client.cc  | 16 +++++++++
+ .../chrome_bluetooth_delegate_impl_client.h   | 10 ++++++
+ .../extensions/extension_install_prompt.h     |  4 +++
+ ...e_file_system_access_permission_context.cc | 34 +++++++++++++++++++
+ ...me_file_system_access_permission_context.h | 29 ++++++++++++++++
+ .../extension_install_dialog_view.cc          | 17 ++++++++++
+ .../renderer/bindings/generated_in_core.gni   |  2 ++
+ .../blink/renderer/bindings/idl_in_core.gni   |  1 +
+ .../blink/renderer/core/html/build.gni        |  2 ++
+ 9 files changed, 115 insertions(+)
+
+diff --git a/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.cc b/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.cc
+index 6b4dd7116..c89f084ff 100644
+--- a/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.cc
++++ b/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.cc
+@@ -76,12 +76,28 @@ ChromeBluetoothDelegateImplClient::ShowBluetoothScanningPrompt(
+ #endif
+ }
+ 
++namespace {
++ChromeBluetoothDelegateImplClient::PairPromptOverride g_pair_prompt_override =
++    nullptr;
++}  // namespace
++
++// static
++void ChromeBluetoothDelegateImplClient::SetPairPromptOverride(
++    PairPromptOverride override_prompt) {
++  g_pair_prompt_override = override_prompt;
++}
++
+ void ChromeBluetoothDelegateImplClient::ShowBluetoothDevicePairDialog(
+     content::RenderFrameHost* frame,
+     const std::u16string& device_identifier,
+     content::BluetoothDelegate::PairPromptCallback callback,
+     content::BluetoothDelegate::PairingKind pairing_kind,
+     const std::optional<std::u16string>& pin) {
++  if (g_pair_prompt_override) {
++    g_pair_prompt_override(frame, device_identifier, std::move(callback),
++                           pairing_kind, pin);
++    return;
++  }
+ #if PAIR_BLUETOOTH_ON_DEMAND()
+   switch (pairing_kind) {
+     case content::BluetoothDelegate::PairingKind::kProvidePin:
+diff --git a/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.h b/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.h
+index aa6c04935..62673fb12 100644
+--- a/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.h
++++ b/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.h
+@@ -42,6 +42,16 @@ class ChromeBluetoothDelegateImplClient
+       const content::BluetoothScanningPrompt::EventHandler& event_handler)
+       override;
+ 
++  // Domicile: when set, every pairing prompt goes here instead of Chrome's
++  // dialogs, so the shell can ask in its own UI.
++  using PairPromptOverride =
++      void (*)(content::RenderFrameHost* frame,
++               const std::u16string& device_identifier,
++               content::BluetoothDelegate::PairPromptCallback callback,
++               content::BluetoothDelegate::PairingKind pairing_kind,
++               const std::optional<std::u16string>& pin);
++  static void SetPairPromptOverride(PairPromptOverride override_prompt);
++
+   void ShowBluetoothDevicePairDialog(
+       content::RenderFrameHost* frame,
+       const std::u16string& device_identifier,
+diff --git a/chrome/browser/extensions/extension_install_prompt.h b/chrome/browser/extensions/extension_install_prompt.h
+index 7edcac89e..f811dd3b3 100644
+--- a/chrome/browser/extensions/extension_install_prompt.h
++++ b/chrome/browser/extensions/extension_install_prompt.h
+@@ -60,6 +60,10 @@ class ExtensionInstallPrompt : public extensions::ExtensionInstallPromptClient {
+   // The implementations of this function are platform-specific.
+   static ShowDialogCallback GetDefaultShowDialogCallback();
+ 
++  // Domicile: when set, GetDefaultShowDialogCallback returns this instead of
++  // Chrome's dialog, so the shell can ask in its own UI.
++  static void SetDefaultShowDialogOverride(ShowDialogCallback show);
++
+   // Returns the appropriate prompt type for the given `extension`.
+   // TODO(devlin): This method is yucky - callers probably only care about one
+   // prompt type. We just need to comb through and figure out what it is.
+diff --git a/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc b/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc
+index e3dae0538..2a342bc33 100644
+--- a/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc
++++ b/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc
+@@ -207,6 +207,9 @@ const char kTimestampKey[] = "timestamp";
+ constexpr char kDefaultNotAllowedMessage[] =
+     "Showing a file picker is not allowed.";
+ 
++// Domicile: see SetDomicilePrompts.
++ChromeFileSystemAccessPermissionContext::DomicilePrompts g_domicile_prompts;
++
+ void ShowFileSystemAccessRestrictedDirectoryDialogOnUIThread(
+     content::GlobalRenderFrameHostId frame_id,
+     const url::Origin& origin,
+@@ -232,6 +235,11 @@ void ShowFileSystemAccessRestrictedDirectoryDialogOnUIThread(
+     return;
+   }
+ 
++  if (g_domicile_prompts.ask_restricted) {
++    g_domicile_prompts.ask_restricted(web_contents, origin, handle_type,
++                                      std::move(callback));
++    return;
++  }
+   ShowFileSystemAccessRestrictedDirectoryDialog(
+       origin, handle_type, std::move(callback), web_contents);
+ }
+@@ -262,6 +270,11 @@ void ShowFileSystemAccessDangerousFileDialogOnUIThread(
+     return;
+   }
+ 
++  if (g_domicile_prompts.ask_dangerous) {
++    g_domicile_prompts.ask_dangerous(web_contents, origin, path_info.path,
++                                     std::move(callback));
++    return;
++  }
+   ShowFileSystemAccessDangerousFileDialog(origin, path_info,
+                                           std::move(callback), web_contents);
+ }
+@@ -933,6 +946,18 @@ bool PathInfosContains(const std::vector<content::PathInfo>& path_infos,
+ 
+ }  // namespace
+ 
++// static
++void ChromeFileSystemAccessPermissionContext::SetDomicilePrompts(
++    const DomicilePrompts& prompts) {
++  g_domicile_prompts = prompts;
++}
++
++// static
++const ChromeFileSystemAccessPermissionContext::DomicilePrompts&
++ChromeFileSystemAccessPermissionContext::GetDomicilePrompts() {
++  return g_domicile_prompts;
++}
++
+ ChromeFileSystemAccessPermissionContext::Grants::Grants() = default;
+ ChromeFileSystemAccessPermissionContext::Grants::~Grants() = default;
+ ChromeFileSystemAccessPermissionContext::Grants::Grants(Grants&&) = default;
+@@ -1150,6 +1175,15 @@ class ChromeFileSystemAccessPermissionContext::PermissionGrantImpl
+ 
+     auto* request_manager =
+         FileSystemAccessPermissionRequestManager::FromWebContents(web_contents);
++    // Domicile: a guest has no manager. Its element asks.
++    if (!request_manager && g_domicile_prompts.ask_access) {
++      g_domicile_prompts.ask_access(
++          web_contents, origin_, path_info_.path, handle_type_,
++          type_ == GrantType::kWrite,
++          base::BindOnce(&PermissionGrantImpl::OnPermissionRequestResult, this,
++                         std::move(callback)));
++      return;
++    }
+     if (!request_manager) {
+       // Extension contexts (popup, side panel) may not have a permission
+       // request manager attached. Since the user already explicitly selected a
+diff --git a/chrome/browser/file_system_access/chrome_file_system_access_permission_context.h b/chrome/browser/file_system_access/chrome_file_system_access_permission_context.h
+index 05ee182cf..a764f6a44 100644
+--- a/chrome/browser/file_system_access/chrome_file_system_access_permission_context.h
++++ b/chrome/browser/file_system_access/chrome_file_system_access_permission_context.h
+@@ -74,6 +74,35 @@ class ChromeFileSystemAccessPermissionContext
+ #endif
+ {
+  public:
++  // Domicile: asks in place of Chrome's file access prompt and dialogs, which
++  // are drawn on the outermost WebContents' window. Set once, before any is
++  // asked. See //chrome/browser/domicile/domicile_prompts.h.
++  struct DomicilePrompts {
++    // A page with no FileSystemAccessPermissionRequestManager (a <webview>
++    // guest) asks for read or write access to `path`.
++    void (*ask_access)(
++        content::WebContents* web_contents,
++        const url::Origin& origin,
++        const base::FilePath& path,
++        HandleType handle_type,
++        bool write,
++        base::OnceCallback<void(permissions::PermissionAction)> callback) = nullptr;
++    // The page picked a folder it may not open.
++    void (*ask_restricted)(
++        content::WebContents* web_contents,
++        const url::Origin& origin,
++        HandleType handle_type,
++        base::OnceCallback<void(SensitiveEntryResult)> callback) = nullptr;
++    // The page would save a file Safe Browsing calls dangerous.
++    void (*ask_dangerous)(
++        content::WebContents* web_contents,
++        const url::Origin& origin,
++        const base::FilePath& path,
++        base::OnceCallback<void(SensitiveEntryResult)> callback) = nullptr;
++  };
++  static void SetDomicilePrompts(const DomicilePrompts& prompts);
++  static const DomicilePrompts& GetDomicilePrompts();
++
+   using FileCreatedFromShowSaveFilePickerCallbackList =
+       base::RepeatingCallbackList<void(const GURL&,
+                                        const storage::FileSystemURL&)>;
+diff --git a/chrome/browser/ui/views/extensions/extension_install_dialog_view.cc b/chrome/browser/ui/views/extensions/extension_install_dialog_view.cc
+index 83ce5b59c..6c862f7b5 100644
+--- a/chrome/browser/ui/views/extensions/extension_install_dialog_view.cc
++++ b/chrome/browser/ui/views/extensions/extension_install_dialog_view.cc
+@@ -11,6 +11,7 @@
+ #include "base/functional/bind.h"
+ #include "base/i18n/message_formatter.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/extensions/extension_install_prompt.h"
+ #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
+@@ -729,8 +730,24 @@ void ExtensionInstallDialogView::EnableInstallButton() {
+ BEGIN_METADATA(ExtensionInstallDialogView)
+ END_METADATA
+ 
++namespace {
++ExtensionInstallPrompt::ShowDialogCallback& GetDomicileShowDialogOverride() {
++  static base::NoDestructor<ExtensionInstallPrompt::ShowDialogCallback> show;
++  return *show;
++}
++}  // namespace
++
++// static
++void ExtensionInstallPrompt::SetDefaultShowDialogOverride(
++    ShowDialogCallback show) {
++  GetDomicileShowDialogOverride() = std::move(show);
++}
++
+ // static
+ ExtensionInstallPrompt::ShowDialogCallback
+ ExtensionInstallPrompt::GetDefaultShowDialogCallback() {
++  if (GetDomicileShowDialogOverride()) {
++    return GetDomicileShowDialogOverride();
++  }
+   return base::BindRepeating(&ShowExtensionInstallDialogImpl);
+ }
+diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
+index dec9db633..b02df5102 100644
+--- a/third_party/blink/renderer/bindings/generated_in_core.gni
++++ b/third_party/blink/renderer/bindings/generated_in_core.gni
+@@ -1216,6 +1216,8 @@ generated_interface_sources_in_core = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_external_app_event.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_sign_in_event.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_sign_in_event.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_prompt_event.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_prompt_event.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
+index 943faa8dc..322ee52c3 100644
+--- a/third_party/blink/renderer/bindings/idl_in_core.gni
++++ b/third_party/blink/renderer/bindings/idl_in_core.gni
+@@ -470,6 +470,7 @@ static_idl_files_in_core = [
+   "//third_party/blink/renderer/core/html/domicile/domicile_will_navigate_event.idl",
+   "//third_party/blink/renderer/core/html/domicile/domicile_external_app_event.idl",
+   "//third_party/blink/renderer/core/html/domicile/domicile_sign_in_event.idl",
++  "//third_party/blink/renderer/core/html/domicile/domicile_prompt_event.idl",
+   "//third_party/blink/renderer/core/html/html_geolocation_element.idl",
+   "//third_party/blink/renderer/core/html/html_head_element.idl",
+   "//third_party/blink/renderer/core/html/html_heading_element.idl",
+diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
+index 52530cfe4..57354f267 100644
+--- a/third_party/blink/renderer/core/html/build.gni
++++ b/third_party/blink/renderer/core/html/build.gni
+@@ -110,6 +110,8 @@ blink_core_sources_html = [
+   "domicile/domicile_external_app_event.h",
+   "domicile/domicile_sign_in_event.cc",
+   "domicile/domicile_sign_in_event.h",
++  "domicile/domicile_prompt_event.cc",
++  "domicile/domicile_prompt_event.h",
+   "domicile/html_app_element.cc",
+   "domicile/html_app_element.h",
+   "domicile/html_web_view_element.cc",
+-- 
+2.56.0
+

@@ -1,0 +1,130 @@
+From e49c27dfd373965bab201509cfe99f613b3e93fc Mon Sep 17 00:00:00 2001
+From: Domicile Thorium POC <domicile-thorium-poc@invalid.example>
+Date: Sat, 14 Nov 2026 19:16:23 +0700
+Subject: [PATCH] domicile: a webview's tooltips are the shell's
+
+---
+ .../browser/renderer_host/render_widget_host_delegate.cc   | 5 +++++
+ .../browser/renderer_host/render_widget_host_delegate.h    | 5 +++++
+ content/browser/renderer_host/render_widget_host_impl.cc   | 5 +++++
+ content/browser/web_contents/web_contents_impl.cc          | 5 +++++
+ content/browser/web_contents/web_contents_impl.h           | 2 ++
+ content/public/browser/web_contents_delegate.cc            | 6 ++++++
+ content/public/browser/web_contents_delegate.h             | 7 +++++++
+ 7 files changed, 35 insertions(+)
+
+diff --git a/content/browser/renderer_host/render_widget_host_delegate.cc b/content/browser/renderer_host/render_widget_host_delegate.cc
+index 942d2a5c2..3c8314d0c 100644
+--- a/content/browser/renderer_host/render_widget_host_delegate.cc
++++ b/content/browser/renderer_host/render_widget_host_delegate.cc
+@@ -201,6 +201,11 @@ bool RenderWidgetHostDelegate::ShouldDoLearning() {
+   return true;
+ }
+ 
++bool RenderWidgetHostDelegate::DomicileTooltip(RenderWidgetHostImpl* widget,
++                                               const std::u16string& text) {
++  return false;
++}
++
+ #if BUILDFLAG(IS_ANDROID)
+ gfx::PointF RenderWidgetHostDelegate::GetCurrentTouchSequenceOffset() {
+   return gfx::PointF();
+diff --git a/content/browser/renderer_host/render_widget_host_delegate.h b/content/browser/renderer_host/render_widget_host_delegate.h
+index 74a2c4609..0c53acad3 100644
+--- a/content/browser/renderer_host/render_widget_host_delegate.h
++++ b/content/browser/renderer_host/render_widget_host_delegate.h
+@@ -412,6 +412,11 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
+   // shouldn't be used to improve typing suggestions for the user.
+   virtual bool ShouldDoLearning();
+ 
++  // Domicile: the tooltip under the pointer in `widget` is now `text` ("" for
++  // none). True when the delegate shows it itself, so the view draws none.
++  virtual bool DomicileTooltip(RenderWidgetHostImpl* widget,
++                               const std::u16string& text);
++
+ #if BUILDFLAG(IS_ANDROID)
+   // Get the offset for the current touch sequence. e.g. visible top controls or
+   // side UI will result in a nonzero offset being added to touch events.
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index b7152d366..c2a00b242 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -3041,6 +3041,11 @@ void RenderWidgetHostImpl::UpdateTooltipUnderCursor(
+     return;
+   }
+ 
++  // Domicile: a <webview>'s shell draws its page's tooltips.
++  if (delegate_ && delegate_->DomicileTooltip(this, tooltip_text)) {
++    return;
++  }
++
+   view_->UpdateTooltipUnderCursor(
+       GetWrappedTooltipText(tooltip_text, text_direction_hint));
+ }
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+index 06d8cc74c..383b38bba 100644
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -5469,6 +5469,11 @@ bool WebContentsImpl::IsFullscreen() {
+   return delegate_ && delegate_->IsFullscreenForTabOrPending(this);
+ }
+ 
++bool WebContentsImpl::DomicileTooltip(RenderWidgetHostImpl* widget,
++                                      const std::u16string& text) {
++  return delegate_ && delegate_->DomicileTooltip(this, widget, text);
++}
++
+ bool WebContentsImpl::ShouldShowStaleContentOnEviction() {
+   return GetDelegate() && GetDelegate()->ShouldShowStaleContentOnEviction(this);
+ }
+diff --git a/content/browser/web_contents/web_contents_impl.h b/content/browser/web_contents/web_contents_impl.h
+index fef4c035f..42165a20c 100644
+--- a/content/browser/web_contents/web_contents_impl.h
++++ b/content/browser/web_contents/web_contents_impl.h
+@@ -1161,6 +1161,8 @@ class CONTENT_EXPORT WebContentsImpl
+                                 float ratio) override;
+   void SetTopControlsGestureScrollInProgress(bool in_progress) override;
+   void RenderWidgetCreated(RenderWidgetHostImpl* render_widget_host) override;
++  bool DomicileTooltip(RenderWidgetHostImpl* widget,
++                       const std::u16string& text) override;
+   void RenderWidgetDeleted(RenderWidgetHostImpl* render_widget_host) override;
+   void RenderWidgetWasResized(RenderWidgetHostImpl* render_widget_host,
+                               bool width_changed) override;
+diff --git a/content/public/browser/web_contents_delegate.cc b/content/public/browser/web_contents_delegate.cc
+index 2de5b3392..2bd70cd76 100644
+--- a/content/public/browser/web_contents_delegate.cc
++++ b/content/public/browser/web_contents_delegate.cc
+@@ -205,6 +205,12 @@ bool WebContentsDelegate::IsFullscreenForTabOrPending(
+   return false;
+ }
+ 
++bool WebContentsDelegate::DomicileTooltip(WebContents* source,
++                                          RenderWidgetHost* widget,
++                                          const std::u16string& text) {
++  return false;
++}
++
+ FullscreenState WebContentsDelegate::GetFullscreenState(
+     const WebContents* web_contents) const {
+   FullscreenState state;
+diff --git a/content/public/browser/web_contents_delegate.h b/content/public/browser/web_contents_delegate.h
+index ed1148839..e8deade28 100644
+--- a/content/public/browser/web_contents_delegate.h
++++ b/content/public/browser/web_contents_delegate.h
+@@ -556,6 +556,13 @@ class CONTENT_EXPORT WebContentsDelegate {
+   // can name the page that keeps the screens on.
+   virtual void ScreenWakeLockChanged(WebContents* source, bool held) {}
+ 
++  // Domicile: the tooltip under the pointer in `widget`, which draws some of
++  // `source`'s frames, is now `text` ("" for none). Return true to show it
++  // yourself; Chrome then draws none.
++  virtual bool DomicileTooltip(WebContents* source,
++                               RenderWidgetHost* widget,
++                               const std::u16string& text);
++
+   // Returns true if `web_contents` is, or is transitioning to, tab-fullscreen.
+   virtual bool IsFullscreenForTabOrPending(const WebContents* web_contents);
+ 
+-- 
+2.56.0
+
