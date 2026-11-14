@@ -51,7 +51,7 @@ git -C "$TMP/chromium" format-patch -1 --stdout > "$TMP/domicile/0001.patch"
 git -C "$TMP/chromium" reset --hard -q "$BASE_COMMIT"
 cp -a "$TMP/chromium" "$TMP/chromium-pristine"
 
-if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium" --domicile-patches "$TMP/domicile" --pin "$THORIUM_PIN" >"$TMP/order.log" 2>&1; then
+if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium" --domicile-patches "$TMP/domicile" --domicile-series "$TMP/domicile" --pin "$THORIUM_PIN" >"$TMP/order.log" 2>&1; then
   :
 else
   fail "integration fixture did not apply ordered patches: $(cat "$TMP/order.log")"
@@ -62,18 +62,18 @@ grep -q 'domicile patch' "$TMP/chromium/chrome/browser/shared.cc" || fail "Domic
 grep -q 'fixture mode: GRD/XTB stage not executed' "$TMP/order.log" || fail "fixture falsely claimed GRD execution"
 
 cp -a "$TMP/chromium-pristine" "$TMP/chromium-pin"
-if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium-pin" --domicile-patches "$TMP/domicile" --pin wrong >"$TMP/pin.log" 2>&1; then fail "pin mismatch unexpectedly passed"; fi
+if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium-pin" --domicile-patches "$TMP/domicile" --domicile-series "$TMP/domicile" --pin wrong >"$TMP/pin.log" 2>&1; then fail "pin mismatch unexpectedly passed"; fi
 grep -q 'pin verification failed' "$TMP/pin.log" || fail "pin mismatch diagnostic missing"
 
-if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/missing-chromium" --domicile-patches "$TMP/domicile" --pin "$THORIUM_PIN" >"$TMP/source.log" 2>&1; then fail "missing source checkout unexpectedly passed"; fi
+if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/missing-chromium" --domicile-patches "$TMP/domicile" --domicile-series "$TMP/domicile" --pin "$THORIUM_PIN" >"$TMP/source.log" 2>&1; then fail "missing source checkout unexpectedly passed"; fi
 grep -q 'Chromium source is not a Git checkout' "$TMP/source.log" || fail "source checkout failure diagnostic missing"
 
 cp -a "$TMP/chromium-pristine" "$TMP/chromium-child"
-if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium-child" --domicile-patches "$TMP/domicile" --pin "$THORIUM_PIN" --require-child "$TMP/missing-child" >"$TMP/child.log" 2>&1; then fail "missing child repo unexpectedly passed"; fi
+if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium-child" --domicile-patches "$TMP/domicile" --domicile-series "$TMP/domicile" --pin "$THORIUM_PIN" --require-child "$TMP/missing-child" >"$TMP/child.log" 2>&1; then fail "missing child repo unexpectedly passed"; fi
 grep -q 'required child repository' "$TMP/child.log" || fail "child repo failure diagnostic missing"
 
 cp -a "$TMP/chromium-pristine" "$TMP/chromium-grd"
-if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium-grd" --domicile-patches "$TMP/domicile" --pin "$THORIUM_PIN" --require-grd "$TMP/missing-grd" >"$TMP/grd.log" 2>&1; then fail "missing GRD stage unexpectedly passed"; fi
+if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium-grd" --domicile-patches "$TMP/domicile" --domicile-series "$TMP/domicile" --pin "$THORIUM_PIN" --require-grd "$TMP/missing-grd" >"$TMP/grd.log" 2>&1; then fail "missing GRD stage unexpectedly passed"; fi
 grep -q 'required GRD stage' "$TMP/grd.log" || fail "GRD failure diagnostic missing"
 
 echo "Thorium integration fixture tests passed"

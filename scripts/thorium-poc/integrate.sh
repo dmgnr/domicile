@@ -9,6 +9,7 @@ FIXTURE=false
 THORIUM_ROOT=""
 CHROMIUM_SRC=""
 DOMICILE_PATCHES="$ROOT/scripts/thorium-poc/patches"
+DOMICILE_SERIES="$ROOT/packages/domicile-engine/patches"
 CHILD_MANIFEST="$ROOT/scripts/thorium-poc/chromium-156-children.tsv"
 PIN=""
 REQUIRED_CHILDREN=()
@@ -20,6 +21,7 @@ while (($# > 0)); do
     --thorium-root) THORIUM_ROOT="$2"; shift 2 ;;
     --chromium-src) CHROMIUM_SRC="$2"; shift 2 ;;
     --domicile-patches) DOMICILE_PATCHES="$2"; shift 2 ;;
+    --domicile-series) DOMICILE_SERIES="$2"; shift 2 ;;
     --child-manifest) CHILD_MANIFEST="$2"; shift 2 ;;
     --pin) PIN="$2"; shift 2 ;;
     --require-child) REQUIRED_CHILDREN+=("$2"); shift 2 ;;
@@ -106,7 +108,10 @@ else
   python3 "$THORIUM_ROOT/patch_scripts/series/apply_series.py" \
     --thorium-root "$THORIUM_ROOT" --source-tree "$CHROMIUM_SRC" --apply
 fi
-"$ROOT/scripts/thorium-poc/apply-domicile-ports.sh" --root "$CHROMIUM_SRC" --patches "$DOMICILE_PATCHES"
+"$ROOT/scripts/thorium-poc/apply-domicile-ports.sh" \
+  --root "$CHROMIUM_SRC" \
+  --series "$DOMICILE_SERIES" \
+  --overrides "$DOMICILE_PATCHES"
 if [[ "$FIXTURE" == true ]]; then
   [[ ${#REQUIRED_GRD[@]} -eq 0 ]] || { echo "required GRD stage inputs are missing: ${REQUIRED_GRD[*]}" >&2; exit 1; }
 else
