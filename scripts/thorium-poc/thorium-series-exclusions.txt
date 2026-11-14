@@ -1,0 +1,4 @@
+# Keep Chromium's security defaults for downloads and encryption.
+other/allow-insecure-downloads.patch
+other/disable-download-quarantine.patch
+other/disable-encryption.patch

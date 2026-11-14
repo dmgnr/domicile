@@ -11,6 +11,7 @@ CHROMIUM_SRC=""
 DOMICILE_PATCHES="$ROOT/scripts/thorium-poc/patches"
 DOMICILE_SERIES="$ROOT/packages/domicile-engine/patches"
 CHILD_MANIFEST="$ROOT/scripts/thorium-poc/chromium-156-children.tsv"
+SECURITY_EXCLUSIONS="$ROOT/scripts/thorium-poc/thorium-series-exclusions.txt"
 PIN=""
 REQUIRED_CHILDREN=()
 REQUIRED_GRD=()
@@ -53,6 +54,12 @@ actual="$(git -C "$THORIUM_ROOT" rev-parse HEAD 2>/dev/null || true)"
 git -C "$CHROMIUM_SRC" rev-parse --git-dir >/dev/null 2>&1 || { echo "Chromium source is not a Git checkout" >&2; exit 1; }
 SERIES="$THORIUM_ROOT/patch_scripts/series/series"
 [[ -f "$SERIES" ]] || { echo "Thorium ordered patch series is missing: $SERIES" >&2; exit 1; }
+[[ -f "$SECURITY_EXCLUSIONS" ]] || { echo "Thorium security exclusion policy is missing: $SECURITY_EXCLUSIONS" >&2; exit 1; }
+FILTER_WORK="$(mktemp -d "${RUNNER_TEMP:-/tmp}/domicile-thorium-series.XXXXXX")"
+trap 'rm -rf "$FILTER_WORK"' EXIT
+FILTERED_SERIES="$FILTER_WORK/series"
+python3 "$ROOT/scripts/thorium-poc/filter-thorium-series.py" \
+  --series "$SERIES" --exclusions "$SECURITY_EXCLUSIONS" > "$FILTERED_SERIES"
 for child in "${REQUIRED_CHILDREN[@]}"; do
   [[ -d "$child/.git" || -f "$child/.git" ]] || { echo "required child repository is missing: $child" >&2; exit 1; }
 done
@@ -103,10 +110,11 @@ apply_fixture_series() {
 }
 
 if [[ "$FIXTURE" == true ]]; then
-  apply_fixture_series "$SERIES" "$THORIUM_ROOT"
+  apply_fixture_series "$FILTERED_SERIES" "$THORIUM_ROOT"
 else
   python3 "$THORIUM_ROOT/patch_scripts/series/apply_series.py" \
-    --thorium-root "$THORIUM_ROOT" --source-tree "$CHROMIUM_SRC" --apply
+    --thorium-root "$THORIUM_ROOT" --source-tree "$CHROMIUM_SRC" \
+    --series "$FILTERED_SERIES" --apply
 fi
 "$ROOT/scripts/thorium-poc/apply-domicile-ports.sh" \
   --root "$CHROMIUM_SRC" \
@@ -127,8 +135,8 @@ else
   echo "Applied Thorium GRD/XTB rebase"
 fi
 if [[ "$FIXTURE" == true ]]; then
-  echo "PASS: Thorium fixture overlay and ordered patch application completed."
+  echo "PASS: Thorium fixture overlay and security-filtered ordered patch application completed."
   echo "fixture mode: GRD/XTB stage not executed"
 else
-  echo "PASS: Thorium overlays, ordered patches, Domicile patches, and GRD/XTB completed."
+  echo "PASS: Thorium overlays, security-filtered ordered patches, Domicile patches, and GRD/XTB completed."
 fi

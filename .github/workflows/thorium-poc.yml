@@ -30,6 +30,9 @@ jobs:
       - name: Test DEPS-pinned child source acquisition
         run: scripts/thorium-poc/tests/test-child-sources.sh
 
+      - name: Test Thorium security exclusions
+        run: scripts/thorium-poc/tests/test-thorium-series-policy.sh
+
       - name: Apply the Domicile patch series to pinned Chromium 156
         id: preflight
         continue-on-error: true

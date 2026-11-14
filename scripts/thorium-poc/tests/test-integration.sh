@@ -37,7 +37,12 @@ printf 'base\nthorium patch\n' > "$TMP/chromium/chrome/browser/shared.cc"
 git -C "$TMP/chromium" add .
 git -C "$TMP/chromium" commit -qm thorium-patch
 git -C "$TMP/chromium" format-patch -1 --stdout > "$TMP/thorium/patch_scripts/series/first.patch"
-printf 'patch_scripts/series/first.patch\n' > "$TMP/thorium/patch_scripts/series/series"
+cat > "$TMP/thorium/patch_scripts/series/series" <<'SERIES'
+patch_scripts/series/first.patch
+other/allow-insecure-downloads.patch
+other/disable-download-quarantine.patch
+other/disable-encryption.patch
+SERIES
 git -C "$TMP/chromium" reset --hard -q HEAD~
 git -C "$TMP/chromium" apply "$TMP/thorium/patch_scripts/series/first.patch"
 git -C "$TMP/chromium" add .
@@ -60,6 +65,9 @@ grep -q 'thorium patch' "$TMP/chromium/chrome/browser/shared.cc" || fail "Thoriu
 grep -q 'domicile patch' "$TMP/chromium/chrome/browser/shared.cc" || fail "Domicile overlap was lost"
 [[ -f "$TMP/chromium/chrome/browser/overlay.cc" ]] || fail "Thorium overlay was not copied"
 grep -q 'fixture mode: GRD/XTB stage not executed' "$TMP/order.log" || fail "fixture falsely claimed GRD execution"
+for patch in allow-insecure-downloads disable-download-quarantine disable-encryption; do
+  grep -Fq "Excluded Thorium patch by security policy: other/$patch.patch" "$TMP/order.log" || fail "security exclusion was not reported: $patch"
+done
 
 cp -a "$TMP/chromium-pristine" "$TMP/chromium-pin"
 if "$SCRIPT" --fixture --thorium-root "$TMP/thorium" --chromium-src "$TMP/chromium-pin" --domicile-patches "$TMP/domicile" --domicile-series "$TMP/domicile" --pin wrong >"$TMP/pin.log" 2>&1; then fail "pin mismatch unexpectedly passed"; fi
