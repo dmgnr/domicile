@@ -10,6 +10,7 @@ THORIUM_ROOT=""
 CHROMIUM_SRC=""
 DOMICILE_PATCHES="$ROOT/scripts/thorium-poc/patches"
 DOMICILE_SERIES="$ROOT/packages/domicile-engine/patches"
+DOMICILE_SOURCE="$ROOT/packages/domicile-engine/src"
 CHILD_MANIFEST="$ROOT/scripts/thorium-poc/chromium-156-children.tsv"
 SECURITY_EXCLUSIONS="$ROOT/scripts/thorium-poc/thorium-series-exclusions.txt"
 PIN=""
@@ -23,6 +24,7 @@ while (($# > 0)); do
     --chromium-src) CHROMIUM_SRC="$2"; shift 2 ;;
     --domicile-patches) DOMICILE_PATCHES="$2"; shift 2 ;;
     --domicile-series) DOMICILE_SERIES="$2"; shift 2 ;;
+    --domicile-source) DOMICILE_SOURCE="$2"; shift 2 ;;
     --child-manifest) CHILD_MANIFEST="$2"; shift 2 ;;
     --pin) PIN="$2"; shift 2 ;;
     --require-child) REQUIRED_CHILDREN+=("$2"); shift 2 ;;
@@ -104,7 +106,7 @@ apply_fixture_series() {
     [[ -f "$thorium_root/$patch" ]] || { echo "series patch is missing: $label" >&2; exit 1; }
     [[ -d "$CHROMIUM_SRC/$apply_root" ]] || { echo "required child repository is missing for $label ($CHROMIUM_SRC/$apply_root)" >&2; exit 1; }
     git -C "$CHROMIUM_SRC/$apply_root" rev-parse --git-dir >/dev/null 2>&1 || { echo "required apply root is not a Git checkout for $label" >&2; exit 1; }
-    git -C "$CHROMIUM_SRC/$apply_root" apply --3way "$thorium_root/$patch" || { echo "Thorium patch failed: $label" >&2; exit 1; }
+    git -C "$CHROMIUM_SRC/$apply_root" apply --reject "$thorium_root/$patch" || { echo "Thorium patch failed: $label" >&2; exit 1; }
     echo "Applied Thorium $label"
   done < "$series_file"
 }
@@ -116,6 +118,13 @@ else
     --thorium-root "$THORIUM_ROOT" --source-tree "$CHROMIUM_SRC" \
     --series "$FILTERED_SERIES" --apply
 fi
+[[ -d "$DOMICILE_SOURCE" ]] || { echo "required Domicile source overlay is missing: $DOMICILE_SOURCE" >&2; exit 1; }
+[[ -f "$DOMICILE_SOURCE/components/domicile/browser/shell_origin.cc" ]] || {
+  echo "required Domicile source overlay file is missing: components/domicile/browser/shell_origin.cc" >&2
+  exit 1
+}
+cp -a "$DOMICILE_SOURCE/." "$CHROMIUM_SRC/"
+echo "Applied Domicile source overlay: $DOMICILE_SOURCE"
 "$ROOT/scripts/thorium-poc/apply-domicile-ports.sh" \
   --root "$CHROMIUM_SRC" \
   --series "$DOMICILE_SERIES" \
@@ -136,8 +145,8 @@ else
   echo "Applied Thorium GRD/XTB rebase"
 fi
 if [[ "$FIXTURE" == true ]]; then
-  echo "PASS: Thorium fixture overlay and security-filtered ordered patch application completed."
+  echo "PASS: Thorium and Domicile source overlays and security-filtered ordered patch application completed."
   echo "fixture mode: GRD/XTB stage not executed"
 else
-  echo "PASS: Thorium overlays, security-filtered ordered patches, Domicile patches, and GRD/XTB completed."
+  echo "PASS: Thorium overlays, security-filtered ordered patches, Domicile source overlay and patches, and GRD/XTB completed."
 fi
