@@ -18,6 +18,25 @@ def require_match(source: str, pattern: str, message: str) -> None:
         raise SystemExit(message)
 
 
+def require_shell_binder(source: str, interface: str) -> None:
+    registration = f"map->Add<domicile::mojom::{interface}>"
+    start = source.find(registration)
+    if start < 0:
+        raise SystemExit(f"missing Domicile binder: {interface}")
+
+    remaining = source[start + len(registration) :]
+    next_registration = re.search(r"map->Add<domicile::mojom::\w+>", remaining)
+    end = start + len(registration) + (
+        next_registration.start() if next_registration is not None else len(remaining)
+    )
+    binder = source[start:end]
+    require_match(
+        binder,
+        r"if\s*\(!domicile::IsShellOrigin\(frame->GetLastCommittedOrigin\(\)\)\)\s*\{\s*mojo::ReportBadMessage\([\s\S]*?\);\s*return;",
+        f"Domicile binder {interface} must require the shell origin",
+    )
+
+
 def validate(root: Path) -> None:
     schemes = require_file(root, "chrome/common/chrome_content_client.cc")
     require_match(
@@ -51,11 +70,16 @@ def validate(root: Path) -> None:
     )
 
     binders = require_file(root, "chrome/browser/chrome_browser_interface_binders.cc")
-    shell_binder_guard = re.compile(
-        r"if\s*\(!domicile::IsShellOrigin\(frame->GetLastCommittedOrigin\(\)\)\)\s*\{\s*mojo::ReportBadMessage\([\s\S]*?\);\s*return;\s*\}"
-    )
-    if len(shell_binder_guard.findall(binders)) != 4:
-        raise SystemExit("expected four shell-origin guarded binders")
+    for interface in (
+        "ControlChannel",
+        "WebViewGuestHost",
+        "ExtensionTray",
+        "BrowserWindows",
+        "CastSinks",
+        "ShellFetch",
+        "Downloads",
+    ):
+        require_shell_binder(binders, interface)
 
     shell_origin = require_file(root, "components/domicile/browser/shell_origin.cc")
     require_match(

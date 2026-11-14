@@ -38,32 +38,19 @@ bool ValidateLaunchUrlWebUnsafe(const GURL& url) {
   return url_scheme_is_domicile || IsWebSafeScheme(url.scheme());
 }
 SOURCE
-  cat > "$source_root/chrome/browser/chrome_browser_interface_binders.cc" <<'SOURCE'
-void BindShellOnlyInterfaces() {
-  if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
-    mojo::ReportBadMessage("only the shell may bind this interface");
-    return;
-  }
-}
-void BindShellOnlyInterfaces() {
-  if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
-    mojo::ReportBadMessage("only the shell may bind this interface");
-    return;
-  }
-}
-void BindShellOnlyInterfaces() {
-  if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
-    mojo::ReportBadMessage("only the shell may bind this interface");
-    return;
-  }
-}
-void BindShellOnlyInterfaces() {
-  if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
-    mojo::ReportBadMessage("only the shell may bind this interface");
-    return;
-  }
-}
+  : > "$source_root/chrome/browser/chrome_browser_interface_binders.cc"
+  for interface in ControlChannel WebViewGuestHost ExtensionTray BrowserWindows CastSinks ShellFetch Downloads; do
+    cat >> "$source_root/chrome/browser/chrome_browser_interface_binders.cc" <<SOURCE
+map->Add<domicile::mojom::$interface>(base::BindRepeating(
+    [](content::RenderFrameHost* frame) {
+      if (!domicile::IsShellOrigin(frame->GetLastCommittedOrigin())) {
+        mojo::ReportBadMessage("only the shell may bind this interface");
+        return;
+      }
+      Bind$interface(frame);
+    }));
 SOURCE
+  done
   cat > "$source_root/components/domicile/browser/shell_origin.cc" <<'SOURCE'
 return origin.scheme() == kDomicileScheme &&
        origin.host() == kDomicileShellHost;
@@ -122,7 +109,7 @@ expect_invalid "$TMP/unvalidated-launch" "missing domicile launch URL validation
 
 cp -a "$TMP/valid" "$TMP/untrusted-binder"
 sed -i '0,/IsShellOrigin/s/IsShellOrigin/IsAnyOrigin/' "$TMP/untrusted-binder/chrome/browser/chrome_browser_interface_binders.cc"
-expect_invalid "$TMP/untrusted-binder" "expected four shell-origin guarded binders"
+expect_invalid "$TMP/untrusted-binder" "Domicile binder ControlChannel must require the shell origin"
 
 cp -a "$TMP/valid" "$TMP/wrong-shell-origin"
 sed -i 's/origin.host() == kDomicileShellHost/origin.host() == kAnyHost/' "$TMP/wrong-shell-origin/components/domicile/browser/shell_origin.cc"
