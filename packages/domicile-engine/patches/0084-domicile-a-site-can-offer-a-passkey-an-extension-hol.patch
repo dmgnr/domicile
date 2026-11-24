@@ -23,10 +23,10 @@ the time the user picked a passkey.
  2 files changed, 15 insertions(+), 11 deletions(-)
 
 diff --git a/chrome/browser/webauthn/chrome_web_authentication_delegate.cc b/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
-index 9baaeaf..869177c 100644
+index add5905..f8b63bb 100644
 --- a/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
 +++ b/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
-@@ -257,19 +257,15 @@ void ChromeWebAuthenticationDelegate::
+@@ -259,19 +259,15 @@ void ChromeWebAuthenticationDelegate::
      IsUserVerifyingPlatformAuthenticatorAvailableOverride(
          content::RenderFrameHost* render_frame_host,
          base::OnceCallback<void(std::optional<bool>)> callback) {
@@ -54,10 +54,10 @@ index 9baaeaf..869177c 100644
  
  content::WebAuthenticationRequestProxy*
 diff --git a/content/browser/webauth/authenticator_common_impl.cc b/content/browser/webauth/authenticator_common_impl.cc
-index 9bce473..cc3bcaf 100644
+index fc0e10a..d407c60 100644
 --- a/content/browser/webauth/authenticator_common_impl.cc
 +++ b/content/browser/webauth/authenticator_common_impl.cc
-@@ -1901,6 +1901,14 @@ void AuthenticatorCommonImpl::ContinueGetAssertionAfterRpIdCheck(
+@@ -1941,6 +1941,14 @@ void AuthenticatorCommonImpl::ContinueGetAssertionAfterRpIdCheck(
  
    req_state_->request_delegate = MaybeCreateRequestDelegate();
    if (!req_state_->request_delegate) {

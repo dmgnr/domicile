@@ -14,21 +14,27 @@ export type Pointer = {
    * the pointer move over a browser window's page.
    */
   warp: (x: number, y: number, unlessOver?: Box) => void;
+  /**
+   * Hold the pointer inside `boxes`, in the page's CSS pixels, for a window
+   * whose `pointerConstraint` is "confine"; none lets go, as the page going
+   * away does. Resolves false where the engine cannot hold it: nested in
+   * another compositor, or headless.
+   */
+  confine: (boxes: readonly Box[]) => Promise<boolean>;
 };
 
-export const pointer = (host: Pick<DomicileHost, "warpPointer">): Pointer => ({
+const rect = ({ x, y, width, height }: Box): DOMRectReadOnly =>
+  new DOMRectReadOnly(x, y, width, height);
+
+export const pointer = (
+  host: Pick<DomicileHost, "confinePointer" | "warpPointer">,
+): Pointer => ({
+  confine: (boxes) => host.confinePointer(boxes.map(rect)),
   warp: (x, y, unlessOver) => {
     host.warpPointer(
       x,
       y,
-      unlessOver === undefined
-        ? undefined
-        : new DOMRectReadOnly(
-            unlessOver.x,
-            unlessOver.y,
-            unlessOver.width,
-            unlessOver.height,
-          ),
+      unlessOver === undefined ? undefined : rect(unlessOver),
     );
   },
 });

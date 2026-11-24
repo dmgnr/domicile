@@ -36,7 +36,11 @@ fn browsed(target: &str) -> Result<(), String> {
     let socket =
         advertised(std::env::var(VARIABLE).ok().as_deref()).map_err(|why| why.to_string())?;
     let url = url_for(target, &here);
-    ask(&socket, &Request::OpenUrl { url }, Some(PATIENCE))
-        .map(|_| ())
-        .map_err(|why| why.to_string())
+    ask(
+        &socket,
+        &Request::OpenUrl { url, profile: None },
+        Some(PATIENCE),
+    )
+    .map(|_| ())
+    .map_err(|why| why.to_string())
 }

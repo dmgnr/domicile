@@ -1,0 +1,18 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// A page in a <webview>'s history, as HTMLWebViewElement.history() lists it.
+dictionary DomicileHistoryEntry {
+  // The entry's id, which `goToHistoryEntry()` takes. Never reused within the
+  // element's history.
+  required long id;
+
+  // The page's address.
+  required USVString url;
+
+  // The page's title, or its address when it has none.
+  required DOMString title;
+
+  // The page's favicon as a `data:image/png` URL, or empty when it has none.
+  required USVString favicon;
+};

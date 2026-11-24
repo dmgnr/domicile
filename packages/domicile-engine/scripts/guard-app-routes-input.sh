@@ -43,7 +43,8 @@
 #   pointer_leave   term
 #
 # and the page heard `domicile-focus-requested`, cancelable and bubbling, for
-# `term` three times.
+# `term` three times, and `domicile-key-delivered`, bubbling, for `term` once:
+# the key, not its release.
 #
 # HOW IT CAN FAIL. NEGATIVE=1 draws the same two boxes as `<div>`s and drives
 # the same input. The page hears the press -- it says so -- and not one of the
@@ -206,6 +207,8 @@ if os.environ["KIND"] == "div":
         forwarded = [line for line in heard if not (line.startswith("key ") and line.endswith(" up"))]
         if forwarded:
             print("with `<div>`s in place of the `<app>`s the compositor was still sent %s, so what the guard reads did not come from the element" % forwarded)
+        elif "GUARD key-delivered" in page:
+            print("with `<div>`s in place of the `<app>`s the page still heard `domicile-key-delivered` (%s), so what the guard reads did not come from the element" % page)
     raise SystemExit
 
 wanted = [
@@ -239,6 +242,8 @@ if '"GUARD keydown KeyA"' not in page:
     print("the page never heard the key (%s), so the harness delivered no key event and the key lines decide nothing" % page)
 elif asked != 3:
     print("the page heard %d cancelable, bubbling `domicile-focus-requested` for term where the three presses owed three (%s)" % (asked, page))
+elif page.count('"GUARD key-delivered') != 1 or '"GUARD key-delivered term bubbles=true"' not in page:
+    print("the page heard `domicile-key-delivered` other than once, bubbling, for term, where the one key owed one (%s)" % page)
 elif heard != wanted:
     print("the compositor was sent %s where %s was owed" % (heard, wanted))
 PY

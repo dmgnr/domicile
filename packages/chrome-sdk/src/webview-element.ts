@@ -152,6 +152,28 @@ export const WEBVIEW_FOCUS_REQUEST_EVENT = "domicile-focus-request";
 export const WEBVIEW_GUEST_KEYDOWN_EVENT = "domicile-guest-keydown";
 
 /**
+ * A `KeyboardEvent` fired for a modifier (Alt, Control, Meta or Shift) let go
+ * of in the page, which the page did not `preventDefault`. Bubbles.
+ *
+ * For what a lone modifier does, such as Alt showing an app's menu bar: a
+ * shell sees a modifier's press as a {@link WEBVIEW_GUEST_KEYDOWN_EVENT} and
+ * its release as this, and anything pressed between as a chord. Only
+ * modifiers, so typed text stays in the guest.
+ */
+export const WEBVIEW_GUEST_KEYUP_EVENT = "domicile-guest-keyup";
+
+/**
+ * Fired when a key press reaches the page: not a modifier, a repeat or a chord
+ * the shell grabbed. Typing in the window, as opposed to a key the desktop
+ * handled. Bubbles.
+ *
+ * A plain `Event` naming no key, so typed text, passwords included, stays in
+ * the guest. An `<app>` fires the same for its client (see
+ * `APP_KEY_DELIVERED_EVENT`).
+ */
+export const WEBVIEW_KEY_DELIVERED_EVENT = "domicile-key-delivered";
+
+/**
  * Fired when {@link HTMLWebViewElement.zoom} changes. Carries no payload.
  * Bubbles.
  *
@@ -335,6 +357,8 @@ export const WEBVIEW_CONTEXT_MENU_EVENT = "domicile-context-menu";
  * - Over a link: `copy-link-address`, `save-link-as`.
  * - Over an image with pixels, or a canvas: `copy-image`.
  * - Over an image, video or audio: `copy-media-address`, `save-media-as`.
+ * - Over a video that can go into picture-in-picture: `picture-in-picture`,
+ *   which enters it, or leaves it when it is in.
  * - Anywhere: `inspect`, DevTools on the element under the click.
  *
  * A save asks {@link WEBVIEW_FILE_CHOOSER_EVENT} where.
@@ -353,7 +377,9 @@ export const WEBVIEW_CONTEXT_MENU_ACTIONS = [
   "copy-image",
   "copy-media-address",
   "save-media-as",
+  "picture-in-picture",
   "inspect",
+  "add-to-dictionary",
 ] as const;
 
 export type WebViewContextMenuAction =
@@ -480,15 +506,16 @@ export const WEBVIEW_DIALOG_EVENT = "domicile-dialog";
 export const WEBVIEW_DIALOG_WITHDRAWN_EVENT = "domicile-dialog-withdrawn";
 
 /**
- * Fired when the page opens a link for an application, such as `zoommtg:` or
- * `mailto:`, that the browser would ask about. Nothing opens until it is
- * answered. Bubbles.
+ * Fired when the page opens a link for an application, such as `zoommtg:`,
+ * that the browser would ask about. Nothing opens until it is answered.
+ * Bubbles.
  *
  * The browser draws no dialog. Call `preventDefault()` to handle it, then
  * answer with {@link DomicileExternalAppEvent.open} or
  * {@link DomicileExternalAppEvent.dismiss}. If no listener calls
  * `preventDefault()`, nothing opens. A site the user let open these links
- * without asking, and a blocked scheme, fire nothing.
+ * without asking, a blocked scheme, and `mailto:`, which the browser opens
+ * without asking through `xdg-email`, fire nothing.
  */
 export const WEBVIEW_EXTERNAL_APP_EVENT = "domicile-external-app";
 
@@ -624,6 +651,120 @@ export const WEBVIEW_PICKER_KINDS = [
 
 /** One of {@link WEBVIEW_PICKER_KINDS}. */
 export type WebViewPickerKind = (typeof WEBVIEW_PICKER_KINDS)[number];
+
+/**
+ * Fired when the page signs in with an identity provider ("Sign in with",
+ * FedCM), once for each step of it: see {@link WEBVIEW_IDENTITY_STEPS}. Each
+ * step replaces the last, and the request waits on each until it is answered.
+ * Bubbles.
+ *
+ * The browser draws no account chooser. Call `preventDefault()` to handle it,
+ * then answer with {@link DomicileIdentityEvent.choose},
+ * {@link DomicileIdentityEvent.signInToProvider},
+ * {@link DomicileIdentityEvent.moreDetails} or
+ * {@link DomicileIdentityEvent.dismiss}. If no listener calls
+ * `preventDefault()`, the request fails, without the quiet period a dismissal
+ * starts.
+ */
+export const WEBVIEW_IDENTITY_EVENT = "domicile-identity";
+
+/**
+ * Fired when the browser drops the unanswered {@link WEBVIEW_IDENTITY_EVENT},
+ * for example because the page navigated or gave up, the request ended, or
+ * a newer step replaces it. Answering it afterward throws.
+ * Carries no payload. Bubbles.
+ */
+export const WEBVIEW_IDENTITY_WITHDRAWN_EVENT = "domicile-identity-withdrawn";
+
+/**
+ * The steps of a {@link WEBVIEW_IDENTITY_EVENT}, as
+ * {@link DomicileIdentityEvent.step}:
+ *
+ * - `loading`: the browser is fetching the accounts. Only after the page's own
+ *   sign-in button (`button`).
+ * - `accounts`: pick one of `accounts()` with `choose`, or sign in another
+ *   with `signInToProvider` where its provider has `addAccount`.
+ * - `signed-out`: the user is signed out of `providers()[0]`;
+ *   `signInToProvider(0)` opens its sign-in page.
+ * - `verifying`: signing in with `accounts()[0]`. Takes no answer; the next
+ *   step or the withdrawal ends it. `automatic` when the user picked nothing.
+ * - `error`: signing in failed. `error` and `errorUrl` say why;
+ *   `moreDetails()` opens `errorUrl`.
+ */
+export const WEBVIEW_IDENTITY_STEPS = [
+  "loading",
+  "accounts",
+  "signed-out",
+  "verifying",
+  "error",
+] as const;
+
+/** One of {@link WEBVIEW_IDENTITY_STEPS}. */
+export type WebViewIdentityStep = (typeof WEBVIEW_IDENTITY_STEPS)[number];
+
+/**
+ * What signing in is for, as {@link DomicileIdentityEvent.purpose}, to title a
+ * step: "Sign in to", "Sign up to", "Use" or "Continue to" the site.
+ */
+export const WEBVIEW_IDENTITY_PURPOSES = [
+  "sign-in",
+  "sign-up",
+  "use",
+  "continue",
+] as const;
+
+/** One of {@link WEBVIEW_IDENTITY_PURPOSES}. */
+export type WebViewIdentityPurpose = (typeof WEBVIEW_IDENTITY_PURPOSES)[number];
+
+/**
+ * What signing in with an account shares with the site, as
+ * {@link WebViewIdentityAccount.shared}.
+ */
+export const WEBVIEW_IDENTITY_FIELDS = [
+  "name",
+  "email",
+  "username",
+  "phone-number",
+  "picture",
+] as const;
+
+/** One of {@link WEBVIEW_IDENTITY_FIELDS}. */
+export type WebViewIdentityField = (typeof WEBVIEW_IDENTITY_FIELDS)[number];
+
+/** An identity provider, as {@link DomicileIdentityEvent.providers} lists it. */
+export type WebViewIdentityProvider = {
+  /** Its site, as the browser names it, such as `google.com`. */
+  readonly name: string;
+  /** Its icon as a `data:` URL, or `""`. */
+  readonly icon: string;
+  /** The signing-in site's privacy policy, as the provider lists it, or `""`. */
+  readonly privacyPolicy: string;
+  /** The signing-in site's terms of service, as the provider lists them, or `""`. */
+  readonly termsOfService: string;
+  /** The user is signed out of it, so it offers no accounts. */
+  readonly signedOut: boolean;
+  /** It can sign in another account, with `signInToProvider`. */
+  readonly addAccount: boolean;
+};
+
+/** An account, as {@link DomicileIdentityEvent.accounts} lists it. */
+export type WebViewIdentityAccount = {
+  /** Its provider: an index into {@link DomicileIdentityEvent.providers}. */
+  readonly provider: number;
+  /** The name the provider shows. */
+  readonly name: string;
+  /** Its email or other identifier. */
+  readonly identifier: string;
+  /** Its picture as a `data:` URL, or `""`. */
+  readonly picture: string;
+  /** The user signed in to the site with it before. */
+  readonly returning: boolean;
+  /**
+   * What signing in with it shares with the site, to say so. Empty when
+   * there is nothing to say, as for a returning account.
+   */
+  readonly shared: readonly WebViewIdentityField[];
+};
 
 /** The dialogs a page can open, as {@link DomicileDialogEvent.dialogType}. */
 export const WEBVIEW_DIALOG_TYPES = [
@@ -855,6 +996,17 @@ declare global {
      * page, and when the page gave no number, as when it navigated first.
      */
     countMatches(selector: string): Promise<number>;
+    /**
+     * Clicks the first shown element in the page's main document that matches
+     * the CSS `selector`, as a press of the mouse's main button on its middle
+     * does: scrolled into view, it gets pointerdown, mousedown, pointerup,
+     * mouseup and click, which the page hears as untrusted events. A hidden
+     * page is clicked too. Resolves whether an element matched. Throws a
+     * `SyntaxError` for a selector that does not parse. Rejects with an
+     * `InvalidStateError` before the view has a page, and when the page gave no
+     * answer, as when it navigated first.
+     */
+    clickMatch(selector: string): Promise<boolean>;
     goBack(): void;
     goForward(): void;
     /**
@@ -865,6 +1017,26 @@ declare global {
      */
     goBackInNewWindow(): void;
     goForwardInNewWindow(): void;
+    /**
+     * The pages either side of the current one, each side nearest first, for
+     * a back or forward menu like Chrome's. Rejects with an
+     * `InvalidStateError` before the view has a page.
+     *
+     * External data; parse it at the boundary.
+     */
+    history(): Promise<DomicileHistory>;
+    /**
+     * Go to the history entry `id` from {@link HTMLWebViewElement.history}.
+     * Does nothing when the entry is gone, since the history changes as the
+     * page navigates.
+     */
+    goToHistoryEntry(id: number): void;
+    /**
+     * As {@link HTMLWebViewElement.goToHistoryEntry}, in a new browser window
+     * with a copy of the history, as
+     * {@link HTMLWebViewElement.goBackInNewWindow} does.
+     */
+    goToHistoryEntryInNewWindow(id: number): void;
     stop(): void;
     reload(): void;
   }
@@ -894,6 +1066,9 @@ declare global {
     readonly mediaType: string;
     /** Whether an image has pixels to copy. A broken image has none. */
     readonly hasImageContents: boolean;
+    /** Whether a video can go into picture-in-picture, and whether it is in it. */
+    readonly canPictureInPicture: boolean;
+    readonly inPictureInPicture: boolean;
     /** The selected text, or `""`. */
     readonly selectionText: string;
     /** Whether the click was in an editable element. */
@@ -906,6 +1081,10 @@ declare global {
     readonly canPaste: boolean;
     readonly canDelete: boolean;
     readonly canSelectAll: boolean;
+    /** The misspelled word under the click, or `""` for none. */
+    readonly misspelledWord: string;
+    /** The dictionary's suggestions for {@link misspelledWord}, best first. */
+    readonly spellingSuggestions: readonly string[];
     /**
      * Do one of {@link WEBVIEW_CONTEXT_MENU_ACTIONS} for this menu. Throws a
      * `TypeError` for an unknown action, a `NotSupportedError` for one this
@@ -913,6 +1092,13 @@ declare global {
      * `InvalidStateError` once a newer menu has replaced this one.
      */
     run(action: WebViewContextMenuAction): void;
+    /**
+     * Replace {@link misspelledWord} with `word`, usually one of
+     * {@link spellingSuggestions}. Throws a `NotSupportedError` when there is
+     * no misspelled word, and an `InvalidStateError` once a newer menu has
+     * replaced this one.
+     */
+    replaceMisspelling(word: string): void;
   }
 
   /**
@@ -981,6 +1167,26 @@ declare global {
     readonly id: string;
     /** The name the system gives it, such as `USB Camera`. */
     readonly name: string;
+  };
+
+  /** A page in a `<webview>`'s history. */
+  type DomicileHistoryEntry = {
+    /** Names the entry to `goToHistoryEntry()`. Never reused in the view. */
+    readonly id: number;
+    readonly url: string;
+    /** The page's title, or its address when it has none. */
+    readonly title: string;
+    /** The page's favicon as a `data:image/png` URL, or `""` if none. */
+    readonly favicon: string;
+  };
+
+  /**
+   * A `<webview>`'s history either side of its current page, each side
+   * nearest first.
+   */
+  type DomicileHistory = {
+    readonly back: readonly DomicileHistoryEntry[];
+    readonly forward: readonly DomicileHistoryEntry[];
   };
 
   /** Each kind's devices, most preferred first. */
@@ -1175,6 +1381,52 @@ declare global {
   }
 
   /**
+   * The {@link WEBVIEW_IDENTITY_EVENT} event. The engine defines it in
+   * `domicile_identity_event.idl`.
+   */
+  interface DomicileIdentityEvent extends Event {
+    /** Which step to show: one of {@link WEBVIEW_IDENTITY_STEPS}. */
+    readonly step: WebViewIdentityStep;
+    /**
+     * The page asked from its own sign-in button, so show the step over the
+     * page. Otherwise the site offers it unasked: leave the page usable.
+     */
+    readonly button: boolean;
+    /** The site signing in, as the browser names it, such as `medium.com`. */
+    readonly site: string;
+    /** The frame asking, when that is another site's, or `""`. */
+    readonly frameSite: string;
+    /** What signing in is for: one of {@link WEBVIEW_IDENTITY_PURPOSES}. */
+    readonly purpose: WebViewIdentityPurpose;
+    /** On `verifying`: signing in without the user picking. */
+    readonly automatic: boolean;
+    /** On `error`: the provider's error code, such as `access_denied`, or `""`. */
+    readonly error: string;
+    /** On `error`: the provider's page about it, or `""`. */
+    readonly errorUrl: string;
+    /** The providers. */
+    providers(): WebViewIdentityProvider[];
+    /** On `accounts`, those to pick from; on `verifying`, the one signing in. */
+    accounts(): WebViewIdentityAccount[];
+    /**
+     * Sign in with `accounts()[account]`, on `accounts`. Answering twice,
+     * after {@link WEBVIEW_IDENTITY_WITHDRAWN_EVENT}, or on a step that does
+     * not take it throws an `InvalidStateError`; an index out of range throws
+     * a `TypeError`.
+     */
+    choose(account: number): void;
+    /**
+     * Open `providers()[provider]`'s sign-in page in a browser window, on
+     * `accounts` and `signed-out`.
+     */
+    signInToProvider(provider: number): void;
+    /** Open `errorUrl` in a browser window, on an `error` that has one. */
+    moreDetails(): void;
+    /** Close the step, as the user's close. */
+    dismiss(): void;
+  }
+
+  /**
    * The {@link WEBVIEW_WILL_NAVIGATE_EVENT} event. The engine defines it in
    * `domicile_will_navigate_event.idl`.
    */
@@ -1191,12 +1443,14 @@ declare global {
   // biome-ignore lint/style/useConsistentTypeDefinitions: declaration merging onto a built-in type is what `interface` is for and what a type alias cannot do
   interface HTMLElementEventMap {
     "domicile-guest-keydown": KeyboardEvent;
+    "domicile-guest-keyup": KeyboardEvent;
     "domicile-file-chooser": DomicileFileChooserEvent;
     "domicile-context-menu": DomicileContextMenuEvent;
     "domicile-permission-request": DomicilePermissionRequestEvent;
     "domicile-device-request": DomicileDeviceRequestEvent;
     "domicile-dialog": DomicileDialogEvent;
     "domicile-external-app": DomicileExternalAppEvent;
+    "domicile-identity": DomicileIdentityEvent;
     "domicile-picker": DomicilePickerEvent;
     "domicile-prompt": DomicilePromptEvent;
     "domicile-sign-in": DomicileSignInEvent;

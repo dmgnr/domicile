@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the display color matrix applies in linear light
+
+Viz applies a display color matrix to the root render pass in the
+output's encoding. Domicile sets one for a night light on a display
+driven in HDR, where the output is PQ: a matrix there would bend the
+curve the panel decodes rather than warm the light. SkiaRenderer now
+applies it in linear sRGB, as a gamma ramp on an SDR display does in
+effect.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ components/viz/service/display/skia_renderer.cc | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/components/viz/service/display/skia_renderer.cc b/components/viz/service/display/skia_renderer.cc
+index bcc65a0..24032bc 100644
+--- a/components/viz/service/display/skia_renderer.cc
++++ b/components/viz/service/display/skia_renderer.cc
+@@ -3125,8 +3125,12 @@ sk_sp<SkColorFilter> SkiaRenderer::GetContentColorFilter() {
+       current_frame()->current_render_pass == current_frame()->root_render_pass;
+ 
+   if (is_root && output_surface_->color_matrix() != SkM44()) {
++    // domicile: in linear light, so the matrix scales light whatever the
++    // output encodes. A night light on a display driven in HDR would
++    // otherwise bend the PQ curve the panel decodes.
+     color_transform =
+-        SkColorFilters::Matrix(ToColorMatrix(output_surface_->color_matrix()));
++        SkColorFilters::Matrix(ToColorMatrix(output_surface_->color_matrix()))
++            ->makeWithWorkingColorSpace(SkColorSpace::MakeSRGBLinear());
+   }
+ 
+   sk_sp<SkColorFilter> tint_transform = nullptr;

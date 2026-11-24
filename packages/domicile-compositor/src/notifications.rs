@@ -301,6 +301,78 @@ impl NotificationServer {
         );
     }
 
+    /// Warn that the compositor has no EGL renderer, so it can show no app's
+    /// window: EGL or the graphics driver failed to load. A bug, so it is loud,
+    /// as for [`Self::warn_that_graphics_failed`].
+    pub fn warn_that_the_renderer_failed(&self) {
+        self.add_from_portal(
+            OWN_APP.into(),
+            "renderer-failed".into(),
+            PortalNotification {
+                title: "Graphics aren't working".into(),
+                body: "Domicile couldn't start its graphics, so app windows can't be shown. \
+                       This is a bug; please report it."
+                    .into(),
+                icon: None,
+                priority: Priority::Urgent,
+                default_action: None,
+                buttons: vec![Button {
+                    label: "Report it".into(),
+                    action: Action {
+                        name: REPORT_A_BUG.into(),
+                        target: None,
+                    },
+                }],
+                display_hint: Vec::new(),
+            },
+        );
+    }
+
+    /// Warn that the engine caught itself in a bug, such as a page it took out
+    /// of fullscreen that stayed in. A bug, so it is loud, as for
+    /// [`Self::warn_that_graphics_failed`]: urgent, with a button to report it.
+    /// `what` says what went wrong. A later fault replaces an earlier one.
+    pub fn warn_of_an_engine_fault(&self, what: &str) {
+        self.add_from_portal(
+            OWN_APP.into(),
+            "engine-fault".into(),
+            PortalNotification {
+                title: "Something went wrong".into(),
+                body: format!("{what} This is a bug; please report it."),
+                icon: None,
+                priority: Priority::Urgent,
+                default_action: None,
+                buttons: vec![Button {
+                    label: "Report it".into(),
+                    action: Action {
+                        name: REPORT_A_BUG.into(),
+                        target: None,
+                    },
+                }],
+                display_hint: Vec::new(),
+            },
+        );
+    }
+
+    /// Tell the person a program a key, the launcher or the config named did
+    /// not start, and `why`. Not a bug in Domicile, so not urgent and with no
+    /// report button. A later failure replaces an earlier one.
+    pub fn warn_that_a_program_did_not_start(&self, why: &str) {
+        self.add_from_portal(
+            OWN_APP.into(),
+            "program-did-not-start".into(),
+            PortalNotification {
+                title: "A program didn't start".into(),
+                body: format!("{why}."),
+                icon: None,
+                priority: Priority::Normal,
+                default_action: None,
+                buttons: Vec::new(),
+                display_hint: Vec::new(),
+            },
+        );
+    }
+
     /// Remove `app_id`'s notification `id`, if held.
     pub fn remove_from_portal(&self, app_id: &str, id: &str) {
         self.store
@@ -347,7 +419,7 @@ pub fn serve(
             in_a_window,
         };
         if let Err(why) = answer(serving, &events, &starting) {
-            warn!(
+            tracing::error!(
                 %why,
                 "this desktop is not the notification server; its applications' \
                  notifications will not be shown"
@@ -671,7 +743,7 @@ fn closed(server: &InterfaceRef<Server>, id: u32, reason: Reason) {
         reason as u32,
     ));
     if let Err(why) = said {
-        warn!(%why, %id, "a notification's closing could not be said");
+        tracing::error!(%why, %id, "a notification's closing could not be said");
     }
 }
 
@@ -687,7 +759,7 @@ fn pressed_on_the_bus(
 ) {
     let said = zbus::block_on(Server::activation_token(server.signal_emitter(), id, token));
     if let Err(why) = said {
-        warn!(%why, %id, "a notification's activation token could not be said");
+        tracing::error!(%why, %id, "a notification's activation token could not be said");
     }
     invoked(server, id, action);
     if closes {
@@ -699,7 +771,7 @@ fn pressed_on_the_bus(
 fn invoked(server: &InterfaceRef<Server>, id: u32, action: &str) {
     let said = zbus::block_on(Server::action_invoked(server.signal_emitter(), id, action));
     if let Err(why) = said {
-        warn!(%why, %id, "a notification's action could not be said");
+        tracing::error!(%why, %id, "a notification's action could not be said");
     }
 }
 
@@ -711,7 +783,7 @@ fn replied(server: &InterfaceRef<Server>, id: u32, text: &str) {
         text,
     ));
     if let Err(why) = said {
-        warn!(%why, %id, "a reply to a notification could not be said");
+        tracing::error!(%why, %id, "a reply to a notification could not be said");
     }
 }
 
@@ -840,7 +912,7 @@ impl Server {
             if let Err(why) =
                 Self::notification_closed(&emitter, evicted, Reason::Expired as u32).await
             {
-                warn!(%why, "a notification's closing could not be said");
+                tracing::error!(%why, "a notification's closing could not be said");
             }
         }
         notified.id
@@ -855,7 +927,7 @@ impl Server {
     ) {
         if self.store.change(|held| held.notifications.close(id)) {
             if let Err(why) = Self::notification_closed(&emitter, id, Reason::Closed as u32).await {
-                warn!(%why, "a notification's closing could not be said");
+                tracing::error!(%why, "a notification's closing could not be said");
             }
         }
     }
@@ -1148,6 +1220,38 @@ mod tests {
         }
     }
 
+    /// No EGL renderer is a bug too, and it says app windows cannot show.
+    #[test]
+    fn a_failed_renderer_warns_and_offers_a_report() {
+        let server = NotificationServer::unserved(Vec::new());
+        server.warn_that_the_renderer_failed();
+        let shown = server
+            .store
+            .change(|held| held.notifications.items().remove(0));
+        assert_eq!(
+            (
+                shown.app_name.as_str(),
+                shown.summary.as_str(),
+                shown.urgency
+            ),
+            ("Domicile", "Graphics aren't working", Urgency::Critical),
+            "from Domicile, and kept until read"
+        );
+        assert!(
+            shown.body.contains("app windows can't be shown"),
+            "the body says what is broken: {}",
+            shown.body
+        );
+        assert_eq!(
+            shown
+                .actions
+                .iter()
+                .map(|action| (action.key.as_str(), action.label.as_str()))
+                .collect::<Vec<_>>(),
+            [("0", "Report it")]
+        );
+    }
+
     /// Falling back to software is a bug, so it says so, from Domicile, kept
     /// until read, and "Report it" opens the issue tracker.
     #[test]
@@ -1173,6 +1277,43 @@ mod tests {
                 .map(|action| (action.key.as_str(), action.label.as_str()))
                 .collect::<Vec<_>>(),
             [("0", "Report it")]
+        );
+        match server.store.press(shown.id, "0") {
+            Pressed::Launches(command) => assert_eq!(
+                command,
+                [
+                    "domicile",
+                    "open",
+                    "https://github.com/cprussin/domicile/issues"
+                ]
+            ),
+            _ => panic!("Domicile's own button went elsewhere"),
+        }
+    }
+
+    /// An engine fault is a bug, so it says what went wrong, from Domicile,
+    /// kept until read, and "Report it" opens the issue tracker.
+    #[test]
+    fn an_engine_fault_warns_and_offers_a_report() {
+        let server = NotificationServer::unserved(Vec::new());
+        server.warn_of_an_engine_fault("A page stayed in fullscreen.");
+        let shown = server
+            .store
+            .change(|held| held.notifications.items().remove(0));
+        assert_eq!(
+            (
+                shown.app_name.as_str(),
+                shown.summary.as_str(),
+                shown.body.as_str(),
+                shown.urgency
+            ),
+            (
+                "Domicile",
+                "Something went wrong",
+                "A page stayed in fullscreen. This is a bug; please report it.",
+                Urgency::Critical
+            ),
+            "from Domicile, saying what, and kept until read"
         );
         match server.store.press(shown.id, "0") {
             Pressed::Launches(command) => assert_eq!(

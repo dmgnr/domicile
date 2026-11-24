@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   ORDER_KEY,
-  parseOrder,
-  rememberedOrder,
-  rememberOrder,
-} from "./remembered-order";
+  parseKeys,
+  rememberedKeys,
+  rememberKeys,
+} from "./remembered-keys";
 import { moveTo, place } from "./tray-order";
 
 export type TrayOrder = {
@@ -25,20 +25,20 @@ export type TrayOrder = {
  * on arrival, so a reopened application returns to its place.
  */
 export const useTrayOrder = (shown: readonly string[]): TrayOrder => {
-  const [order, setOrder] = useState(rememberedOrder);
+  const [order, setOrder] = useState(() => rememberedKeys(ORDER_KEY));
 
   useEffect(() => {
     const next = place(order, shown);
     if (next.length > order.length) {
       setOrder(next);
-      rememberOrder(next);
+      rememberKeys(ORDER_KEY, next);
     }
   }, [order, shown]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key === ORDER_KEY) {
-        setOrder(parseOrder(event.newValue ?? "[]"));
+        setOrder(parseKeys(event.newValue ?? "[]"));
       }
     };
     globalThis.addEventListener("storage", onStorage);
@@ -51,7 +51,7 @@ export const useTrayOrder = (shown: readonly string[]): TrayOrder => {
     (shown: readonly string[], dragged: string, target: string) => {
       const next = moveTo(order, shown, dragged, target);
       setOrder(next);
-      rememberOrder(next);
+      rememberKeys(ORDER_KEY, next);
     },
     [order],
   );

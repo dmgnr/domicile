@@ -74,14 +74,23 @@ for program in "${PROGRAMS[@]}"; do
   install -m 755 "$BINARIES/$program" "$USR/bin/$program"
 done
 
+# `man domicile` and `man domicile-<command>`, as in `flake.nix`.
+"$USR/bin/domicile" help --man "$USR/share/man/man1"
+
 # Unmodified. On a distribution, `libEGL.so.1` and the GSettings schemas are on
 # the default paths, so the engine needs no wrapper, unlike in `flake.nix`.
 cp -a "$ENGINE" "$LIBEXEC/engine"
 
+# What `domicile --version` prints first, as `domicilePackage` in `flake.nix`.
+VERSION="$(jq -er .version "$WORKSPACE/packages/domicile/package.json")"
+printf 'domicile %s\ncommit   %s\n' "$VERSION" "$REV" >"$LIBEXEC/version"
+
 install -m 755 "$BUN" "$LIBEXEC/bun"
 install -m 755 "$ROOT/packages/distro/builder" "$LIBEXEC/builder"
+install -m 755 "$ROOT/packages/distro/electron-host" "$LIBEXEC/electron-host"
 
-# What the builder needs, as in `shellWorkspace` in `flake.nix`.
+# What the builder and `electron-host` need, as in `shellWorkspace` in
+# `flake.nix`.
 "$ROOT/packages/distro/shell-workspace.sh" modules "$BUN" "$WORKSPACE" "$LIBEXEC/workspace"
 "$ROOT/packages/distro/shell-workspace.sh" files "$BUN" "$WORKSPACE" "$LIBEXEC/workspace"
 # A release ships the versions changesets gave the packages.
@@ -130,6 +139,8 @@ launcher logout "$ROOT/packages/distro/share/launcher"
 
 fill "$ROOT/packages/distro/share/net.domicile.Miracast.service" \
   "$USR/share/dbus-1/services/net.domicile.Miracast.service"
+fill "$ROOT/packages/distro/share/domicile-miracast.service" \
+  "$USR/lib/systemd/user/domicile-miracast.service"
 
 install -D -m 644 "$ROOT/packages/distro/share/domicile.portal" \
   "$USR/share/xdg-desktop-portal/portals/domicile.portal"

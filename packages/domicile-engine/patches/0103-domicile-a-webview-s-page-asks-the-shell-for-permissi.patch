@@ -26,7 +26,7 @@ job builds it on `crux`.
  4 files changed, 12 insertions(+)
 
 diff --git a/components/permissions/permission_request_manager.h b/components/permissions/permission_request_manager.h
-index 0b4b3ba..5565f17 100644
+index eb846fb..ff6c6e2 100644
 --- a/components/permissions/permission_request_manager.h
 +++ b/components/permissions/permission_request_manager.h
 @@ -281,6 +281,13 @@ class PermissionRequestManager
@@ -44,7 +44,7 @@ index 0b4b3ba..5565f17 100644
      current_request_first_display_time_ = time;
    }
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index cfba579..2b70065 100644
+index 99343b2..f470de3 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1212,6 +1212,8 @@ generated_interface_sources_in_core = [
@@ -57,7 +57,7 @@ index cfba579..2b70065 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index 5726484..30bdd2a 100644
+index 177e5ca..8f4fa4e 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -464,6 +464,7 @@ static_idl_files_in_core = [
@@ -69,7 +69,7 @@ index 5726484..30bdd2a 100644
    "//third_party/blink/renderer/core/html/html_head_element.idl",
    "//third_party/blink/renderer/core/html/html_heading_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 48f1e14..2b14fa2 100644
+index bfd83e5..5e0b7df 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -102,6 +102,8 @@ blink_core_sources_html = [

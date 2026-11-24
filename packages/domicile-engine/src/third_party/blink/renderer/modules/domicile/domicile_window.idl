@@ -94,4 +94,10 @@
   // pointer. The shell decides whether to grant it, and says so with
   // DomicileHost.pointerConstrained(); only then is the client told.
   readonly attribute DOMString? pointerConstraint;
+
+  // The part of the window `pointerConstraint` holds the pointer to, as boxes
+  // in the window's own coordinates, which `width` and `height` measure; null
+  // for all of it. The client sets it for a confinement, and for a lock it
+  // says where the pointer may be when the lock takes hold.
+  readonly attribute FrozenArray<DOMRectReadOnly>? pointerRegion;
 };

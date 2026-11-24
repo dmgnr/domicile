@@ -27,6 +27,7 @@ shell ─ dismissNotifications(ids) / invokeNotificationAction(id, key)
 | Sites ask before they notify; the shell page is allowed; a notification that stays up is not marked critical | patch 0105, `guard-webview-notifications.sh`; for the shell page, `guard-shell-web-apis.sh` |
 | Chrome waits for the server, which starts after the engine | patch 0133, `guard-notification-server-late.sh` |
 | A page's notification names its browser window (`x-domicile-browser-window`) | patch 0172, `components/domicile/browser/notification_window.{h,cc}`, `guard-notification-window.sh` |
+| A site's notification carries the site's favicon as its application icon | patch 0239, `guard-notification-site-icon.sh` |
 | SDK: `DomicileNotification`, `notifications`, `dismissNotifications`, `invokeNotificationAction`, `replyToNotification`; `Notification` | `@domicile-desktop/sdk/domicile-host`, `@domicile-desktop/sdk/notification` |
 | `Toaster` component | `@domicile-desktop/component-library/Toaster` |
 | Manganese toasts, bell and drawer | `packages/manganese-notifications/src/` |
@@ -69,6 +70,12 @@ shell ─ dismissNotifications(ids) / invokeNotificationAction(id, key)
 - **The shell decides what to toast.** A new id, or a replaced one (its `time`
   changed), shows a toast. The first list a page receives is history and shows
   no toasts.
+- **A site's notification is drawn with the site's favicon.** Chrome sends
+  its own logo as every notification's application icon. The engine sends
+  the site's favicon there instead (patch 0239), so a page that gives no
+  `icon` of its own is drawn as the site. A page's `icon` still comes first,
+  as `image-path`. The logo stays for a site with no favicon yet and for a
+  private page, whose profile keeps none.
 - **No `body-markup`.** Bodies are plain text. The server does not advertise
   markup, so senders send none.
 - **`x-kde-origin-name` is advertised** so Chrome sends the page's origin as a
@@ -85,8 +92,8 @@ shell ─ dismissNotifications(ids) / invokeNotificationAction(id, key)
 - **Inline reply.** The server advertises `inline-reply`. An `inline-reply`
   action stays in `actions`, so the engine carries it unchanged. The shell
   draws it as a text field labeled with the action's label, with a send
-  button. Sending emits `NotificationReplied` and closes the notification as
-  an action does.
+  button. Manganese labels an empty one "Reply". Sending emits
+  `NotificationReplied` and closes the notification as an action does.
   - The `x-kde-reply-placeholder-text` hint is dropped: the field's label is
     its placeholder.
   - Portal notifications have no reply field.

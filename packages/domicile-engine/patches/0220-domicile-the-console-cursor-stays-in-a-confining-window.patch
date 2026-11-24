@@ -1,0 +1,263 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the console cursor stays in a confining window
+
+A game or VM viewer confines the pointer to its window, or part of it,
+through zwp_pointer_constraints_v1, and the shell passes that on as
+boxes. OzonePlatform::SetDomicilePointerConfinement holds the DRM cursor
+inside them: DrmCursor clamps each mouse and tablet move with
+ConfinedMove (ui/ozone/platform/drm/domicile/drm_pointer_confinement.h),
+which works in the confining window's pixels, so a box that reaches
+across a seam holds the pointer on both monitors. Warps are not held.
+Other platforms answer false: nested, the host compositor moves the
+pointer, and headless, the compositor does. The control channel's
+ConfinePointer reaches domicile::ConfinePointerIn through the binder,
+as a warp reaches WarpPointerIn.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../chrome_browser_interface_binders.cc       |  8 ++++
+ ui/ozone/platform/drm/BUILD.gn                |  3 ++
+ ui/ozone/platform/drm/host/drm_cursor.cc      | 47 +++++++++++++++++++
+ ui/ozone/platform/drm/host/drm_cursor.h       |  7 +++
+ ui/ozone/platform/drm/ozone_platform_drm.cc   |  7 +++
+ ui/ozone/public/ozone_platform.cc             |  6 +++
+ ui/ozone/public/ozone_platform.h              |  9 ++++
+ 7 files changed, 87 insertions(+)
+
+diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
+index 5614094..8c3d30c 100644
+--- a/chrome/browser/chrome_browser_interface_binders.cc
++++ b/chrome/browser/chrome_browser_interface_binders.cc
+@@ -11,6 +11,7 @@
+ #include "chrome/browser/domicile/domicile_downloads.h"
+ #include "chrome/browser/domicile/domicile_extension_tray.h"
+ #include "chrome/browser/domicile/domicile_picture_in_picture.h"
++#include "chrome/browser/domicile/domicile_pointer_confinement.h"
+ #include "chrome/browser/domicile/domicile_pointer_warp.h"
+ #include "chrome/browser/domicile/domicile_shell_fetch.h"
+ #include "chrome/browser/domicile/domicile_tab_helpers.h"
+@@ -605,6 +606,13 @@ void PopulateChromeFrameBinders(
+                     content::GetUIThreadTaskRunner({}),
+                     base::BindRepeating(&domicile::WarpPointerIn,
+                                         frame->GetGlobalId())),
++                // AND WHERE THIS PAGE HOLDS THE POINTER, for a game's or VM
++                // viewer's confinement. Bound here for the warp's reason
++                // above.
++                base::BindPostTask(
++                    content::GetUIThreadTaskRunner({}),
++                    base::BindRepeating(&domicile::ConfinePointerIn,
++                                        frame->GetGlobalId())),
+                 // AND WHICH WAY ROUND EVERY PAGE IS DRAWN. The desktop's
+                 // theme is the process's color scheme, which is what a site's
+                 // `prefers-color-scheme` reads. Bound here for the keymap's
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index eed0f63..7be325e 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -61,6 +61,8 @@ source_set("gbm") {
+     "domicile/drm_logind_session.h",
+     "domicile/drm_modeset.cc",
+     "domicile/drm_modeset.h",
++    "domicile/drm_pointer_confinement.cc",
++    "domicile/drm_pointer_confinement.h",
+     "domicile/drm_pointer_crossing.cc",
+     "domicile/drm_pointer_crossing.h",
+     "domicile/drm_pointer_targets.cc",
+@@ -291,6 +293,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_modeset_unittest.cc",
+     "domicile/drm_no_gbm_modeset_unittest.cc",
+     "domicile/drm_page_flip_timeout_unittest.cc",
++    "domicile/drm_pointer_confinement_unittest.cc",
+     "domicile/drm_pointer_crossing_unittest.cc",
+     "domicile/drm_pointer_targets_unittest.cc",
+     "domicile/drm_screen_unittest.cc",
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.cc b/ui/ozone/platform/drm/host/drm_cursor.cc
+index a26dce1..278a7ef 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.cc
++++ b/ui/ozone/platform/drm/host/drm_cursor.cc
+@@ -129,6 +129,11 @@ void DrmCursor::OnWindowRemoved(gfx::AcceleratedWidget window) {
+   std::erase_if(screens_, [window](const PointerScreen& screen) {
+     return screen.window == window;
+   });
++  // DOMICILE: a confinement to a window that is gone holds nothing; the shell
++  // confines the pointer again on the window that replaces it.
++  if (confinement_.window == window) {
++    confinement_ = PointerConfinement();
++  }
+ 
+   if (window_ == window) {
+     // Try to find a new location for the cursor.
+@@ -212,6 +217,16 @@ void DrmCursor::SetDomicileAbsoluteAreas(
+   absolute_areas_ = std::move(areas);
+ }
+ 
++void DrmCursor::SetDomicileConfinement(PointerConfinement confinement) {
++  DCHECK_CALLED_ON_VALID_THREAD(ui_thread_checker_);
++  base::AutoLock lock(lock_);
++  CHECK(confinement.boxes.empty() ||
++        std::ranges::find(screens_, confinement.window,
++                          &PointerScreen::window) != screens_.end())
++      << "domicile: the pointer confined to a window it cannot be on";
++  confinement_ = std::move(confinement);
++}
++
+ void DrmCursor::MoveCursorTo(gfx::AcceleratedWidget window,
+                              const gfx::PointF& location) {
+   TRACE_EVENT0("drmcursor", "DrmCursor::MoveCursorTo (window)");
+@@ -284,6 +299,19 @@ void DrmCursor::MoveCursorToOnEvdevThread(const gfx::PointF& screen_location) {
+   // it would stop at the edge.
+   const std::optional<PointerHeard> under = PointerHeardAt(
+       screens_, layout_, gfx::kNullAcceleratedWidget, screen_location);
++  // DOMICILE: a confined pointer stops at its box, a tablet's as a mouse's.
++  // See `ConfinedMove`.
++  if (const std::optional<PointerCrossing> held = ConfinedMove(
++          screens_, layout_, confinement_, {window_, location_},
++          under.has_value()
++              ? PointerCrossing{under->window, under->location}
++              : PointerCrossing{
++                    window_,
++                    screen_location -
++                        display_bounds_in_screen_.OffsetFromOrigin()})) {
++    MoveLocked(*held);
++    return;
++  }
+   if (under.has_value() && under->window != window_) {
+     CrossLocked({under->window, under->location});
+     return;
+@@ -322,6 +350,14 @@ void DrmCursor::MoveCursor(const gfx::Vector2dF& delta) {
+   const gfx::PointF moved = location_ + transformed_delta;
+   const std::optional<PointerCrossing> crossing =
+       PointerCrossingFor(screens_, layout_, window_, moved);
++  // DOMICILE: a confined pointer stops at its box, which may reach across a
++  // seam. See `ConfinedMove`.
++  if (const std::optional<PointerCrossing> held =
++          ConfinedMove(screens_, layout_, confinement_, {window_, location_},
++                       crossing.value_or(PointerCrossing{window_, moved}))) {
++    MoveLocked(*held);
++    return;
++  }
+   if (crossing.has_value()) {
+     CrossLocked(*crossing);
+   } else {
+@@ -392,6 +428,17 @@ void DrmCursor::CrossLocked(const PointerCrossing& crossing)
+   SendCursorShowLocked();
+ }
+ 
++// Onto `to`, a crossing or a move within the window the pointer is on.
++void DrmCursor::MoveLocked(const PointerCrossing& to)
++    EXCLUSIVE_LOCKS_REQUIRED(lock_) {
++  if (to.window != window_) {
++    CrossLocked(to);
++    return;
++  }
++  SetCursorLocationLocked(to.location);
++  SendCursorMoveLocked();
++}
++
+ void DrmCursor::SendCursorShowLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
+   SetDeskCursorImageLocked();
+ 
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.h b/ui/ozone/platform/drm/host/drm_cursor.h
+index fa58330..9d92ed7 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.h
++++ b/ui/ozone/platform/drm/host/drm_cursor.h
+@@ -17,6 +17,7 @@
+ #include "ui/display/display.h"
+ #include "ui/events/ozone/evdev/cursor_delegate_evdev.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/ozone/platform/drm/domicile/drm_pointer_confinement.h"
+ #include "ui/ozone/platform/drm/domicile/drm_pointer_crossing.h"
+ 
+ class SkBitmap;
+@@ -108,6 +109,10 @@ class DrmCursor : public CursorDelegateEvdev {
+   // screen. See `AbsoluteAreasFor`.
+   void SetDomicileAbsoluteAreas(base::flat_map<int, gfx::Rect> areas);
+ 
++  // DOMICILE: where a hand's motion keeps the pointer, replacing the last
++  // confinement; no boxes for none. See `ConfinedMove`.
++  void SetDomicileConfinement(PointerConfinement confinement);
++
+   // CursorDelegateEvdev:
+   void MoveCursorTo(gfx::AcceleratedWidget window,
+                     const gfx::PointF& location) override;
+@@ -127,6 +132,7 @@ class DrmCursor : public CursorDelegateEvdev {
+   void SendCursorMoveLocked();
+   PointerScreen& ScreenLocked(gfx::AcceleratedWidget window);
+   void CrossLocked(const PointerCrossing& crossing);
++  void MoveLocked(const PointerCrossing& to);
+ 
+   void MoveCursorToOnEvdevThread(const gfx::PointF& screen_location);
+   void MoveCursorToOnUiThread(const gfx::PointF& screen_location);
+@@ -175,6 +181,7 @@ class DrmCursor : public CursorDelegateEvdev {
+   gfx::AcceleratedWidget desk_host_ GUARDED_BY(lock_) =
+       gfx::kNullAcceleratedWidget;
+   base::flat_map<int, gfx::Rect> absolute_areas_ GUARDED_BY(lock_);
++  PointerConfinement confinement_ GUARDED_BY(lock_);
+ 
+   const raw_ptr<DrmWindowHostManager> window_manager_
+       GUARDED_BY_CONTEXT(ui_thread_checker_);  // Not owned.
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index 4ebcb53..0d8a21c 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -202,6 +202,13 @@ class OzonePlatformDrm : public OzonePlatform {
+     }
+   }
+ 
++  bool SetDomicilePointerConfinement(gfx::AcceleratedWidget window,
++                                     std::vector<gfx::RectF> boxes) override {
++    CHECK(cursor_) << "domicile: the pointer confined before InitializeUI";
++    cursor_->SetDomicileConfinement({window, std::move(boxes)});
++    return true;
++  }
++
+   // DOMICILE: made on the first targets, which the compositor sends after it
+   // has the displays, so `InitScreen` and the device lists come first.
+   void SetDomicileInputConfig(const std::string& config) override {
+diff --git a/ui/ozone/public/ozone_platform.cc b/ui/ozone/public/ozone_platform.cc
+index 602e97b..5382371 100644
+--- a/ui/ozone/public/ozone_platform.cc
++++ b/ui/ozone/public/ozone_platform.cc
+@@ -136,6 +136,12 @@ base::flat_map<int64_t, std::string> OzonePlatform::GetDomicileConnectors()
+   return {};
+ }
+ 
++bool OzonePlatform::SetDomicilePointerConfinement(
++    gfx::AcceleratedWidget window,
++    std::vector<gfx::RectF> boxes) {
++  return false;
++}
++
+ base::flat_map<int64_t, uint32_t> OzonePlatform::GetDomicileGammaSizes()
+     const {
+   return {};
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index beb6456..385de5a 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -24,6 +24,7 @@
+ #include "ui/gfx/buffer_types.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/rect_f.h"
+ #include "ui/gfx/geometry/size.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "ui/platform_window/platform_window.h"
+@@ -531,6 +532,14 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // the platform's own devices. A headless desk and DRM: a nested desktop's
+   // input is the host session's.
+   virtual void InjectDomicileInput(const DomicileDeskInput& input) {}
++  // DOMICILE: keep a hand's pointer inside `boxes`, in `window`'s panel
++  // pixels, replacing the last ones; none lets it go. For a game that confines
++  // the pointer to its window (zwp_pointer_constraints_v1). Returns whether
++  // this platform can: DRM only, since a nested desktop's pointer is the host
++  // session's and a headless desk's is the compositor's. See
++  // ui/ozone/platform/drm/domicile/drm_pointer_confinement.h.
++  virtual bool SetDomicilePointerConfinement(gfx::AcceleratedWidget window,
++                                             std::vector<gfx::RectF> boxes);
+   // DOMICILE: what the compositor says is on one of the desktop's clipboards.
+   //
+   // THE BROWSER IS TOLD RATHER THAN ASKED. The compositor reads every

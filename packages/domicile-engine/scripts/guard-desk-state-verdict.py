@@ -16,8 +16,8 @@ PREFIX = '"GUARD state '
 WANTED = {
     "altKey": True,
     "clipboard": [
-        {"id": 7, "image": False, "preview": "hello", "thumbnail": ""},
-        {"id": 8, "image": True, "preview": "Image, 3 × 2",
+        {"current": True, "id": 7, "image": False, "preview": "hello", "thumbnail": ""},
+        {"current": False, "id": 8, "image": True, "preview": "Image, 3 × 2",
          "thumbnail": "data:image/png;base64,iVBORw0KGgo="},
     ],
     "ctrlKey": False,

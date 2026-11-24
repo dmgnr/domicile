@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 23:09:05 +0000
+Subject: [PATCH] domicile: a scaling window does not re-raster its page each
+ frame
+
+A <webview>'s page took a new raster scale and a new size in the local
+root on every frame of an animation that scales its window (open,
+close, a tab closing into its strip, a settle). Each is a new surface
+for the page, and a new scale is a raster of the whole page, so a
+heavy page rastered again every frame and stalled the desk's frames on
+the GPU.
+
+- RemoteFrameView::HoldsScale: a <webview> under a running transform
+  animation on its element or any box around it.
+- While it holds, the page's raster scale only rises, to at least the
+  unscaled one, so a growing window is never drawn blurry, and its size
+  in the local root stays as sent; its place still follows. The
+  animation's end takes the resting scale and size.
+- `AllowUndamagedNonrootRenderPassToSkip` is on everywhere, as on the
+  Mac: a fading window draws its page's passes from the last frame
+  while the page does not change, instead of drawing them all again.
+
+Guarded by `guard-webview-scale-animation.sh`.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+
+Co-Authored-By: Connor Prussin <connor@prussin.net>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011frZauaqzJEB21JbKkZ1iZ
+---
+ components/viz/common/features.cc             |  7 +++---
+ .../blink/renderer/core/frame/remote_frame.cc |  7 ++++++
+ .../renderer/core/frame/remote_frame_view.cc  | 23 +++++++++++++++++++
+ .../renderer/core/frame/remote_frame_view.h   |  7 ++++++
+ 4 files changed, 40 insertions(+), 4 deletions(-)
+
+diff --git a/components/viz/common/features.cc b/components/viz/common/features.cc
+index e037739..31dfce7 100644
+--- a/components/viz/common/features.cc
++++ b/components/viz/common/features.cc
+@@ -225,12 +225,11 @@ BASE_FEATURE(kForceMacVSyncTimerForDebugging,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif
+ 
++// Domicile: on everywhere, as on the Mac. A window fading or scaling draws
++// its page's passes from the last frame instead of drawing them again each
++// frame, while the page itself does not change.
+ BASE_FEATURE(kAllowUndamagedNonrootRenderPassToSkip,
+-#if BUILDFLAG(IS_MAC)
+              base::FEATURE_ENABLED_BY_DEFAULT);
+-#else
+-             base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif
+ 
+ // if enabled, Any CompositorFrameSink of type video that defines a preferred
+ // framerate that is below the display framerate will throttle OnBeginFrame
+diff --git a/third_party/blink/renderer/core/frame/remote_frame.cc b/third_party/blink/renderer/core/frame/remote_frame.cc
+index 5d1bd5b..a7ee444 100644
+--- a/third_party/blink/renderer/core/frame/remote_frame.cc
++++ b/third_party/blink/renderer/core/frame/remote_frame.cc
+@@ -593,6 +593,13 @@ void RemoteFrame::SetInsecureRequestPolicy(
+ void RemoteFrame::FrameRectsChanged(const gfx::Size& local_frame_size,
+                                     const gfx::Rect& rect_in_local_root) {
+   pending_visual_properties_.rect_in_local_root = rect_in_local_root;
++  // Domicile: a <webview>'s page keeps its size in the local root while an
++  // animation scales its window (RemoteFrameView::HoldsScale); its place
++  // still follows. The animation's end takes the new size.
++  if (view_ && view_->HoldsScale() && sent_visual_properties_) {
++    pending_visual_properties_.rect_in_local_root.set_size(
++        sent_visual_properties_->rect_in_local_root.size());
++  }
+   pending_visual_properties_.local_frame_size = local_frame_size;
+   SynchronizeVisualProperties();
+ }
+diff --git a/third_party/blink/renderer/core/frame/remote_frame_view.cc b/third_party/blink/renderer/core/frame/remote_frame_view.cc
+index b82f793..251d6dc 100644
+--- a/third_party/blink/renderer/core/frame/remote_frame_view.cc
++++ b/third_party/blink/renderer/core/frame/remote_frame_view.cc
+@@ -292,6 +292,19 @@ void RemoteFrameView::UpdateCompositingRect() {
+   }
+ }
+ 
++bool RemoteFrameView::HoldsScale() const {
++  if (!IsA<HTMLWebViewElement>(remote_frame_->DeprecatedLocalOwner())) {
++    return false;
++  }
++  for (const LayoutObject* box = remote_frame_->OwnerLayoutObject(); box;
++       box = box->Parent()) {
++    if (box->Style().HasCurrentTransformRelatedAnimation()) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ void RemoteFrameView::UpdateCompositingScaleFactor() {
+   float previous_scale_factor = compositing_scale_factor_;
+ 
+@@ -340,6 +353,16 @@ void RemoteFrameView::UpdateCompositingScaleFactor() {
+       std::clamp(compositing_scale_factor_, kMinCompositingScaleFactor,
+                  kMaxCompositingScaleFactor);
+ 
++  // Domicile: see HoldsScale. The scale only rises meanwhile, to at least the
++  // unscaled one, where a growing window ends: a page drawn smaller than it
++  // is shown would look blurry. The animation's end takes the resting scale.
++  if (HoldsScale()) {
++    compositing_scale_factor_ =
++        std::max({compositing_scale_factor_, previous_scale_factor,
++                  std::min(widget->GetCompositingScaleFactor(),
++                           kMaxCompositingScaleFactor)});
++  }
++
+   if (compositing_scale_factor_ != previous_scale_factor)
+     remote_frame_->SynchronizeVisualProperties();
+ }
+diff --git a/third_party/blink/renderer/core/frame/remote_frame_view.h b/third_party/blink/renderer/core/frame/remote_frame_view.h
+index 2f78617..d103a58 100644
+--- a/third_party/blink/renderer/core/frame/remote_frame_view.h
++++ b/third_party/blink/renderer/core/frame/remote_frame_view.h
+@@ -88,6 +88,13 @@ class CORE_EXPORT RemoteFrameView final
+ 
+   void UpdateCompositingScaleFactor();
+   float GetCompositingScaleFactor() const { return compositing_scale_factor_; }
++  // Domicile: whether a <webview>'s page keeps its raster scale and its size
++  // in the local root for now, while a transform animation runs on its
++  // element or a box around it, such as a window opening, closing or
++  // settling. Each new scale or size is a new surface and a raster of the
++  // whole page, every frame of the animation; the page's last frame is
++  // scaled instead.
++  bool HoldsScale() const;
+ 
+   uint32_t Print(const gfx::Rect&, cc::PaintCanvas*) const;
+   uint32_t CapturePaintPreview(const gfx::Rect&, cc::PaintCanvas*) const;

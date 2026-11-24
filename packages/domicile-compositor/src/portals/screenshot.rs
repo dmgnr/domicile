@@ -11,18 +11,18 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::mpsc::{channel, Sender};
+use std::sync::{Arc, Mutex};
 
 use domicile_host::data_url::data_url;
 use domicile_host::screenshot::{
-    color_at, crop, encode, file_name, save, screenshots_dir, Shot, Taken,
+    color_at, crop, encode, file_name, fit, save, screenshots_dir, Shot, Taken,
 };
 use domicile_host::system::Kept;
 use domicile_protocol::{
-    AccessDialog, DeskRect, FrozenDesk, PortalAnswer, PortalKind, PreviewedWindow, ShotRect,
-    SystemError, SystemErrorKind, SHELL_APP_ID,
+    AccessDialog, DeskRect, DeskShot, FrozenDesk, PortalAnswer, PortalKind, PreviewedWindow,
+    ShotRect, SystemError, SystemErrorKind, SHELL_APP_ID,
 };
-use tracing::warn;
 use zbus::object_server::ObjectServer;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -127,14 +127,14 @@ impl Screenshot {
                     .map_err(|unpicked| match unpicked {
                         Unpicked::Not(answer) => answer.response().max(1),
                         Unpicked::Failed(why) => {
-                            warn!(%why, "a window could not be shot for a screenshot");
+                            tracing::error!(%why, "a window could not be shot for a screenshot");
                             2
                         }
                     })?;
                 if picked.copy {
                     // The application asked for a file, so it still gets one.
                     if let Err(why) = (self.shots.copy)(encode(&picked.shot)) {
-                        warn!(%why, "a screenshot could not be copied; it is still saved");
+                        tracing::error!(%why, "a screenshot could not be copied; it is still saved");
                     }
                 }
                 picked.shot
@@ -142,7 +142,7 @@ impl Screenshot {
                 desk.shot
             };
             let path = (self.shots.save)(&shot).map_err(|why| -> u32 {
-                warn!(%why, "a screenshot could not be saved");
+                tracing::error!(%why, "a screenshot could not be saved");
                 2
             })?;
             Ok(file_uri(&path.display().to_string()))
@@ -193,7 +193,7 @@ impl Screenshot {
     /// A frame of the desk, or response `2`.
     async fn desk(&self) -> Result<Desk, u32> {
         (self.shots.shoot)().await.map_err(|why| {
-            warn!(%why, "the desk could not be shot for a screenshot");
+            tracing::error!(%why, "the desk could not be shot for a screenshot");
             2
         })
     }
@@ -282,7 +282,7 @@ async fn kept(connection: &zbus::Connection, app_id: &str) -> Option<bool> {
             None
         }
         Err(why) => {
-            warn!(%why, "the permission store could not be read; asking about screenshots again");
+            tracing::error!(%why, "the permission store could not be read; asking about screenshots again");
             None
         }
     }
@@ -302,7 +302,7 @@ async fn keep(connection: &zbus::Connection, app_id: &str, allowed: bool) {
         )
         .await;
     if let Err(why) = kept {
-        warn!(%why, "the permission store did not keep a screenshot answer; it will be asked again");
+        tracing::error!(%why, "the permission store did not keep a screenshot answer; it will be asked again");
     }
 }
 
@@ -345,6 +345,136 @@ pub async fn for_the_shell(
             }
         }
     }
+}
+
+/// What the shell's own screenshot dialog answers.
+type ShellAnswer = Result<Kept, SystemError>;
+
+/// The shell's own screenshot dialog, while one is up.
+///
+/// A shell screenshot asked for meanwhile, such as a second Print, answers as
+/// that dialog does. Queued instead, it would show a second dialog, of a desk
+/// shot with the first over it, once the first closed.
+#[derive(Clone, Default)]
+pub struct ShellDialog(Arc<Mutex<Option<Vec<Sender<ShellAnswer>>>>>);
+
+impl ShellDialog {
+    /// `ask`'s answer, or the answer of the dialog already up instead of
+    /// running `ask`. Blocks until then.
+    pub fn take(&self, ask: impl FnOnce() -> ShellAnswer) -> ShellAnswer {
+        let joined = {
+            let mut up = self.0.lock().unwrap();
+            match up.as_mut() {
+                Some(waiting) => {
+                    let (answer, answered) = channel();
+                    waiting.push(answer);
+                    Some(answered)
+                }
+                None => {
+                    *up = Some(Vec::new());
+                    None
+                }
+            }
+        };
+        if let Some(answered) = joined {
+            return answered
+                .recv()
+                .expect("the dialog up answers every call waiting on it, or panicked");
+        }
+        // Closed even when `ask` panics, so the next Print shows a dialog and
+        // the calls waiting on this one panic too rather than hang.
+        let closed = Closed(&self.0);
+        let answer = ask();
+        let waiting = closed.0.lock().unwrap().take();
+        for waiter in waiting.into_iter().flatten() {
+            // A waiter is a blocked call; it cannot have gone.
+            waiter
+                .send(answer.clone())
+                .expect("a call waiting on the dialog is still waiting");
+        }
+        answer
+    }
+}
+
+/// Closes a [`ShellDialog`] when dropped, dropping any call still waiting on
+/// it.
+struct Closed<'a>(&'a Mutex<Option<Vec<Sender<ShellAnswer>>>>);
+
+impl Drop for Closed<'_> {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().take();
+    }
+}
+
+/// Writes a PNG of the whole desk, or of its `area`, to `file`, its longer
+/// side at most `fit` pixels, for `domicile screenshot --fit`, and says what
+/// it shows.
+pub async fn for_an_agent(
+    shots: &Shots,
+    file: PathBuf,
+    fit_into: u32,
+    area: Option<DeskRect>,
+) -> Result<DeskShot, String> {
+    let desk = (shots.shoot)()
+        .await
+        .map_err(|why| format!("the desk could not be shot: {why}"))?;
+    let whole = DeskRect {
+        position: (desk.place.0, desk.place.1),
+        size: (desk.place.2, desk.place.3),
+    };
+    let (shot, place) = match area {
+        None => (desk.shot, whole),
+        Some(area) => (crop(&desk.shot, pixels_of(&desk.shot, whole, area)?), area),
+    };
+    let shot = fit(&shot, fit_into);
+    std::fs::write(&file, encode(&shot))
+        .map_err(|why| format!("the screenshot could not be written: {why}"))?;
+    Ok(DeskShot {
+        place,
+        width: shot.width,
+        height: shot.height,
+    })
+}
+
+/// `area` of the desk `whole` as the pixels of `shot`, which shows `whole`,
+/// or why it is not all on the desk.
+fn pixels_of(shot: &Shot, whole: DeskRect, area: DeskRect) -> Result<ShotRect, String> {
+    let describe = |rect: DeskRect| {
+        format!(
+            "{},{} {}x{}",
+            rect.position.0, rect.position.1, rect.size.0, rect.size.1
+        )
+    };
+    let (left, top) = (
+        area.position.0 - whole.position.0,
+        area.position.1 - whole.position.1,
+    );
+    let (right, bottom) = (left + area.size.0, top + area.size.1);
+    if left < 0
+        || top < 0
+        || right > whole.size.0
+        || bottom > whole.size.1
+        || area.size.0 < 1
+        || area.size.1 < 1
+    {
+        return Err(format!(
+            "the area {} is not all on the desk, which is {}",
+            describe(area),
+            describe(whole)
+        ));
+    }
+    // Logical pixels to the shot's, rounding outward so the area is all in.
+    let across = |at: i32| u64::from(shot.width) * at as u64;
+    let down = |at: i32| u64::from(shot.height) * at as u64;
+    let (width, height) = (whole.size.0 as u64, whole.size.1 as u64);
+    let x = (across(left) / width) as u32;
+    let y = (down(top) / height) as u32;
+    Ok(ShotRect {
+        x,
+        y,
+        width: (across(right).div_ceil(width) as u32) - x,
+        height: (down(bottom).div_ceil(height) as u32) - y,
+    })
 }
 
 /// Draws `window` as it last drew itself, for the shell's picker to preview,
@@ -611,6 +741,64 @@ mod tests {
     #[zbus(prefix = "org.freedesktop.portal.Error")]
     enum NotFound {
         NotFound(String),
+    }
+
+    #[test]
+    fn an_agents_shot_is_the_desk_fit_into_its_file_and_says_where_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("desk.png");
+        let shots = Shots {
+            shoot: shot_of(Ok(desk())),
+            ..Shots::none()
+        };
+
+        let shot = zbus::block_on(for_an_agent(&shots, file.clone(), 1, None)).unwrap();
+
+        assert_eq!(
+            shot,
+            DeskShot {
+                place: DeskRect {
+                    position: (-1, 0),
+                    size: (2, 1),
+                },
+                width: 1,
+                height: 1,
+            }
+        );
+        assert_eq!(png_of(std::fs::read(&file).unwrap()).0, (1, 1));
+    }
+
+    #[test]
+    fn an_agents_shot_of_an_area_is_that_area_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("desk.png");
+        let shots = Shots {
+            shoot: shot_of(Ok(desk())),
+            ..Shots::none()
+        };
+        let right = DeskRect {
+            position: (0, 0),
+            size: (1, 1),
+        };
+
+        let shot = zbus::block_on(for_an_agent(&shots, file.clone(), 8, Some(right))).unwrap();
+
+        assert_eq!(
+            shot,
+            DeskShot {
+                place: right,
+                width: 1,
+                height: 1,
+            }
+        );
+        let off_the_desk = DeskRect {
+            position: (0, 0),
+            size: (2, 1),
+        };
+        assert_eq!(
+            zbus::block_on(for_an_agent(&shots, file, 8, Some(off_the_desk))),
+            Err("the area 0,0 2x1 is not all on the desk, which is -1,0 2x1".to_string())
+        );
     }
 
     /// A 2x1 desk: an orange pixel on monitor `left`, then a half-transparent
@@ -1203,6 +1391,62 @@ mod tests {
             album,
             copied,
         }
+    }
+
+    /// A second Print while the shell's dialog is up shows no second dialog,
+    /// then or once the first closes.
+    #[test]
+    fn a_shell_screenshot_asked_while_its_dialog_is_up_answers_as_that_dialog() {
+        let dialog = ShellDialog::default();
+        let (answer, answered) = channel::<ShellAnswer>();
+        let (up, shown) = channel();
+        let first = {
+            let dialog = dialog.clone();
+            thread::spawn(move || {
+                dialog.take(|| {
+                    up.send(()).expect("the test listens");
+                    answered.recv().expect("the test answers")
+                })
+            })
+        };
+        shown
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first dialog is up");
+        let second = {
+            let dialog = dialog.clone();
+            thread::spawn(move || dialog.take(|| panic!("a second dialog was shown")))
+        };
+        let waited = std::time::Instant::now();
+        while dialog.0.lock().unwrap().as_ref().map_or(0, Vec::len) == 0 {
+            assert!(
+                waited.elapsed() < Duration::from_secs(10),
+                "the second call waits on the first dialog"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        answer.send(Ok(Kept::Copied)).expect("the dialog waits");
+
+        assert_eq!(first.join().expect("returned"), Ok(Kept::Copied));
+        assert_eq!(second.join().expect("returned"), Ok(Kept::Copied));
+        // Closed, so the next Print shows its own.
+        assert_eq!(
+            dialog.take(|| Err(other("shown".into()))),
+            Err(other("shown".into()))
+        );
+    }
+
+    /// A dialog whose call panicked is closed: the next Print shows its own.
+    #[test]
+    fn a_shell_screenshot_after_one_that_panicked_shows_its_own_dialog() {
+        let dialog = ShellDialog::default();
+        let panicked = {
+            let dialog = dialog.clone();
+            thread::spawn(move || dialog.take(|| panic!("the desk could not be shot")))
+        };
+        assert!(panicked.join().is_err());
+
+        assert_eq!(dialog.take(|| Ok(Kept::Copied)), Ok(Kept::Copied));
     }
 
     #[test]

@@ -133,9 +133,9 @@ start() {
 }
 
 # Waits up to ten seconds for the desktop to say `$1`.
-wait_for() {
+wait_for() { # text [file]
   local waited=0
-  while ! grep -q "$1" "$LOG" 2>/dev/null; do
+  while ! grep -q "$1" "${2:-$LOG}" 2>/dev/null; do
     [ "$waited" -ge 100 ] && return 1
     sleep 0.1
     waited=$((waited + 1))
@@ -193,7 +193,7 @@ fi
 
 echo "== the built shell replaces the splash =="
 WANT="{\"type\":\"load_shell\",\"version\":1,\"root\":\"$WORK/cache/domicile/shells/built\",\"module\":\"shell.js\"}"
-if wait_for "the splash gave way" && grep -qxF "$WANT" "$WORK/engine-heard" 2>/dev/null; then
+if wait_for "\"load_shell\"" "$WORK/engine-heard" && grep -qxF "$WANT" "$WORK/engine-heard" 2>/dev/null; then
   echo "PASS: the engine was told $WANT"
 else
   echo "FAIL: the engine heard:"

@@ -16,9 +16,11 @@ mojom("mojom") {
     "cast_sinks.mojom",
     "control_channel.mojom",
     "downloads.mojom",
+    "electron_frame.mojom",
     "extension_tray.mojom",
     "external_surface.mojom",
     "frame_sink_broker.mojom",
+    "picture_in_picture.mojom",
     "shell_fetch.mojom",
     "web_view_guest.mojom",
   ]

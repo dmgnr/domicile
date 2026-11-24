@@ -1,3 +1,4 @@
+import { Button } from "@domicile-desktop/component-library/Button";
 import { EmptyState } from "@domicile-desktop/component-library/EmptyState";
 import { Input } from "@domicile-desktop/component-library/Input";
 import {
@@ -18,6 +19,7 @@ import { ImageIcon } from "@phosphor-icons/react/dist/ssr/Image";
 import { LinkSimpleIcon } from "@phosphor-icons/react/dist/ssr/LinkSimple";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/ssr/MagnifyingGlass";
 import { TextTIcon } from "@phosphor-icons/react/dist/ssr/TextT";
+import type { KeyboardEvent } from "react";
 import { memo, useId, useRef, useState } from "react";
 
 import { css, cx } from "../styled-system/css";
@@ -37,6 +39,11 @@ type Props = {
   onCopy: (entry: number) => void;
   /** Escape, a backdrop click, or a chosen row. The desktop decides. */
   onDismiss: () => void;
+  /**
+   * Drops this entry, by its compositor ID. Removing the current copy empties
+   * the clipboard.
+   */
+  onRemove: (entry: number) => void;
   open: boolean;
   /** The screen to open on: the one with the keyboard. */
   screen: string;
@@ -54,7 +61,7 @@ type Props = {
  * both the choice and the dismissal, so the panel is gone before the paste.
  */
 export const Clipboard = memo(
-  ({ entries, onCopy, onDismiss, open, screen }: Props) => {
+  ({ entries, onCopy, onDismiss, onRemove, open, screen }: Props) => {
     // The history as of the last render open: choosing a copy moves it to
     // the top, which would reorder the rows while the panel fades out.
     const [shown, setShown] = useState(entries);
@@ -92,10 +99,11 @@ export const Clipboard = memo(
           />
         ) : (
           <History
-            earlier={shown.slice(1)}
-            now={shown[0]}
+            earlier={shown[0].current ? shown.slice(1) : shown}
+            now={shown[0].current ? shown[0] : undefined}
             onCopy={onCopy}
             onDismiss={onDismiss}
+            onRemove={onRemove}
           />
         )}
       </ModalDialog>
@@ -106,10 +114,11 @@ export const Clipboard = memo(
 type HistoryProps = {
   /** The copies before `now`, newest first: the rows. */
   earlier: readonly ClipboardEntry[];
-  /** The newest copy, already on the clipboard. */
-  now: ClipboardEntry;
+  /** The copy on the clipboard, if any. Removing it leaves none. */
+  now: ClipboardEntry | undefined;
   onCopy: (entry: number) => void;
   onDismiss: () => void;
+  onRemove: (entry: number) => void;
 };
 
 /**
@@ -120,7 +129,13 @@ type HistoryProps = {
  * `aria-activedescendant` marks the highlighted row. The current copy is not
  * a row, since choosing it would change nothing, and is not searched.
  */
-const History = ({ earlier, now, onCopy, onDismiss }: HistoryProps) => {
+const History = ({
+  earlier,
+  now,
+  onCopy,
+  onDismiss,
+  onRemove,
+}: HistoryProps) => {
   const listId = useId();
   const nowId = useId();
   const rows = useRef<HTMLDivElement>(null);
@@ -130,6 +145,7 @@ const History = ({ earlier, now, onCopy, onDismiss }: HistoryProps) => {
   const shown = matching(earlier, query);
   const highlighted =
     shown.length === 0 ? undefined : Math.min(stepped, shown.length - 1);
+  const lit = highlighted === undefined ? undefined : shown[highlighted];
 
   const pick = (entry: ClipboardEntry) => {
     onCopy(entry.id);
@@ -161,14 +177,16 @@ const History = ({ earlier, now, onCopy, onDismiss }: HistoryProps) => {
               return;
             }
             const step = stepOf(event, pageOf(rows.current));
-            const chosen = shown[highlighted];
             if (step !== undefined) {
               // Stop the box from moving the caret.
               event.preventDefault();
               setStepped(steppedTo(highlighted, step, shown.length));
-            } else if (event.key === "Enter" && chosen !== undefined) {
+            } else if (event.key === "Enter" && lit !== undefined) {
               event.preventDefault();
-              pick(chosen);
+              pick(lit);
+            } else if (removes(event) && lit !== undefined) {
+              event.preventDefault();
+              onRemove(lit.id);
             }
           }}
           placeholder={PROMPT}
@@ -186,7 +204,7 @@ const History = ({ earlier, now, onCopy, onDismiss }: HistoryProps) => {
           value={query}
         />
       </div>
-      {!searching && (
+      {!searching && now !== undefined && (
         <div aria-labelledby={nowId} className={groupStyles} role="group">
           <div className={groupLabelStyles} id={nowId}>
             On your clipboard
@@ -194,6 +212,13 @@ const History = ({ earlier, now, onCopy, onDismiss }: HistoryProps) => {
           <div className={wellStyles}>
             <div className={nowRowStyles}>
               <Copy entry={now} query="" />
+              <span className={nowRemoveStyles}>
+                <Remove
+                  onRemove={() => {
+                    onRemove(now.id);
+                  }}
+                />
+              </span>
             </div>
           </div>
         </div>
@@ -222,7 +247,22 @@ const History = ({ earlier, now, onCopy, onDismiss }: HistoryProps) => {
                 onChoose={pick}
                 onHighlight={setStepped}
               >
-                {(entry) => <Copy entry={entry} query={query} />}
+                {(entry) => (
+                  <>
+                    <Copy entry={entry} query={query} />
+                    {entry === lit && (
+                      <Remove
+                        onRemove={() => {
+                          onRemove(entry.id);
+                        }}
+                        // For the pointer. The keyboard has Delete, and focus
+                        // stays in the box, so the button stays out of the
+                        // tab order and out of the row's name.
+                        pointerOnly
+                      />
+                    )}
+                  </>
+                )}
               </ResultList>
             )}
           </div>
@@ -245,6 +285,45 @@ const Copy = ({ entry, query }: { entry: ClipboardEntry; query: string }) => (
     </span>
   </>
 );
+
+/**
+ * A row's remove button. Its click is not the row's, which would copy the row
+ * it just removed.
+ */
+const Remove = ({
+  onRemove,
+  pointerOnly = false,
+}: {
+  onRemove: () => void;
+  pointerOnly?: boolean;
+}) => (
+  <Button
+    aria-hidden={pointerOnly ? true : undefined}
+    onClick={(event) => {
+      event.stopPropagation();
+      onRemove();
+    }}
+    rounded
+    size="xs"
+    tabIndex={pointerOnly ? -1 : undefined}
+    variant="dangerGhost"
+  >
+    Remove
+  </Button>
+);
+
+/**
+ * Whether a key in the box removes the highlighted row: Delete with nothing
+ * after the caret, where the box has nothing for Delete to do.
+ */
+const removes = (event: KeyboardEvent<HTMLInputElement>): boolean => {
+  const { selectionEnd, selectionStart, value } = event.currentTarget;
+  return (
+    event.key === "Delete" &&
+    selectionStart === value.length &&
+    selectionEnd === value.length
+  );
+};
 
 /** The copies whose preview holds every word of `query`, ignoring case. */
 const matching = (
@@ -366,4 +445,12 @@ const nowRowStyles = hstack({
   gap: 2.5,
   paddingBlock: 1.5,
   paddingInline: 2,
+});
+
+// Shown under the pointer or on focus, as the rows' button shows on the lit
+// row.
+const nowRemoveStyles = css({
+  "div:hover > &": { opacity: 1 },
+  opacity: { _focusWithin: 1, base: 0 },
+  transition: "opacity {durations.fast} {easings.out}",
 });

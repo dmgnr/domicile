@@ -41,5 +41,20 @@ TEST_F(ShellOriginTest, NoOtherPageIsTheShell) {
   EXPECT_FALSE(IsShellOrigin(url::Origin()));
 }
 
+TEST_F(ShellOriginTest, TheShellAndAppsAreCrossOriginIsolated) {
+  EXPECT_TRUE(IsCrossOriginIsolatedOrigin(OriginOf("domicile://shell/")));
+  EXPECT_TRUE(IsCrossOriginIsolatedOrigin(
+      OriginOf("domicile://app-0123456789abcdef0123456789abcdef/")));
+}
+
+TEST_F(ShellOriginTest, NoOtherPageIsCrossOriginIsolated) {
+  EXPECT_FALSE(IsCrossOriginIsolatedOrigin(OriginOf("https://example.com/")));
+  // The user's files are data, not a program.
+  EXPECT_FALSE(IsCrossOriginIsolatedOrigin(OriginOf("domicile://home/a.html")));
+  // Not the shape an app's host has.
+  EXPECT_FALSE(IsCrossOriginIsolatedOrigin(OriginOf("domicile://app-x/")));
+  EXPECT_FALSE(IsCrossOriginIsolatedOrigin(url::Origin()));
+}
+
 }  // namespace
 }  // namespace domicile

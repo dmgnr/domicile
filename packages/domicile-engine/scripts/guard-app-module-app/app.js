@@ -10,12 +10,17 @@
 //   GUARD app-fetch own=… shell=…  whether fetch() read the app's own
 //                                  file and the shell's: read, empty or
 //                                  refused
+//   GUARD app-isolated isolated=<bool> shared=<bool>  crossOriginIsolated,
+//                                  and whether SharedArrayBuffer exists
 
 export const main = (root, domicile) => {
   const say = (what) => {
     console.log(`GUARD ${what}`);
   };
   root.textContent = "app module";
+  say(
+    `app-isolated isolated=${crossOriginIsolated} shared=${typeof SharedArrayBuffer === "function"}`,
+  );
   say(
     `app-main narrow=${domicile.windows === undefined && typeof domicile.files?.write === "function"}`,
   );

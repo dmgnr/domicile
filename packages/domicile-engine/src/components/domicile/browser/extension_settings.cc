@@ -224,4 +224,21 @@ ExtensionSettingsMap ReconcileSettings(const ExtensionSettingsMap& wanted,
   return changes;
 }
 
+std::optional<std::string> SetByConfig(const ExtensionSettings& wanted,
+                                       const ExtensionSettings& configured) {
+  if (wanted.in_private.has_value() && configured.in_private.has_value()) {
+    return "private";
+  }
+  if (wanted.file_access.has_value() && configured.file_access.has_value()) {
+    return "file_access";
+  }
+  if (wanted.user_scripts.has_value() && configured.user_scripts.has_value()) {
+    return "user_scripts";
+  }
+  if (wanted.site_access.has_value() && configured.site_access.has_value()) {
+    return "site_access";
+  }
+  return std::nullopt;
+}
+
 }  // namespace domicile

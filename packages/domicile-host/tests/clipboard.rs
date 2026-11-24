@@ -2,8 +2,8 @@
 //! what is too big to keep.
 
 use domicile_host::clipboard::{
-    image_mime, text_mime, Contents, History, Image, HELD_BYTES, LONGEST_COPY, LONGEST_IMAGE,
-    PREVIEW_CHARACTERS, REMEMBERED,
+    image_mime, text_mime, Contents, History, Image, Removed, HELD_BYTES, LONGEST_COPY,
+    LONGEST_IMAGE, PREVIEW_CHARACTERS, REMEMBERED,
 };
 use domicile_protocol::ClipboardEntry;
 
@@ -410,4 +410,75 @@ fn a_restored_row_moves_to_the_top() {
     assert_eq!(restored, Some(Contents::text("address")));
     assert_eq!(previews(&history), vec!["address", "something else"]);
     assert_eq!(history.entries()[0].id, first);
+}
+
+/// Which rows the shell is told hold what is on the clipboard.
+fn current(history: &History) -> Vec<bool> {
+    history
+        .entries()
+        .into_iter()
+        .map(|entry: ClipboardEntry| entry.current)
+        .collect()
+}
+
+/// Removing an earlier row drops it and its contents, and leaves the current
+/// copy on the clipboard.
+#[test]
+fn a_removed_row_is_gone_with_its_contents() {
+    let mut history = History::default();
+    history.record(Contents::text("password"));
+    let password = history.entries()[0].id;
+    history.record(Contents::text("address"));
+
+    assert_eq!(history.remove(password), Some(Removed::Earlier));
+
+    assert_eq!(previews(&history), vec!["address"]);
+    assert_eq!(history.contents(password), None);
+    assert_eq!(current(&history), vec![true]);
+}
+
+/// Removing the current copy reports it, so the compositor clears the
+/// clipboard, and leaves no row current.
+#[test]
+fn removing_the_current_copy_leaves_nothing_on_the_clipboard() {
+    let mut history = History::default();
+    history.record(Contents::text("address"));
+    history.record(Contents::text("password"));
+    let password = history.entries()[0].id;
+
+    assert_eq!(history.remove(password), Some(Removed::Current));
+
+    assert_eq!(previews(&history), vec!["address"]);
+    assert_eq!(current(&history), vec![false]);
+}
+
+/// A row already gone removes nothing.
+#[test]
+fn removing_a_row_that_is_gone_changes_nothing() {
+    let mut history = History::default();
+    history.record(Contents::text("address"));
+
+    assert_eq!(history.remove(99), None);
+
+    assert_eq!(previews(&history), vec!["address"]);
+}
+
+/// Only the newest row is current, and only until the clipboard is cleared.
+/// Copying the newest row's contents again, or restoring it, puts it back.
+#[test]
+fn copying_the_newest_row_again_after_a_clear_makes_it_current() {
+    let mut history = History::default();
+    history.record(Contents::text("address"));
+    history.record(Contents::text("password"));
+    let password = history.entries()[0].id;
+    history.remove(password);
+
+    assert!(history.record(Contents::text("address")));
+    assert_eq!(current(&history), vec![true]);
+
+    let address = history.entries()[0].id;
+    history.record(Contents::text("password"));
+    history.remove(history.entries()[0].id);
+    history.restore(address);
+    assert_eq!(current(&history), vec![true]);
 }

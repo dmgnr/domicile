@@ -19,7 +19,7 @@ job builds it on `crux`.
  1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/content/browser/gpu/gpu_data_manager_impl_private.cc b/content/browser/gpu/gpu_data_manager_impl_private.cc
-index 3f109c6..d47e67d 100644
+index 2f60ea1..21e4fba 100644
 --- a/content/browser/gpu/gpu_data_manager_impl_private.cc
 +++ b/content/browser/gpu/gpu_data_manager_impl_private.cc
 @@ -34,6 +34,7 @@

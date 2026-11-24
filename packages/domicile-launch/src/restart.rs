@@ -300,7 +300,7 @@ pub fn clear_the_last_one(runtime: &Runtime) -> Result<(), Leftover> {
 
 /// Removes the last compositor's chrome socket and session file.
 ///
-/// Leaves the broker and command sockets, which belong to the engine that is
+/// Leaves the broker, command and Electron sockets, which belong to the engine that is
 /// still running, and the launched clients' record, which the next compositor
 /// reads.
 pub fn clear_the_last_compositor(runtime: &Runtime) -> Result<(), Leftover> {
@@ -311,13 +311,14 @@ pub fn clear_the_last_compositor(runtime: &Runtime) -> Result<(), Leftover> {
     gone(&runtime.session, std::fs::remove_file(&runtime.session))
 }
 
-/// Removes the last engine's broker and command sockets.
+/// Removes the last engine's broker, command and Electron sockets.
 ///
 /// Leaves the chrome socket and session file, which belong to the compositor
 /// that is still running.
 pub fn clear_the_last_engine(runtime: &Runtime) -> Result<(), Leftover> {
     gone(&runtime.broker, std::fs::remove_file(&runtime.broker))?;
-    gone(&runtime.command, std::fs::remove_file(&runtime.command))
+    gone(&runtime.command, std::fs::remove_file(&runtime.command))?;
+    gone(&runtime.electron, std::fs::remove_file(&runtime.electron))
 }
 
 fn doubling(policy: &Policy, failures: u32) -> Duration {

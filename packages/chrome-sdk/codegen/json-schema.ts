@@ -1,9 +1,8 @@
-// The subset of JSON Schema that `schemars` emits for `domicile-config`, as
-// far as it decides a TypeScript type.
+// The subset of JSON Schema that `schemars` emits for `domicile-config`: what
+// decides a type, and the constraints and defaults a Zod schema checks.
 //
-// Constraints TypeScript cannot state (`minimum`, `pattern`, `default`, …) are
-// dropped. Any other keyword is refused, so a schema feature this does not
-// handle fails the generator instead of emitting a wrong type.
+// Any other keyword is refused, so a schema feature this does not handle fails
+// the generator instead of emitting a wrong type.
 
 import { z } from "zod";
 
@@ -19,7 +18,7 @@ const typeNameSchema = z.enum([
 
 export type TypeName = z.infer<typeof typeNameSchema>;
 
-/** A schema, reduced to what decides its TypeScript type. */
+/** A schema, reduced to what decides its type, constraints and default. */
 export type JsonSchema = {
   readonly $ref?: string | undefined;
   /**
@@ -29,10 +28,18 @@ export type JsonSchema = {
   readonly additionalProperties?: true | JsonSchema | undefined;
   readonly anyOf?: readonly JsonSchema[] | undefined;
   readonly const?: string | undefined;
+  readonly default?: unknown;
   readonly description?: string | undefined;
   readonly enum?: readonly string[] | undefined;
+  readonly exclusiveMinimum?: number | undefined;
+  readonly format?: string | undefined;
   readonly items?: JsonSchema | undefined;
+  readonly maxItems?: number | undefined;
+  readonly maximum?: number | undefined;
+  readonly minItems?: number | undefined;
+  readonly minimum?: number | undefined;
   readonly oneOf?: readonly JsonSchema[] | undefined;
+  readonly pattern?: string | undefined;
   readonly prefixItems?: readonly JsonSchema[] | undefined;
   readonly properties?: Readonly<Record<string, JsonSchema>> | undefined;
   readonly required?: readonly string[] | undefined;
@@ -65,7 +72,7 @@ const OPEN_AND_NAMED = {
   message: "additionalProperties: an object open to any key names none",
 };
 
-/** Keywords that constrain a value without changing its TypeScript type. */
+/** Keywords that constrain a value without changing its type. */
 const constraints = {
   default: z.unknown().optional(),
   exclusiveMinimum: z.number().optional(),
@@ -80,7 +87,6 @@ const constraints = {
 /** The keywords that decide a type. A function, since they recurse. */
 const typing = () => ({
   $ref: z.string().optional(),
-  // `false` says only what `properties` does, so it is dropped below.
   additionalProperties: z.union([z.boolean(), jsonSchemaSchema]).optional(),
   anyOf: z.array(jsonSchemaSchema).optional(),
   const: z.string().optional(),
@@ -94,22 +100,13 @@ const typing = () => ({
   type: z.union([typeNameSchema, z.array(typeNameSchema)]).optional(),
 });
 
-const withoutConstraints = <
-  T extends Partial<Record<keyof typeof constraints, unknown>> & {
-    additionalProperties?: boolean | JsonSchema | undefined;
-  },
+/** `additionalProperties: false` says only what `properties` does. */
+const withoutClosing = <
+  T extends { additionalProperties?: boolean | JsonSchema | undefined },
 >({
   additionalProperties,
-  default: _default,
-  exclusiveMinimum: _exclusiveMinimum,
-  format: _format,
-  maxItems: _maxItems,
-  maximum: _maximum,
-  minimum: _minimum,
-  minItems: _minItems,
-  pattern: _pattern,
   ...typed
-}: T): Omit<T, keyof typeof constraints | "additionalProperties"> & {
+}: T): Omit<T, "additionalProperties"> & {
   additionalProperties?: true | JsonSchema;
 } =>
   additionalProperties === undefined || additionalProperties === false
@@ -120,7 +117,7 @@ const jsonSchemaSchema: z.ZodType<JsonSchema> = z.lazy(() =>
   z
     .strictObject({ ...typing(), ...constraints })
     .refine(namesKeysOrIsOpen, OPEN_AND_NAMED)
-    .transform(withoutConstraints),
+    .transform(withoutClosing),
 );
 
 const rootSchemaSchema: z.ZodType<RootSchema> = z
@@ -132,4 +129,4 @@ const rootSchemaSchema: z.ZodType<RootSchema> = z
     title: z.string(),
   })
   .refine(namesKeysOrIsOpen, OPEN_AND_NAMED)
-  .transform(({ $schema: _, ...root }) => withoutConstraints(root));
+  .transform(({ $schema: _, ...root }) => withoutClosing(root));

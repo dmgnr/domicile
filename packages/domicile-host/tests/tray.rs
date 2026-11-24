@@ -1,13 +1,15 @@
 //! Tests for turning StatusNotifierItem registrations and properties into
 //! tray items.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use domicile_host::tray::{
-    address, item, method, Landed, Pixmap, Properties, Reads, Registry, Status, TrayIcons,
+    address, item, menu_clicked, method, Landed, Pixmap, Properties, Reads, Registry, Status,
+    TrayIcons,
 };
-use domicile_protocol::{TrayAction, TrayItem};
+use domicile_protocol::{Bus, SystemRequest, TrayAction, TrayItem};
 
 /// A temporary data directory holding `files` as (relative path, bytes).
 fn data_dir(files: &[(&str, &[u8])]) -> tempfile::TempDir {
@@ -422,6 +424,39 @@ mod statuses {
     }
 }
 
+mod menu_clicks {
+    use super::*;
+
+    /// The call a shell makes to click entry 4 of the menu on `bus`.
+    fn event(bus: Bus, event: &str) -> SystemRequest {
+        SystemRequest::DbusCall {
+            bus,
+            destination: ":1.42".into(),
+            path: "/MenuBar".into(),
+            interface: "com.canonical.dbusmenu".into(),
+            member: "Event".into(),
+            signature: "isvu".into(),
+            body: format!(r#"[4, "{event}", {{"signature": "i", "value": 0}}, 0]"#),
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_menu_entry_is_told_by_the_bus_it_goes_to() {
+        // Entries such as "Show Slack" raise a window, so need a token too.
+        assert_eq!(menu_clicked(&event(Bus::Session, "clicked")), Some(":1.42"));
+    }
+
+    #[test]
+    fn hovering_an_entry_is_not_a_click() {
+        assert_eq!(menu_clicked(&event(Bus::Session, "hovered")), None);
+    }
+
+    #[test]
+    fn a_call_on_the_system_bus_is_not_a_tray_menu() {
+        assert_eq!(menu_clicked(&event(Bus::System, "clicked")), None);
+    }
+}
+
 mod registry {
     use super::*;
 
@@ -440,8 +475,8 @@ mod registry {
     /// by path.
     fn two() -> Registry {
         let mut registry = Registry::default();
-        registry.register("org.kde.SNI-1", ":1.9", "/StatusNotifierItem");
-        registry.register(":1.42", ":1.42", "/org/ayatana/nm");
+        registry.register("org.kde.SNI-1", ":1.9", "/StatusNotifierItem", Some(9));
+        registry.register(":1.42", ":1.42", "/org/ayatana/nm", Some(42));
         registry
     }
 
@@ -450,7 +485,7 @@ mod registry {
         let mut registry = Registry::default();
 
         assert_eq!(
-            registry.register("org.kde.SNI-1", ":1.9", "/StatusNotifierItem"),
+            registry.register("org.kde.SNI-1", ":1.9", "/StatusNotifierItem", None),
             Some("org.kde.SNI-1/StatusNotifierItem".to_string())
         );
     }
@@ -461,7 +496,10 @@ mod registry {
         // connection; it must not get a second icon.
         let mut registry = two();
 
-        assert_eq!(registry.register(":1.42", ":1.42", "/org/ayatana/nm"), None);
+        assert_eq!(
+            registry.register(":1.42", ":1.42", "/org/ayatana/nm", Some(42)),
+            None
+        );
     }
 
     #[test]
@@ -533,7 +571,7 @@ mod registry {
         // would freeze the icon.
         let mut registry = two();
 
-        registry.moved("org.kde.SNI-1", ":1.77");
+        registry.moved("org.kde.SNI-1", ":1.77", Some(77));
 
         assert_eq!(
             registry.sent_by(":1.77", "/StatusNotifierItem"),
@@ -546,6 +584,41 @@ mod registry {
     }
 
     #[test]
+    fn a_named_item_is_traced_to_its_process() {
+        // A click lets that process raise its window; see
+        // `domicile_compositor::activation::invites`. An item not yet read has
+        // no name a shell could click.
+        let mut registry = two();
+        registry.named(":1.42/org/ayatana/nm", "nm-applet");
+
+        assert_eq!(registry.pids(), HashMap::from([("nm-applet".into(), 42)]));
+        // A menu is clicked by bus; any item read or not may have one.
+        assert_eq!(
+            registry.pids_on_buses(),
+            HashMap::from([(":1.42".into(), 42), ("org.kde.SNI-1".into(), 9)])
+        );
+    }
+
+    #[test]
+    fn a_menu_is_traced_to_the_items_on_its_bus() {
+        // The shell clicks a menu entry by the bus the menu is on.
+        assert_eq!(
+            two().paths_on("org.kde.SNI-1"),
+            vec!["/StatusNotifierItem".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_well_known_name_that_changes_hands_is_traced_to_its_new_owner() {
+        let mut registry = two();
+        registry.named("org.kde.SNI-1/StatusNotifierItem", "slack");
+
+        registry.moved("org.kde.SNI-1", ":1.77", Some(77));
+
+        assert_eq!(registry.pids(), HashMap::from([("slack".into(), 77)]));
+    }
+
+    #[test]
     fn an_item_is_named_to_a_shell_by_what_it_calls_itself() {
         // `Id` is stable across runs; the bus name is not. A shell keys icon
         // placement on this name, so a restarted app keeps its position.
@@ -555,7 +628,7 @@ mod registry {
             "nm-applet"
         );
         registry.vanished(":1.42");
-        registry.register(":1.88", ":1.88", "/org/ayatana/nm");
+        registry.register(":1.88", ":1.88", "/org/ayatana/nm", Some(88));
 
         assert_eq!(
             registry.named(":1.88/org/ayatana/nm", "nm-applet"),

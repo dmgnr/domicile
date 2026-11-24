@@ -8,7 +8,7 @@ use std::os::fd::OwnedFd;
 use std::thread;
 
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use tracing::{debug, warn};
+use tracing::debug;
 use zbus::blocking::{proxy, Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
@@ -38,7 +38,7 @@ pub enum Logind {
 pub fn listen(tell: impl Fn(Logind) + Send + Clone + 'static) {
     thread::spawn(move || {
         let why = listen_on(tell);
-        warn!(
+        tracing::error!(
             %why,
             "this desktop does not hear logind, so it does not lock before the machine sleeps"
         );
@@ -89,7 +89,7 @@ fn hear_sleeps(tell: impl Fn(Logind) + Send + Clone + 'static) -> zbus::Result<(
     let manager = proxy_to(&bus, MANAGER, MANAGER_INTERFACE)?;
     let sleeps = manager.receive_signal("PrepareForSleep")?;
     if let Err(why) = listen_for_locks(&bus, &manager, tell.clone()) {
-        warn!(
+        tracing::error!(
             %why,
             "this desktop does not hear its logind session, so `loginctl lock-session` does not \
              lock it"

@@ -4,7 +4,11 @@ import { WifiSlashIcon } from "@phosphor-icons/react/dist/ssr/WifiSlash";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 
 import { Button } from "../Button/Button";
-import { EmptyState as EmptyStateComponent } from "./EmptyState";
+import {
+  EmptyState as EmptyStateComponent,
+  LAYOUTS,
+  TONES,
+} from "./EmptyState";
 
 const meta = {
   args: {
@@ -14,9 +18,20 @@ const meta = {
   },
   argTypes: {
     action: { control: false, table: { category: "Contents" } },
+    detail: { control: "text", table: { category: "Contents" } },
     hint: { control: "text", table: { category: "Contents" } },
     icon: { control: false, table: { category: "Contents" } },
+    layout: {
+      control: "inline-radio",
+      options: LAYOUTS,
+      table: { category: "Appearance" },
+    },
     title: { control: "text", table: { category: "Contents" } },
+    tone: {
+      control: "inline-radio",
+      options: TONES,
+      table: { category: "Appearance" },
+    },
   },
   component: EmptyStateComponent,
   parameters: {
@@ -52,5 +67,24 @@ export const WithAction: StoryObj<typeof EmptyStateComponent> = {
     hint: "Move closer to your router, then look again.",
     icon: MagnifyingGlassIcon,
     title: "No networks nearby",
+  },
+};
+
+export const Warning: StoryObj<typeof EmptyStateComponent> = {
+  args: {
+    detail: "The name net.connman.iwd was not provided",
+    hint: "Close this and open it again in a moment.",
+    icon: undefined,
+    title: "Couldn't read Wi-Fi",
+    tone: "warning",
+  },
+};
+
+export const Inline: StoryObj<typeof EmptyStateComponent> = {
+  args: {
+    hint: undefined,
+    icon: undefined,
+    layout: "inline",
+    title: "No other networks nearby",
   },
 };

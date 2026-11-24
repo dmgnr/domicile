@@ -7,6 +7,8 @@
 //                                      whether the event bubbles and can be
 //                                      canceled
 //   GUARD keydown <code>               a key reached this document
+//   GUARD key-delivered <id> <how>     a key press reached a window's client,
+//                                      with whether the event bubbles
 //   GUARD pressed <tag>                the control only: a press reached this
 //                                      document, on what
 //
@@ -59,6 +61,11 @@ export const HostShell = (_root, desktop) => {
   });
   document.addEventListener("keydown", (event) => {
     console.log(`GUARD keydown ${event.code}`);
+  });
+  document.addEventListener("domicile-key-delivered", (event) => {
+    console.log(
+      `GUARD key-delivered ${event.target.getAttribute?.("app-id") ?? event.target.localName} bubbles=${event.bubbles}`,
+    );
   });
   // What reached the page, for the failure message only: the verdict never
   // reads these. Capture-phase on the window, so they hear an event before

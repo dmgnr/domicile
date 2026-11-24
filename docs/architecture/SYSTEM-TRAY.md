@@ -13,7 +13,8 @@ application ── RegisterStatusNotifierItem ──▶ compositor (org.kde.Stat
                                                    ▼
                                    shell: domicile.tray.items, "change" → icons
 shell click ─ tray.activate(id, action) ─▶ engine ─ activate_tray_item ─▶ compositor
-            ─▶ Activate / SecondaryActivate / ContextMenu on the item
+            ─▶ ProvideXdgActivationToken, then Activate / SecondaryActivate /
+               ContextMenu on the item
 shell menu ─ domicile.dbus.call / match ──────▶ compositor ─▶ com.canonical.dbusmenu on `bus`
 ```
 
@@ -25,7 +26,7 @@ shell menu ─ domicile.dbus.call / match ──────▶ compositor ─�
 | `tray` attribute, `activateTrayItem()` | `components/domicile/mojom/control_channel.mojom`, `modules/domicile/domicile_tray_*`, patch 0063 |
 | SDK: `DomicileTrayItem`, `tray`, `activateTrayItem`; `TrayItem`, `TrayAction` | `@domicile-desktop/sdk/domicile-host`, `@domicile-desktop/sdk/tray` |
 | Menus: `watchMenu` reads, follows and clicks an item's dbusmenu | `@domicile-desktop/sdk/dbusmenu` |
-| Manganese tray: one reorderable row shared with extension actions; menus drawn with `ContextMenu`, entry icons looked up with `@domicile-desktop/system-apps/app-icons` | `packages/manganese-bar-module-tray/src/` |
+| Manganese tray: one reorderable row shared with extension actions, with a menu of every icon to pin or unpin it; menus drawn with `ContextMenu`, entry icons looked up with `@domicile-desktop/system-apps/app-icons` | `packages/manganese-bar-module-tray/src/` |
 
 ## Key decisions
 
@@ -53,14 +54,29 @@ shell menu ─ domicile.dbus.call / match ──────▶ compositor ─�
 - **`Passive` items are not sent.** Trays conventionally hide them.
 - **Clicks respect the lock.** They go through the Wayland thread, which
   refuses them while locked, the same as `Spawn`.
+- **Clicks carry an `xdg-activation` token**, so the app can show a window
+  that is in a hidden tab, on another screen or on another workspace.
+  - The token is handed over with `ProvideXdgActivationToken` before the
+    click, as KDE does.
+  - Apps that ignore it (Electron) ask with a token of their own, made before
+    the keyboard last moved, which is normally dropped. A click lets the
+    item's process (from `GetConnectionUnixProcessID`) ask that way once,
+    within 10 seconds, as a notification press does (`activation::invites`).
+  - A shell's D-Bus call clicking a menu entry (`com.canonical.dbusmenu`
+    `Event` `clicked`, as "Show Slack" is) gets the same, for the item on the
+    call's bus (`tray::menu_clicked`). The token is minted before the call
+    runs.
 - **Reads never block the D-Bus worker.** Each `GetAll` runs on its own thread,
   because a call waits as long as its application does.
   - An item has at most one read in flight. Signals during a read cause one
     more read after it.
   - Calls on the tray's connection time out after 3 seconds
     (`ANSWER_WITHIN`). A timed-out read is a failed read: the item is hidden
-    and its next signal reads it again. The first timeout per item logs a
-    warning; later ones log at debug.
+    until a read answers. Its next signal reads it again, and so does a wait
+    after each timeout, 3 seconds doubling up to a minute
+    (`RETRY_AT_MOST`), since an application busy starting up, as many are at
+    login, may answer late and never signal. The first timeout per item logs
+    a warning; later ones log at debug.
   - Clicks use `call_noreply`, so they never wait.
 - **Icon lookups are cached** for the 32 names used last. An icon named by a
   path is read each time, since applications rewrite one file in place.

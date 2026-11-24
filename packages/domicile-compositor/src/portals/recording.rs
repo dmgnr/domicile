@@ -23,7 +23,7 @@ use domicile_host::recording::{file_name, recordings_dir, Timer};
 use domicile_protocol::{
     Captured, CapturingKind, PortalAnswer, SystemError, SystemErrorKind, SHELL_APP_ID,
 };
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::queue::{ask_unbidden, Queue};
 use super::screencast::{captured, chosen, dialog, preview, Selected};
@@ -162,14 +162,14 @@ pub fn for_the_shell(queue: &Queue, recordings: &Recordings) -> Result<PathBuf, 
         timer = match heard {
             Heard::Control(PortalAnswer::Pause) => {
                 if let Err(why) = recorder.pause() {
-                    warn!(%why, "the recording did not pause");
+                    tracing::error!(%why, "the recording did not pause");
                     continue;
                 }
                 timer.paused((recordings.clock)())
             }
             Heard::Control(PortalAnswer::Resume) => {
                 if let Err(why) = recorder.resume() {
-                    warn!(%why, "the recording did not resume");
+                    tracing::error!(%why, "the recording did not resume");
                     continue;
                 }
                 timer.resumed((recordings.clock)())
@@ -294,9 +294,14 @@ pub fn beside_the_compositor() -> StartRecorder {
         let stdin = child.stdin.take().expect("its stdin is piped");
         let mut lines = BufReader::new(child.stdout.take().expect("its stdout is piped")).lines();
         // It says so once its pipeline plays, or exits saying why not.
-        match lines.next() {
-            Some(Ok(line)) if line == "recording" => {}
-            _ => {
+        match lines
+            .next()
+            .and_then(Result::ok)
+            .as_deref()
+            .and_then(started)
+        {
+            Some(encoder) => debug!(encoder, "the recorder started"),
+            None => {
                 return Err(match child.wait() {
                     Ok(status) => format!("it {status}"),
                     Err(why) => why.to_string(),
@@ -309,6 +314,12 @@ pub fn beside_the_compositor() -> StartRecorder {
         });
         Ok(Box::new(Process { child, stdin }) as Box<dyn Recorder>)
     })
+}
+
+/// The encoder the recorder's first line names, when it is the line saying
+/// it started: `recording with <encoder>`.
+fn started(line: &str) -> Option<&str> {
+    line.strip_prefix("recording with ")
 }
 
 /// `domicile-recorder`, which takes its commands on stdin.
@@ -378,6 +389,13 @@ mod tests {
     use crate::portals::screenshot::Shots;
 
     const WAIT: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn the_recorder_says_it_started_with_its_encoder() {
+        assert_eq!(started("recording with Gpu(Av1)"), Some("Gpu(Av1)"));
+        assert_eq!(started("recording"), None);
+        assert_eq!(started("no VA-API"), None);
+    }
 
     /// A recording on another thread, and what it did.
     struct Recording {

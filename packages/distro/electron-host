@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs an installed Electron app's main process on the desktop's engine:
+# `domicileElectronHost` in `flake.nix`, with the bun and workspace this
+# package installs beside it. `domicile open --electron` runs it.
+here="$(dirname "$(readlink -f "$0")")"
+exec "$here/bun" "$here/workspace/packages/electron-host/src/main.ts" "$@"

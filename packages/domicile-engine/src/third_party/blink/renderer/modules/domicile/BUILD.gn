@@ -26,6 +26,8 @@ blink_modules_sources("domicile") {
     "domicile_app_host.h",
     "domicile_chord.cc",
     "domicile_chord.h",
+    "domicile_browser_profile.cc",
+    "domicile_browser_profile.h",
     "domicile_browser_window.cc",
     "domicile_browser_window.h",
     "domicile_cast_sink.cc",
@@ -44,6 +46,8 @@ blink_modules_sources("domicile") {
     "domicile_extension.h",
     "domicile_extension_popup_event.cc",
     "domicile_extension_popup_event.h",
+    "domicile_installed_extension.cc",
+    "domicile_installed_extension.h",
     "domicile_shortcut_event.cc",
     "domicile_shell.cc",
     "domicile_shell.h",
@@ -52,6 +56,8 @@ blink_modules_sources("domicile") {
     "domicile_notification.h",
     "domicile_notification_action.cc",
     "domicile_notification_action.h",
+    "domicile_picture_in_picture_video.cc",
+    "domicile_picture_in_picture_video.h",
     "domicile_tray_item.cc",
     "domicile_tray_item.h",
     "domicile_window.cc",
@@ -76,6 +82,7 @@ blink_modules_sources("domicile") {
     "//components/domicile:forwarded_keys",
     # The chords fired and not yet released. See DomicileHost::ReleaseChords.
     "//components/domicile:held_chords",
+    "//components/domicile:warp_landing",
     # And the wire names of the themes, for the same reason and in both
     # directions: `DomicileHost.theme` is a `DomicileTheme` where the
     # compositor's is a `mojom::Theme`, and `setTheme()` goes back the other

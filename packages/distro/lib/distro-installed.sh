@@ -85,7 +85,7 @@ done
 
 check "the session runs /usr/bin/domicile" \
   grep -qxF Exec=/usr/bin/domicile /usr/share/wayland-sessions/domicile.desktop
-for unit in domicile-session.target domicile-session-shutdown.target; do
+for unit in domicile-session.target domicile-session-shutdown.target domicile-miracast.service; do
   check "$unit is installed" test -f "/usr/lib/systemd/user/$unit"
 done
 check "the portal backend is installed" \

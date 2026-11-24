@@ -127,7 +127,7 @@ fn every_answer_says_which_one_it_is() {
     );
     assert_eq!(
         ConfigFile::Found(PathBuf::from(DEFAULT)).to_string(),
-        format!("{DEFAULT}, found where a config lives")
+        DEFAULT
     );
     assert_eq!(
         ConfigFile::Absent(PathBuf::from(HOME_DIR)).to_string(),

@@ -19,11 +19,13 @@ import { act } from "@testing-library/react";
 export const device = (overrides: Partial<AudioDevice>): AudioDevice => ({
   default: false,
   description: "Speakers",
+  filtered: false,
   id: "output:speakers",
   monitor: false,
   muted: false,
   port: undefined,
   ports: [],
+  through: [],
   volume: 0.5,
   ...overrides,
 });

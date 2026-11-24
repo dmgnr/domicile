@@ -4,9 +4,10 @@
 //! pinned because the JS client hard-codes them.
 
 use domicile_protocol::{
-    negotiate, AdaptiveSync, AppCursorImage, AppFrame, Appearance, ChromeMessage, ClipboardEntry,
-    CursorHiding, CursorImage, CursorShape, CursorTheme, DisplayInfo, DisplayTransform,
-    HostMessage, Owner, Passphrase, PointerConstraint, PointerOverWindow, PROTOCOL_VERSION,
+    negotiate, AdaptiveSync, AppCursorImage, AppFrame, Appearance, BrowserProfile, ChromeMessage,
+    ClipboardEntry, CursorHiding, CursorImage, CursorShape, CursorTheme, DisplayHdr, DisplayInfo,
+    DisplayTransform, HostMessage, Owner, Passphrase, PointerConstraint, PointerOverWindow,
+    SurfaceRect, PROTOCOL_VERSION,
 };
 
 fn chrome_round_trip(msg: &ChromeMessage) {
@@ -52,6 +53,9 @@ fn chrome_messages_round_trip() {
     chrome_round_trip(&ChromeMessage::Activity {
         input: Some("KeyPressed from AT Translated Set 2 keyboard".into()),
     });
+    chrome_round_trip(&ChromeMessage::EngineFault {
+        what: "A page stayed in fullscreen.".into(),
+    });
     chrome_round_trip(&ChromeMessage::DeskPointer {
         at: Some((12.5, 3.0)),
         windows: vec![PointerOverWindow {
@@ -79,6 +83,7 @@ fn chrome_messages_round_trip() {
         command: vec!["kitty".into(), "--hold".into()],
     });
     chrome_round_trip(&ChromeMessage::CopyClipboardEntry { entry: 7 });
+    chrome_round_trip(&ChromeMessage::RemoveClipboardEntry { entry: 7 });
     chrome_round_trip(&ChromeMessage::PointerMotion {
         app_id: "term".into(),
         x: 12.5,
@@ -89,16 +94,20 @@ fn chrome_messages_round_trip() {
         app_id: "term".into(),
         dx: 3.5,
         dy: -2.0,
+        dx_unaccel: 1.25,
+        dy_unaccel: -0.5,
     });
     assert_eq!(
         serde_json::from_str::<ChromeMessage>(
-            r#"{"type":"pointer_relative","app_id":"term","dx":3.5,"dy":-2.0}"#
+            r#"{"type":"pointer_relative","app_id":"term","dx":3.5,"dy":-2.0,"dx_unaccel":1.25,"dy_unaccel":-0.5}"#
         )
         .unwrap(),
         ChromeMessage::PointerRelative {
             app_id: "term".into(),
             dx: 3.5,
             dy: -2.0,
+            dx_unaccel: 1.25,
+            dy_unaccel: -0.5,
         },
         "the engine's line parses"
     );
@@ -184,6 +193,56 @@ fn spawn_wire_shape_is_pinned() {
 }
 
 #[test]
+fn spellcheck_says_whether_and_in_which_languages() {
+    let v = serde_json::to_value(HostMessage::Spellcheck {
+        enabled: true,
+        languages: vec!["en-US".into(), "de-DE".into()],
+    })
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({
+            "type": "spellcheck",
+            "enabled": true,
+            "languages": ["en-US", "de-DE"],
+        })
+    );
+}
+
+#[test]
+fn browser_profiles_wire_shape_is_pinned() {
+    let v = serde_json::to_value(HostMessage::BrowserProfiles {
+        profiles: vec![BrowserProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            color: "#d97706".into(),
+            private: false,
+            extensions: Some(vec!["aeblfdkhhhdcdjpifhhbdiojplfjncoa".into()]),
+        }],
+        default_profile: "work".into(),
+        default_private_profile: "private".into(),
+        sites: [("github.com/acme".to_string(), "work".to_string())].into(),
+    })
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({
+            "type": "browser_profiles",
+            "profiles": [{
+                "id": "work",
+                "name": "Work",
+                "color": "#d97706",
+                "private": false,
+                "extensions": ["aeblfdkhhhdcdjpifhhbdiojplfjncoa"],
+            }],
+            "default_profile": "work",
+            "default_private_profile": "private",
+            "sites": { "github.com/acme": "work" },
+        })
+    );
+}
+
+#[test]
 fn host_messages_round_trip() {
     host_round_trip(&HostMessage::ShellConfig {
         keys: [("Return".to_string(), 28), ("l".to_string(), 25)].into(),
@@ -225,12 +284,14 @@ fn a_clipboard_row_is_an_id_and_enough_to_recognize_it_by() {
                 image: false,
                 preview: "the newest".into(),
                 thumbnail: None,
+                current: true,
             },
             ClipboardEntry {
                 id: 1,
                 image: true,
                 preview: "Image, 3 × 2".into(),
                 thumbnail: Some("data:image/png;base64,iVBORw0KGgo=".into()),
+                current: false,
             },
         ],
     })
@@ -239,9 +300,9 @@ fn a_clipboard_row_is_an_id_and_enough_to_recognize_it_by() {
     assert_eq!(
         v["entries"],
         serde_json::json!([
-            {"id": 3, "image": false, "preview": "the newest"},
+            {"id": 3, "image": false, "preview": "the newest", "current": true},
             {"id": 1, "image": true, "preview": "Image, 3 × 2",
-             "thumbnail": "data:image/png;base64,iVBORw0KGgo="},
+             "thumbnail": "data:image/png;base64,iVBORw0KGgo=", "current": false},
         ])
     );
 }
@@ -366,6 +427,9 @@ fn the_desktop_is_described_to_the_chrome() {
                 mode: [1920, 1080],
                 refresh_mhz: 0,
                 adaptive_sync: AdaptiveSync::Unsupported,
+                hdr: DisplayHdr::Unsupported,
+                peak_luminance: 0,
+                sdr_white: 0,
                 transform: DisplayTransform::Normal,
             },
             DisplayInfo {
@@ -376,6 +440,9 @@ fn the_desktop_is_described_to_the_chrome() {
                 mode: [5120, 2880],
                 refresh_mhz: 0,
                 adaptive_sync: AdaptiveSync::On,
+                hdr: DisplayHdr::On,
+                peak_luminance: 1000,
+                sdr_white: 203,
                 transform: DisplayTransform::Normal,
             },
         ],
@@ -394,6 +461,10 @@ fn the_desktop_is_described_to_the_chrome() {
     assert_eq!(v["displays"][1]["transform"], "normal");
     assert_eq!(v["displays"][0]["adaptive_sync"], "unsupported");
     assert_eq!(v["displays"][1]["adaptive_sync"], "on");
+    assert_eq!(v["displays"][0]["hdr"], "unsupported");
+    assert_eq!(v["displays"][1]["hdr"], "on");
+    assert_eq!(v["displays"][1]["peak_luminance"], 1000);
+    assert_eq!(v["displays"][1]["sdr_white"], 203);
 }
 
 #[test]
@@ -410,6 +481,9 @@ fn a_monitor_on_its_side_says_so_and_says_what_it_scans_out() {
         mode: [3840, 2160],
         refresh_mhz: 0,
         adaptive_sync: AdaptiveSync::Unsupported,
+        hdr: DisplayHdr::Unsupported,
+        peak_luminance: 0,
+        sdr_white: 0,
         transform: DisplayTransform::Rotate270,
     })
     .unwrap();
@@ -427,6 +501,8 @@ fn a_display_that_predates_these_fields_still_reads() {
             .expect("it reads");
     assert_eq!(old.transform, DisplayTransform::Normal);
     assert_eq!(old.adaptive_sync, AdaptiveSync::Unsupported);
+    assert_eq!(old.hdr, DisplayHdr::Unsupported);
+    assert_eq!((old.peak_luminance, old.sdr_white), (0, 0));
     // `[0, 0]`, not the size: an unstated mode stays unstated.
     assert_eq!(old.mode, [0, 0]);
 }
@@ -518,12 +594,34 @@ fn a_pointer_constraint_goes_out_by_name() {
         let message = HostMessage::AppPointerConstraint {
             app_id: "game".into(),
             constraint,
+            region: None,
         };
         host_round_trip(&message);
         let v = serde_json::to_value(&message).unwrap();
         assert_eq!(v["type"], "app_pointer_constraint");
         assert_eq!(v["constraint"], wire);
+        assert_eq!(v["region"], serde_json::Value::Null);
     }
+}
+
+/// The engine reads a constraint's region as rectangles of the surface.
+#[test]
+fn a_pointer_constraint_region_goes_out_as_rectangles() {
+    let message = HostMessage::AppPointerConstraint {
+        app_id: "game".into(),
+        constraint: Some(PointerConstraint::Confine),
+        region: Some(vec![SurfaceRect {
+            x: 10,
+            y: 20,
+            width: 300,
+            height: 200,
+        }]),
+    };
+    host_round_trip(&message);
+    assert_eq!(
+        serde_json::to_value(&message).unwrap()["region"],
+        serde_json::json!([{ "x": 10, "y": 20, "width": 300, "height": 200 }])
+    );
 }
 
 /// The browser process reads `cursor` off `appearance` by these names.

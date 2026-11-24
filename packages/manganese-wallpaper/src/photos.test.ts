@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { THEMES } from "@domicile-desktop/component-library/theme-core";
 
-import { DEFAULT_WALLPAPERS } from "./photos";
+import {
+  commonsPhoto,
+  DEFAULT_WALLPAPERS,
+  photoSizes,
+  sourceSet,
+} from "./photos";
 
 /** Every photograph across all themes. */
 const EVERY_PHOTO = THEMES.flatMap((theme) => DEFAULT_WALLPAPERS[theme]);
@@ -34,5 +39,36 @@ describe("DEFAULT_WALLPAPERS", () => {
       expect(url.searchParams.get("width")).toBe("3840");
       expect(photo).not.toInclude(" ");
     }
+  });
+});
+
+describe("sourceSet", () => {
+  it("offers a Commons photograph at each width Commons serves up to the one asked for", () => {
+    // Commons rounds any other width up to the next of these, so a smaller
+    // screen can take the smaller file and decode a quarter of the pixels.
+    expect(sourceSet(commonsPhoto("Sky, at night.jpg"))).toBe(
+      [
+        "https://commons.wikimedia.org/wiki/Special:FilePath/Sky%2C%20at%20night.jpg?width=1920 1920w",
+        "https://commons.wikimedia.org/wiki/Special:FilePath/Sky%2C%20at%20night.jpg?width=3840 3840w",
+      ].join(", "),
+    );
+  });
+
+  it("offers nothing for a photograph from anywhere else", () => {
+    // Other servers do not scale on request, so there is one file to take.
+    expect(sourceSet("https://example.com/sky.jpg?width=3840")).toBeUndefined();
+  });
+});
+
+describe("photoSizes", () => {
+  it("is as wide as a photograph needs to be to cover the screen", () => {
+    // Covering crops a photograph to the screen: a screen taller than 16:9
+    // shows a 16:9 photograph wider than the screen itself.
+    expect(photoSizes([1920, 1080])).toBe("1920px");
+    expect(photoSizes([1920, 1200])).toBe("2134px");
+  });
+
+  it("is the whole page's width before the screens are known", () => {
+    expect(photoSizes(undefined)).toBe("100vw");
   });
 });

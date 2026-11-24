@@ -60,5 +60,20 @@ TEST(ExtensionInstallerTest, OnlyWhatThisAddedIsTakenAway) {
   EXPECT_EQ(changes.uninstall, Ids({kLoaded, kStoreB}));
 }
 
+TEST(ExtensionInstallerTest, WhatIsNamedAndThereButNotRecordedIsClaimed) {
+  // A crash can lose the record of an install, and an id the user installed
+  // before the config named it was never recorded. Either way the config
+  // names it, so it uninstalls when the config drops it.
+  const ExtensionChanges changes = ReconcileExtensions(
+      ExtensionList{.web_store = {kStoreA, kStoreB}, .unpacked = {kDirectory}},
+      /*installed=*/{kStoreA, kStoreB, kLoaded},
+      /*unpacked=*/{{kDirectory, kLoaded}},
+      /*added=*/{kStoreB});
+
+  EXPECT_EQ(changes.claim, Ids({kLoaded, kStoreA}));
+  EXPECT_TRUE(changes.install_from_web_store.empty());
+  EXPECT_TRUE(changes.uninstall.empty());
+}
+
 }  // namespace
 }  // namespace domicile

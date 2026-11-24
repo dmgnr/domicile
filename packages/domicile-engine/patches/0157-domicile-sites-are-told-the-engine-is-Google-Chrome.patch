@@ -19,10 +19,10 @@ job builds it on `crux`. guard-browser-brand.sh checks it.
  1 file changed, 3 insertions(+), 4 deletions(-)
 
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index 8332938..1d8f36a 100644
+index afd1e4c..f03c02d 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
-@@ -158,10 +158,9 @@ const blink::UserAgentBrandList GetUserAgentBrandList(
+@@ -161,10 +161,9 @@ const blink::UserAgentBrandList GetUserAgentBrandList(
    int major_version_number;
    bool parse_result = base::StringToInt(major_version, &major_version_number);
    DCHECK(parse_result);

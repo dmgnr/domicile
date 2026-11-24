@@ -1,5 +1,5 @@
-//! A client's popups (its menus, and the bubbles Chromium draws as
-//! subsurfaces) reaching the chrome.
+//! A client's popups (its menus) reaching the chrome. Subsurfaces are drawn
+//! in their windows; see `subsurfaces.rs`.
 //!
 //! A popup is its own `<app>`, placed by the shell over its window. These
 //! tests cover the messages both ways: the popup appearing and where, going
@@ -9,9 +9,7 @@ mod running;
 
 use domicile_protocol::{ChromeMessage, HostMessage};
 use domicile_test_chrome::Chrome;
-use domicile_test_client::{
-    scrolled_to, BUBBLE, BUBBLE_GROWN, POPUP, POPUP_MOVED, SCROLLING_BUBBLE,
-};
+use domicile_test_client::{POPUP, POPUP_MOVED};
 
 use crate::running::Compositor;
 
@@ -273,207 +271,46 @@ fn a_grabbing_popup_goes_when_the_keyboard_leaves_its_window() {
     );
 }
 
+/// A shell can focus a menu's own `<app>` on a press there. The menu stays, so
+/// the press reaches it.
+#[test]
+fn a_grabbing_popup_stays_when_the_keyboard_moves_to_it() {
+    let compositor = Compositor::started_with(ONE_DISPLAY);
+    let mut chrome = compositor.chrome();
+    let mut client = compositor.client_with("a window with a menu", &["--popup-grab"]);
+    let HostMessage::PopupPlaced { app_id: popup, .. } = popup_of(&mut chrome) else {
+        unreachable!("the wait matched on this variant")
+    };
+    let surface = popup_surface(&mut client);
+
+    chrome
+        .say(&ChromeMessage::FocusApp {
+            app_id: popup.clone(),
+        })
+        .expect("the chrome can move the keyboard");
+    // Answered after the focus, so the focus has been handled once it arrives.
+    chrome
+        .say(&ChromeMessage::PointerMotion {
+            app_id: popup,
+            x: 1.0,
+            y: 1.0,
+            moved: true,
+        })
+        .expect("the chrome can move the pointer");
+    assert!(client.wait_for_trace(&format!("{surface}, 1, 1)"), 1));
+    assert!(
+        !client.trace().contains("popup_done()"),
+        "the menu went when the keyboard moved to it:\n{}",
+        client.trace()
+    );
+}
+
 /// A box as the chrome is told it: its position and its size.
 fn placement((x, y, width, height): (i32, i32, i32, i32)) -> ([f64; 2], [f64; 2]) {
     (
         [f64::from(x), f64::from(y)],
         [f64::from(width), f64::from(height)],
     )
-}
-
-/// Chromium draws an extension popup as a desync subsurface of its window.
-/// It is announced as a popup over that window, and placed again as it grows
-/// to fit its page.
-#[test]
-fn a_subsurface_bubble_is_announced_over_its_window_and_follows_its_growth() {
-    let compositor = Compositor::started_with(ONE_DISPLAY);
-    let mut chrome = compositor.chrome();
-    let _client = compositor.client_with("a window with a bubble", &["--bubble"]);
-
-    let window = window_of(&mut chrome);
-    let HostMessage::PopupPlaced {
-        app_id,
-        parent,
-        position,
-        size,
-        grab,
-        frames,
-    } = popup_of(&mut chrome)
-    else {
-        unreachable!("the wait matched on this variant")
-    };
-    assert_eq!(parent, window);
-    assert_eq!((position, size), placement(BUBBLE));
-    assert!(!grab, "a bubble never grabs");
-    // Frames sync only with an engine that syncs them and a page that asks.
-    assert_eq!(frames, vec![], "nothing asked for synced frames");
-
-    let (position, size) = placement(BUBBLE_GROWN);
-    let grown = chrome.wait_for(|message| {
-        *message
-            == HostMessage::PopupPlaced {
-                app_id: app_id.clone(),
-                parent: window.clone(),
-                position,
-                size,
-                grab: false,
-                frames: vec![],
-            }
-    });
-    assert!(grown.is_ok(), "the grown bubble was placed again");
-}
-
-/// A page scrolling under an anchored popup: each frame, the window's content
-/// and its sync bubble's move come in one commit. The bubble is placed again
-/// at each frame's stripe.
-#[test]
-fn a_sync_bubble_is_placed_again_at_each_scroll_of_its_window() {
-    let compositor = Compositor::started_with(ONE_DISPLAY);
-    let mut chrome = compositor.chrome();
-    let _client = compositor.client_with(
-        "a window that scrolls under a bubble",
-        &["--scrolling-bubble"],
-    );
-
-    let window = window_of(&mut chrome);
-    let (x, width, height) = SCROLLING_BUBBLE;
-    let mut tops: Vec<f64> = Vec::new();
-    while tops.len() < 3 {
-        let HostMessage::PopupPlaced {
-            parent,
-            position,
-            size,
-            ..
-        } = popup_of(&mut chrome)
-        else {
-            unreachable!("the wait matched on this variant")
-        };
-        assert_eq!(parent, window);
-        assert_eq!(size, [f64::from(width), f64::from(height)]);
-        assert_eq!(position[0], f64::from(x));
-        assert!(
-            (0..100).any(|frame| f64::from(scrolled_to(frame)) == position[1]),
-            "the bubble is at {position:?}, which is no frame's stripe"
-        );
-        if !tops.contains(&position[1]) {
-            tops.push(position[1]);
-        }
-    }
-}
-
-/// A pointer over a bubble's `<app>` is over the bubble's surface. Chromium
-/// hides a bubble by destroying its `wl_subsurface` and keeping the surface;
-/// the chrome is then told it is gone.
-#[test]
-fn a_bubble_takes_the_pointer_and_goes_when_hidden() {
-    let compositor = Compositor::started_with(ONE_DISPLAY);
-    let mut chrome = compositor.chrome();
-    let mut client = compositor.client_with("a window with a bubble", &["--bubble"]);
-    let HostMessage::PopupPlaced { app_id: bubble, .. } = popup_of(&mut chrome) else {
-        unreachable!("the wait matched on this variant")
-    };
-    let surface = popup_surface(&mut client);
-
-    chrome
-        .say(&ChromeMessage::PointerMotion {
-            app_id: bubble.clone(),
-            x: 5.0,
-            y: 6.0,
-            moved: true,
-        })
-        .expect("the chrome can move the pointer");
-    assert!(
-        client.wait_for_trace(&format!("{surface}, 5, 6)"), 1),
-        "the pointer entered {surface} at the bubble's own point:\n{}",
-        client.trace()
-    );
-    chrome
-        .say(&ChromeMessage::PointerButton {
-            app_id: bubble.clone(),
-            button: 0x110,
-            pressed: true,
-        })
-        .expect("the chrome can press");
-
-    assert!(client.wait_for_trace("hid()", 1), "{}", client.trace());
-    let closed = chrome
-        .wait_for(|message| matches!(message, HostMessage::AppClosed { .. }))
-        .expect("the bubble's going is announced");
-    assert_eq!(closed, HostMessage::AppClosed { app_id: bubble });
-}
-
-/// A bubble with an empty input region passes the pointer to its window, at
-/// the window's point. Firefox draws everything into such a subsurface and
-/// reads the pointer only on its toplevel, so it heard nothing.
-#[test]
-fn a_bubble_that_takes_no_input_passes_the_pointer_to_its_window() {
-    let compositor = Compositor::started_with(ONE_DISPLAY);
-    let mut chrome = compositor.chrome();
-    let mut client = compositor.client_with(
-        "a window under a bubble that takes no input",
-        &["--bubble-without-input"],
-    );
-    let window = window_of(&mut chrome);
-    let HostMessage::PopupPlaced { app_id: bubble, .. } = popup_of(&mut chrome) else {
-        unreachable!("the wait matched on this variant")
-    };
-    let (position, size) = placement(BUBBLE_GROWN);
-    chrome
-        .wait_for(|message| {
-            *message
-                == HostMessage::PopupPlaced {
-                    app_id: bubble.clone(),
-                    parent: window.clone(),
-                    position,
-                    size,
-                    grab: false,
-                    frames: vec![],
-                }
-        })
-        .expect("the grown bubble is placed again");
-    let surface = popup_surface(&mut client);
-
-    chrome
-        .say(&ChromeMessage::PointerMotion {
-            app_id: bubble.clone(),
-            x: 5.0,
-            y: 6.0,
-            moved: true,
-        })
-        .expect("the chrome can move the pointer");
-    let (x, y, _, _) = BUBBLE_GROWN;
-    assert!(
-        client.wait_for_trace(&format!(", {}, {})", x + 5, y + 6), 1),
-        "the pointer entered the window at the bubble's place on it:\n{}",
-        client.trace()
-    );
-    assert!(
-        !client.trace().contains(&format!("{surface}, 5, 6)")),
-        "the pointer entered the bubble:\n{}",
-        client.trace()
-    );
-}
-
-/// A bubble whose surface is destroyed goes, as when Chromium closes an
-/// extension popup or exits.
-#[test]
-fn a_bubble_goes_with_its_client() {
-    let compositor = Compositor::started_with(ONE_DISPLAY);
-    let mut chrome = compositor.chrome();
-    let client = compositor.client_with("a window with a bubble", &["--bubble"]);
-    let HostMessage::PopupPlaced { app_id: bubble, .. } = popup_of(&mut chrome) else {
-        unreachable!("the wait matched on this variant")
-    };
-
-    drop(client);
-
-    let closed = chrome.wait_for(|message| {
-        *message
-            == HostMessage::AppClosed {
-                app_id: bubble.clone(),
-            }
-    });
-    assert!(closed.is_ok(), "the bubble's going is announced");
 }
 
 /// A press over `app_id`, which opens a `--sliding-menu` over it.

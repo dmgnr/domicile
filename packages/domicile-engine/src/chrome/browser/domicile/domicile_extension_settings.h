@@ -6,9 +6,11 @@
 
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "base/types/expected.h"
 #include "components/domicile/browser/extension_settings.h"
 
+class PrefChangeRegistrar;
 class PrefRegistrySimple;
 class Profile;
 
@@ -38,6 +40,14 @@ base::expected<void, std::string> ConfigureExtensionIn(
     Profile& profile,
     const std::string& id,
     const ExtensionSettings& settings);
+
+// The settings the config sets on extension `id` in `profile`. Only the
+// config changes these.
+ExtensionSettings ConfiguredSettingsOf(Profile& profile, const std::string& id);
+
+// Calls `changed` whenever the settings the config sets change.
+void WatchConfiguredSettings(PrefChangeRegistrar& registrar,
+                             const base::RepeatingClosure& changed);
 
 // Brings `profile` in line with the config's `settings`: sets them, and puts
 // back Chrome's default for each the config set before and no longer does

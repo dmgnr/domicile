@@ -14,10 +14,15 @@ describe(asReading, () => {
       threadId: "t1",
     };
 
-    expect(asReading(Inbox.Counted(12, 3, [mail]))).toStrictEqual(
-      InboxReading.Counted(12, 3, [
-        { from: "Alex Chen", receivedAt: 7, subject: "Dinner Friday?" },
-      ]),
+    expect(
+      asReading(Inbox.Counted(12, 3, [mail], ["me@example.com"])),
+    ).toStrictEqual(
+      InboxReading.Counted(
+        12,
+        3,
+        [{ from: "Alex Chen", receivedAt: 7, subject: "Dinner Friday?" }],
+        ["me@example.com"],
+      ),
     );
   });
 

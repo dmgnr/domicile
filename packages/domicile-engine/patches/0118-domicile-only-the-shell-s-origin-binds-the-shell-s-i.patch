@@ -25,10 +25,10 @@ DomicileAppHost's IDL file and generated bindings.
  5 files changed, 53 insertions(+), 18 deletions(-)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 8b5b7f5..38fef1b 100644
+index cbe74c3..f5b8c46 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2712,12 +2712,16 @@ source_set("browser") {
+@@ -2723,12 +2723,16 @@ source_set("browser") {
      # Domicile's engine fork: serving the shell over domicile://, the
      # shell's control channel to the compositor, the keymap and the color
      # scheme that channel carries, the socket a running engine is told
@@ -47,7 +47,7 @@ index 8b5b7f5..38fef1b 100644
      "//components/domicile:web_view_guest",
  
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 57279fa..ae64f19 100644
+index 02501b7..de41b3c 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -10,9 +10,12 @@
@@ -63,7 +63,7 @@ index 57279fa..ae64f19 100644
  #include "components/domicile/browser/web_view_guest.h"
  #include "content/public/browser/browser_thread.h"
  #include "mojo/public/cpp/bindings/message.h"
-@@ -516,21 +519,21 @@ void PopulateChromeFrameBinders(
+@@ -548,21 +551,21 @@ void PopulateChromeFrameBinders(
    //
    // THE CHECK IN THE CALLBACK IS THE WHOLE OF THE ACCESS CONTROL. It works
    // because domicile:// is registered neither web-safe nor CORS-enabled, so no
@@ -91,7 +91,7 @@ index 57279fa..ae64f19 100644
            return;
          }
          // On the IO thread: the channel talks to a unix socket through
-@@ -604,10 +607,9 @@ void PopulateChromeFrameBinders(
+@@ -636,10 +639,9 @@ void PopulateChromeFrameBinders(
    map->Add<domicile::mojom::WebViewGuestHost>(base::BindRepeating(
        [](content::RenderFrameHost* frame,
           mojo::PendingReceiver<domicile::mojom::WebViewGuestHost> receiver) {
@@ -104,7 +104,7 @@ index 57279fa..ae64f19 100644
            return;
          }
          // AND EVERY GUEST IS A TAB. The helpers an extension finds a tab by
-@@ -628,11 +630,9 @@ void PopulateChromeFrameBinders(
+@@ -660,11 +662,9 @@ void PopulateChromeFrameBinders(
    map->Add<domicile::mojom::ExtensionTray>(base::BindRepeating(
        [](content::RenderFrameHost* frame,
           mojo::PendingReceiver<domicile::mojom::ExtensionTray> receiver) {
@@ -118,7 +118,7 @@ index 57279fa..ae64f19 100644
            return;
          }
          domicile::BindExtensionTray(frame, std::move(receiver));
-@@ -645,16 +645,42 @@ void PopulateChromeFrameBinders(
+@@ -677,16 +677,42 @@ void PopulateChromeFrameBinders(
    map->Add<domicile::mojom::BrowserWindows>(base::BindRepeating(
        [](content::RenderFrameHost* frame,
           mojo::PendingReceiver<domicile::mojom::BrowserWindows> receiver) {
@@ -166,10 +166,10 @@ index 57279fa..ae64f19 100644
  
    map->Add<blink::mojom::ScriptToolHost>(
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 4432924..74d7eb1 100644
+index 356edcd..c8f013d 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
-@@ -2353,6 +2353,8 @@ generated_interface_sources_in_modules = [
+@@ -2357,6 +2357,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification_action.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification_action.h",

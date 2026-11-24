@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests `release-check.sh`, which says whether `stable` has something to
 # release: a commit `release` lacks. Changesets not yet versioned wait for the
-# next release.
+# next release. Each release needs its dated release notes.
 #
 # Uses real `git` against a local remote.
 set -u
@@ -43,16 +43,25 @@ setup() { # version
   git -C "$WORK/repo" config user.name "domicile CI"
   git -C "$WORK/repo" config push.negotiate false
   git -C "$WORK/repo" remote add origin "$WORK/remote"
-  mkdir -p "$WORK/repo/.github/scripts" "$WORK/repo/packages/domicile" "$WORK/repo/.changeset"
+  mkdir -p "$WORK/repo/.github/scripts" "$WORK/repo/packages/domicile" \
+    "$WORK/repo/packages/shell-manganese" "$WORK/repo/docs/use" "$WORK/repo/.changeset"
   cp "$CHECK" "$WORK/repo/.github/scripts/"
   echo "# Changesets" >"$WORK/repo/.changeset/README.md"
   version "$1" >/dev/null
 }
 
-# Commits `domicile` at <version> and pushes it to stable.
+# Commits `domicile` and manganese at <version>, with dated notes for it, and
+# pushes it to stable.
 version() { # version
   printf '{"name": "domicile", "version": "%s"}\n' "$1" >"$WORK/repo/packages/domicile/package.json"
+  printf '{"name": "@domicile-desktop/manganese", "version": "%s"}\n' "$1" \
+    >"$WORK/repo/packages/shell-manganese/package.json"
+  notes docs/RELEASE-NOTES.md "$1" "_November 3, 2026_"
+  notes docs/use/RELEASE-NOTES.md "$1" "_November 3, 2026_"
   commit "domicile $1"
+}
+notes() { # file version dateline
+  printf '# Release notes\n\n## %s\n\n%s\n\n- A change.\n' "$2" "$3" >"$WORK/repo/$1"
 }
 commit() { # message
   git -C "$WORK/repo" add -A
@@ -118,5 +127,29 @@ git -C "$WORK/repo" checkout -q main
 out="$(check)"
 expect "is refused" refused "$(status "$out")"
 contains "saying why" "not an ancestor" "$out"
+
+echo "== Domicile's notes without the release's entry =="
+setup 1.0.0
+notes docs/RELEASE-NOTES.md 0.9.0 "_November 3, 2026_"
+commit "older notes" >/dev/null
+out="$(check)"
+expect "is refused" refused "$(status "$out")"
+contains "naming the file" "docs/RELEASE-NOTES.md" "$out"
+
+echo "== manganese's notes without the release's entry =="
+setup 1.0.0
+notes docs/use/RELEASE-NOTES.md 0.9.0 "_November 3, 2026_"
+commit "older notes" >/dev/null
+out="$(check)"
+expect "is refused" refused "$(status "$out")"
+contains "naming the file" "docs/use/RELEASE-NOTES.md" "$out"
+
+echo "== notes whose entry is undated =="
+setup 1.0.0
+notes docs/RELEASE-NOTES.md 1.0.0 "_Unreleased_"
+commit "undated notes" >/dev/null
+out="$(check)"
+expect "is refused" refused "$(status "$out")"
+contains "saying why" "Unreleased" "$out"
 
 [ "$FAILED" -eq 0 ]

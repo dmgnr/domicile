@@ -39,7 +39,7 @@ and both blobs are that file's.
  4 files changed, 27 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index d7ab847..8b14a84 100644
+index eaeae25..b938e08 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -5,6 +5,7 @@
@@ -50,7 +50,7 @@ index d7ab847..8b14a84 100644
  #include "chrome/browser/domicile/domicile_shell_windows.h"
  #include "components/domicile/browser/desktop_prefs.h"
  
-@@ -1642,6 +1643,9 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
+@@ -1643,6 +1644,9 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
    // download saved to a folder nobody chose is a file the user never sees
    // arrive -- this desktop has no download shelf to show it on.
    profile->GetPrefs()->SetBoolean(prefs::kPromptForDownload, true);
@@ -61,7 +61,7 @@ index d7ab847..8b14a84 100644
    for (auto& chrome_extra_part : chrome_extra_parts_) {
      chrome_extra_part->PostProfileInit(profile, is_initial_profile);
 diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
-index 6f01913..55769ad 100644
+index 2e1c0d7..1e9ce4b 100644
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
 @@ -275,6 +275,8 @@ source_set("extensions") {
@@ -100,7 +100,7 @@ index 1e1d95c..dfedf25 100644
    if (function_->dispatcher()) {
      if (WindowController* window_controller =
 diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
-index 91501be..27caa63 100644
+index 263c9d4..c731dba 100644
 --- a/chrome/browser/extensions/extension_tab_util.cc
 +++ b/chrome/browser/extensions/extension_tab_util.cc
 @@ -24,6 +24,7 @@
@@ -111,7 +111,7 @@ index 91501be..27caa63 100644
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/window_controller_list.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -465,6 +466,10 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
+@@ -480,6 +481,10 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
      }
    }
  
@@ -122,7 +122,7 @@ index 91501be..27caa63 100644
    ScrubTabForExtension(extension, contents, &tab_object, scrub_tab_behavior);
    return tab_object;
  }
-@@ -672,6 +677,12 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
+@@ -678,6 +683,12 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
      }
    }
  
@@ -135,7 +135,7 @@ index 91501be..27caa63 100644
    // Prerendering tab is not visible and it cannot be in `TabStripModel`, if the
    // tab id exists as a prerendering tab, and the API will returns
    // `api::tabs::TAB_INDEX_NONE` for `out_tab_index` and a valid `WebContents`.
-@@ -1210,6 +1221,8 @@ void ExtensionTabUtil::ForEachTab(
+@@ -1216,6 +1227,8 @@ void ExtensionTabUtil::ForEachTab(
      callback.Run(tab->GetContents());
      return true;
    });

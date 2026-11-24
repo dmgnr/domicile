@@ -30,7 +30,7 @@ needs a new event type and that invalidates the generated bindings.
  2 files changed, 6 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 42650aa..72da68b 100644
+index d0caf58..c185284 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -285,6 +285,8 @@ generated_dictionary_sources_in_modules = [
@@ -42,7 +42,7 @@ index 42650aa..72da68b 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_files_event_init.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_files_event_init.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_modifiers_event_init.cc",
-@@ -2360,6 +2362,8 @@ generated_interface_sources_in_modules = [
+@@ -2364,6 +2366,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_clipboard_entry.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_clipboard_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_clipboard_event.h",

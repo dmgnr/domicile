@@ -14,6 +14,7 @@ import { ModalDialog } from "../ModalDialog/ModalDialog";
 import type { App } from "../useApps/useApps";
 import type { ChordCheck } from "./chord-check";
 import { ChordCheckKind, checkChord, holders } from "./chord-check";
+import type { Presence } from "./presence";
 
 /** A shortcut and the chord typed for it. */
 type Row = { chord: string; shortcut: ProposedShortcut };
@@ -24,6 +25,8 @@ type Props = {
   /** Who asks, as the dialog names them. */
   asker: string;
   body: ShortcutsBody;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
   /** The shell's own chords, flagged as conflicts. */
   shellChords: readonly string[];
@@ -40,6 +43,7 @@ export const GlobalShortcutsDialog = ({
   apps,
   asker,
   body,
+  presence,
   screen,
   shellChords,
 }: Props) => {
@@ -104,7 +108,7 @@ export const GlobalShortcutsDialog = ({
           answer(Answer.Canceled());
         }
       }}
-      open
+      {...presence}
       screen={screen}
       title="Global shortcuts"
     >

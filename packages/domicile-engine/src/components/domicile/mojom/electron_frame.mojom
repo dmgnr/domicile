@@ -1,0 +1,127 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+module domicile.mojom;
+
+import "mojo/public/mojom/base/values.mojom";
+
+// An Electron app window's main frame, for its preload and IPC. See
+// docs/architecture/ELECTRON-APPS.md.
+//
+// Both are associated with the frame's channel, so a Preload sent before a
+// navigation commits reaches the renderer before the commit does, and a
+// Deliver sent after reaches the document that committed.
+
+// What every page of the app is told of the app, sandboxed or not: the
+// hello's in components/domicile/browser/electron_protocol.h.
+struct ElectronAppFacts {
+  // process.versions.electron.
+  string electron_version;
+  // process.resourcesPath.
+  string resources_path;
+};
+
+// Node.js in the page of a window that isn't sandboxed. The renderer was
+// started for it: see components/domicile/common/electron_node_switches.h.
+// The fields are components/domicile/browser/electron_protocol.h's
+// ElectronNode.
+struct ElectronNode {
+  // The preload's file, which Node's require loads; empty for none.
+  string preload_path;
+  // nodeIntegration: Node in the page's own world too. Only without context
+  // isolation.
+  bool integration;
+  // contextIsolation: the preload runs in a world of its own.
+  bool context_isolation;
+  string app_path;
+  map<string, string> env;
+};
+
+// The browser to the renderer.
+interface ElectronFrame {
+  // Runs the window's preload in the next document this frame commits,
+  // before the page's own scripts: `source` in an isolated world when the
+  // page is sandboxed, or, with `node`, the file Node loads, in the world
+  // `node` says. Its ipcRenderer talks to `host`. Its process.argv has
+  // `arguments`, the window's webPreferences.additionalArguments, after the
+  // renderer's own. Its process has what `app` says.
+  Preload(string source,
+          array<string> arguments,
+          ElectronAppFacts app,
+          ElectronNode? node,
+          pending_associated_remote<ElectronFrameHost> host);
+
+  // webContents.send: the app's main process sent `args_json`, a JSON
+  // array, on `channel`.
+  Deliver(string channel, string args_json);
+
+  // webContents.postMessage: `message_json` on `channel`, with a new port
+  // for each of the main process's `ports`, in order.
+  DeliverPost(string channel, string message_json, array<string> ports);
+
+  // `data_json` arrived on port `port`, from the main process's end.
+  DeliverToPort(string port, string data_json);
+
+  // The main process closed port `port`.
+  ClosePort(string port);
+
+  // webContents.executeJavaScript: runs `code` in the document's main world,
+  // as if the user had acted when `user_gesture`, and answers with what it
+  // gave once a promise it gives settles. No result when it threw or gave
+  // what has no JSON; the page's console says which.
+  ExecuteJavaScript(string code, bool user_gesture)
+      => (mojo_base.mojom.Value? result);
+
+  // webContents.insertCSS: adds `css` to the document, as the user's style
+  // sheet when `user`, and answers with its key for RemoveInsertedCSS.
+  InsertCSS(string css, bool user) => (string key);
+
+  // webContents.removeInsertedCSS: takes the sheet InsertCSS gave `key` out.
+  RemoveInsertedCSS(string key, bool user);
+
+  // webContents.executeJavaScriptInIsolatedWorld: runs `scripts` in
+  // Electron's world `world` (0 the page's own, 999 the preload's, any other
+  // one of the app's own), and answers as ExecuteJavaScript with what the
+  // last gave.
+  ExecuteJavaScriptInWorld(int32 world,
+                           array<ElectronScript> scripts,
+                           bool user_gesture)
+      => (mojo_base.mojom.Value? result);
+};
+
+// One of executeJavaScriptInIsolatedWorld's scripts: its code, and the URL
+// the page's console names it by, empty for none.
+struct ElectronScript {
+  string code;
+  string url;
+};
+
+// The renderer to the browser, for the document that ran the preload.
+interface ElectronFrameHost {
+  // ipcRenderer.send. `args_json` is a JSON array.
+  Send(string channel, string args_json);
+
+  // ipcRenderer.invoke. `args_json` is a JSON array. The answer is the
+  // handler's result as JSON when `ok`, or why it failed.
+  Invoke(string channel, string args_json) => (bool ok, string answer);
+
+  // ipcRenderer.sendSync: as Invoke, but the page waits for the answer, as
+  // Electron's does.
+  [Sync]
+  SendSync(string channel, string args_json) => (bool ok, string answer);
+
+  // ipcRenderer.postMessage. `ports` name the page's ports that went with
+  // it, each "r" and a number.
+  Post(string channel, string message_json, array<string> ports);
+
+  // `data_json` on port `port`, to the main process's end.
+  PostToPort(string port, string data_json);
+
+  // The page closed port `port`.
+  PortClosed(string port);
+
+  // The window's preload threw `name`'s error, or did not compile (a
+  // SyntaxError): webContents' preload-error. `stack` is empty when the
+  // thrown value had none.
+  PreloadFailed(string name, string message, string stack);
+};

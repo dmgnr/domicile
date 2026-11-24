@@ -2,16 +2,20 @@
 // xdg-desktop-portal backend, and the shell draws its dialogs. See
 // docs/PORTALS.md.
 
+import type { Result } from "@cprussin/option-result";
 import type { DomicileHost } from "../domicile-host";
 import type {
   BoundShortcut,
   Capturing,
+  KnownAgents,
   PortalAnswer,
   PortalRequest,
   PortalWallpaper,
 } from "../portal";
+import type { SystemError } from "../system";
 import {
   answerPortalRequest,
+  changeAgent,
   discardRecording,
   pauseRecording,
   resumeRecording,
@@ -23,6 +27,7 @@ import {
 } from "./portal-wire";
 import type { On } from "./subscribe";
 import { hostEvent, on } from "./subscribe";
+import type { System } from "./system-calls";
 
 export type PortalsListeners = {
   /** The compositor pushed: read each part again. */
@@ -43,6 +48,22 @@ export type Portals = {
   answer: (id: number, answer: PortalAnswer) => void;
   /** End capturing session `id`. */
   stopCapturing: (id: number) => void;
+  /**
+   * Ask the user again what agent session `id` reaches, in a
+   * {@link PortalKind.Agent} dialog with its reach as `current`.
+   */
+  changeAgent: (id: number) => void;
+  /**
+   * The agents let in now, and those let in without asking. An agent in now
+   * is also a {@link CapturingKind.Agent} in {@link Portals.capturing}, which
+   * {@link Portals.stopCapturing} ends.
+   */
+  agents: () => Promise<Result<KnownAgents, SystemError>>;
+  /**
+   * Make remembered agent `agent` ask again next time. Succeeds whether or
+   * not it was remembered.
+   */
+  forgetAgent: (agent: string) => Promise<Result<"set", SystemError>>;
   /** Pause the shell's screen recording `id`. */
   pauseRecording: (id: number) => void;
   /** Resume the shell's paused screen recording `id`. */
@@ -63,7 +84,10 @@ export type PortalsHost = Pick<
 >;
 
 /** Listens from the start: the engine sends the latest push to a new listener. */
-export const portals = (host: PortalsHost): Portals => {
+export const portals = (
+  host: PortalsHost,
+  calls: Pick<System, "agents" | "forgetAgent">,
+): Portals => {
   const latest: {
     requests?: readonly PortalRequest[];
     capturing?: readonly Capturing[];
@@ -83,6 +107,7 @@ export const portals = (host: PortalsHost): Portals => {
     latest.wallpaper = wallpaper;
   });
   return {
+    agents: () => calls.agents(),
     answer: (id, answer) => {
       answerPortalRequest(host, id, answer);
     },
@@ -92,12 +117,16 @@ export const portals = (host: PortalsHost): Portals => {
     get capturing() {
       return latest.capturing;
     },
+    changeAgent: (id) => {
+      changeAgent(host, id);
+    },
     discardRecording: (id) => {
       discardRecording(host, id);
     },
     fireShortcut: (id, kind) => {
       host.answerPortalRequest(id, JSON.stringify({ kind }));
     },
+    forgetAgent: (agent) => calls.forgetAgent(agent),
     on: on<PortalsListeners>({
       change: (listener) => hostEvent(host, "portalrequests", () => listener()),
     }),

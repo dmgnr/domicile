@@ -1,0 +1,237 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the night light warms the pointer on a monitor with
+ no gamma
+
+On a DisplayLink dock (evdi) the CRTC has no gamma table, so viz warms
+the frame through the display color matrix, and the cursor plane skips
+it. A white pointer on that warm screen looked blue. On every other
+monitor the CRTC's ramp warms the cursor plane with the rest.
+
+- OzonePlatform::SetDomicileCursorTint takes a display's night light
+  gains, with its rectangle. The broker sends the matrix's diagonal with
+  each matrix.
+- DrmCursor warms the pointer's bitmaps by the gains of the display its
+  window shows (TintedCursorBitmaps: each encoded channel by the gain's
+  2.2nd root, as a ramp would), and sends it again when that display's
+  gains change.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ ui/ozone/platform/drm/BUILD.gn              |  3 ++
+ ui/ozone/platform/drm/host/drm_cursor.cc    | 55 ++++++++++++++++++++-
+ ui/ozone/platform/drm/host/drm_cursor.h     | 14 ++++++
+ ui/ozone/platform/drm/ozone_platform_drm.cc | 10 ++++
+ ui/ozone/public/ozone_platform.h            |  9 ++++
+ 5 files changed, 89 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index 7be325e..d84251b 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -47,6 +47,8 @@ source_set("gbm") {
+     "domicile/drm_clipboard.h",
+     "domicile/drm_cursor_factory.cc",
+     "domicile/drm_cursor_factory.h",
++    "domicile/drm_cursor_tint.cc",
++    "domicile/drm_cursor_tint.h",
+     "domicile/drm_desk_input.cc",
+     "domicile/drm_desk_input.h",
+     "domicile/drm_fullscreen.cc",
+@@ -284,6 +286,7 @@ source_set("gbm_unittests") {
+     "domicile/drm_clipboard_unittest.cc",
+     "domicile/drm_color_commit_unittest.cc",
+     "domicile/drm_cursor_factory_unittest.cc",
++    "domicile/drm_cursor_tint_unittest.cc",
+     "domicile/drm_damage_clips_unittest.cc",
+     "domicile/drm_desk_input_unittest.cc",
+     "domicile/drm_fullscreen_unittest.cc",
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.cc b/ui/ozone/platform/drm/host/drm_cursor.cc
+index 44df301..73e8907 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.cc
++++ b/ui/ozone/platform/drm/host/drm_cursor.cc
+@@ -5,11 +5,13 @@
+ #include "ui/ozone/platform/drm/host/drm_cursor.h"
+ 
+ #include <algorithm>
++#include <array>
+ #include <memory>
+ #include <optional>
+ #include <utility>
+ #include <vector>
+ 
++#include "base/containers/flat_map.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/task/current_thread.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -20,6 +22,7 @@
+ #include "ui/base/cursor/mojom/cursor_type.mojom.h"
+ #include "ui/gfx/geometry/point_conversions.h"
+ #include "ui/ozone/common/bitmap_cursor.h"
++#include "ui/ozone/platform/drm/domicile/drm_cursor_tint.h"
+ #include "ui/ozone/platform/drm/host/drm_window_host.h"
+ #include "ui/ozone/platform/drm/host/drm_window_host_manager.h"
+ 
+@@ -305,6 +308,28 @@ void DrmCursor::SetDomicileConfinement(PointerConfinement confinement) {
+   confinement_ = std::move(confinement);
+ }
+ 
++void DrmCursor::SetDomicileCursorTint(int64_t display_id,
++                                      const gfx::Rect& bounds_in_screen,
++                                      const std::array<float, 3>& gains) {
++  DCHECK_CALLED_ON_VALID_THREAD(ui_thread_checker_);
++  base::AutoLock lock(lock_);
++  CHECK(std::ranges::all_of(gains, [](float gain) {
++    return gain >= 0.f && gain <= 1.f;
++  })) << "domicile: a pointer tint's gains are 0 to 1";
++  const std::array<float, 3> was = TintLocked();
++  // A display unplugged keeps its entry, so one that takes its place would
++  // match both.
++  base::EraseIf(tints_, [&](const auto& entry) {
++    return entry.first != display_id && entry.second.first == bounds_in_screen;
++  });
++  tints_[display_id] = {bounds_in_screen, gains};
++  // Redrawn only when the pointer's own display changed, so a fade on another
++  // monitor sends nothing.
++  if (window_ != gfx::kNullAcceleratedWidget && TintLocked() != was) {
++    SendCursorShowLocked();
++  }
++}
++
+ void DrmCursor::MoveCursorTo(gfx::AcceleratedWidget window,
+                              const gfx::PointF& location) {
+   TRACE_EVENT0("drmcursor", "DrmCursor::MoveCursorTo (window)");
+@@ -545,8 +570,34 @@ void DrmCursor::SendCursorShowLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
+     return;
+   }
+ 
+-  CursorSetLockTested(window_, cursor_->bitmaps(), cursor_->hotspot(),
+-                      GetBitmapLocationLocked(), cursor_->frame_delay());
++  // DOMICILE: warmed on a display whose night light is viz's color matrix,
++  // which the cursor plane skips: one with no gamma, or in HDR. Elsewhere the
++  // CRTC's ramp warms it.
++  const std::array<float, 3> tint = TintLocked();
++  if (tint == kUntinted) {
++    CursorSetLockTested(window_, cursor_->bitmaps(), cursor_->hotspot(),
++                        GetBitmapLocationLocked(), cursor_->frame_delay());
++    return;
++  }
++  CursorSetLockTested(window_, TintedCursorBitmaps(cursor_->bitmaps(), tint),
++                      cursor_->hotspot(), GetBitmapLocationLocked(),
++                      cursor_->frame_delay());
++}
++
++// DOMICILE: the gains of the display the pointer's window shows, matched by
++// its rectangle. Untinted on a display that has none.
++std::array<float, 3> DrmCursor::TintLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
++  const auto screen =
++      std::ranges::find(screens_, window_, &PointerScreen::window);
++  if (screen == screens_.end()) {
++    return kUntinted;
++  }
++  for (const auto& [display, tint] : tints_) {
++    if (tint.first == screen->bounds_in_screen) {
++      return tint.second;
++    }
++  }
++  return kUntinted;
+ }
+ 
+ // DOMICILE: the compositor's screen casts draw the pointer on screen, which
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.h b/ui/ozone/platform/drm/host/drm_cursor.h
+index acec381..926af31 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.h
++++ b/ui/ozone/platform/drm/host/drm_cursor.h
+@@ -5,7 +5,9 @@
+ #ifndef UI_OZONE_PLATFORM_DRM_HOST_DRM_CURSOR_H_
+ #define UI_OZONE_PLATFORM_DRM_HOST_DRM_CURSOR_H_
+ 
++#include <array>
+ #include <memory>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/containers/flat_map.h"
+@@ -121,6 +123,13 @@ class DrmCursor : public CursorDelegateEvdev {
+   // confinement; no boxes for none. See `ConfinedMove`.
+   void SetDomicileConfinement(PointerConfinement confinement);
+ 
++  // DOMICILE: the night light's gains the pointer is warmed by on display
++  // `display_id`, at `bounds_in_screen`, replacing its last. See
++  // `OzonePlatform::SetDomicileCursorTint`.
++  void SetDomicileCursorTint(int64_t display_id,
++                             const gfx::Rect& bounds_in_screen,
++                             const std::array<float, 3>& gains);
++
+   // CursorDelegateEvdev:
+   void MoveCursorTo(gfx::AcceleratedWidget window,
+                     const gfx::PointF& location) override;
+@@ -135,6 +144,7 @@ class DrmCursor : public CursorDelegateEvdev {
+  private:
+   void SetCursorLocationLocked(const gfx::PointF& location);
+   void SendCursorShowLocked();
++  std::array<float, 3> TintLocked();
+   void SetDeskCursorImageLocked();
+   void SendCursorHideLocked();
+   void SendCursorMoveLocked();
+@@ -192,6 +202,10 @@ class DrmCursor : public CursorDelegateEvdev {
+       gfx::kNullAcceleratedWidget;
+   base::flat_map<int, gfx::Rect> absolute_areas_ GUARDED_BY(lock_);
+   PointerConfinement confinement_ GUARDED_BY(lock_);
++  // DOMICILE: each display's night light gains for the pointer, and where the
++  // display is, by display id.
++  base::flat_map<int64_t, std::pair<gfx::Rect, std::array<float, 3>>> tints_
++      GUARDED_BY(lock_);
+   // DOMICILE: where on the engine's desktop the pointer was when its window
+   // moved off that spot and no other window held it. The window that holds it
+   // next takes the pointer back there. Any move of the pointer clears it.
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index a84ee16..4dc5c40 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -193,6 +193,16 @@ class OzonePlatformDrm : public OzonePlatform {
+     }
+   }
+ 
++  // DOMICILE: dropped before `InitializeUI`, as a layout is. The compositor
++  // sends each display's again with each display report.
++  void SetDomicileCursorTint(int64_t display_id,
++                             const gfx::Rect& bounds_in_screen,
++                             const std::array<float, 3>& gains) override {
++    if (cursor_) {
++      cursor_->SetDomicileCursorTint(display_id, bounds_in_screen, gains);
++    }
++  }
++
+   void SetDomicilePointerStays(gfx::AcceleratedWidget window) override {
+     if (cursor_) {
+       cursor_->SetDomicilePointerStays(window);
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index cd496cf..3783480 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -7,6 +7,7 @@
+ 
+ #include <stdint.h>
+ 
++#include <array>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -535,6 +536,14 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // DOMICILE: the gamma ramp display `display_id` draws with. DRM only, like
+   // the layout above: a nested desktop's monitors are the host session's.
+   virtual void SetDomicileGamma(int64_t display_id, DomicileGammaRamp ramp) {}
++  // DOMICILE: the night light's gains on display `display_id`, at
++  // `bounds_in_screen`, when viz warms its frame through a color matrix: red,
++  // green and blue, 0 to 1, in linear light. The cursor plane skips that
++  // matrix, so the pointer there is warmed by them instead; all ones draws it
++  // as it is. DRM only, like the gamma above.
++  virtual void SetDomicileCursorTint(int64_t display_id,
++                                     const gfx::Rect& bounds_in_screen,
++                                     const std::array<float, 3>& gains) {}
+   // DOMICILE: emulated input for the desk host, which it hears as it hears
+   // the platform's own devices. A headless desk and DRM: a nested desktop's
+   // input is the host session's.

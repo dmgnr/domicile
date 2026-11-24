@@ -27,14 +27,19 @@
   readonly attribute long? popupWindow;
 
   // The size the popup window, or a page's window.open(), asked for, in CSS
-  // pixels. 0 on an axis it left unset.
+  // pixels. 0 on an axis it left unset. For a view, the size its app gave it.
   readonly attribute long width;
   readonly attribute long height;
 
-  // Whether the page is private: in the off-the-record profile, sharing
-  // nothing with the user's pages and storing nothing past the last private
-  // page. A private window's new windows are private too.
+  // Whether the page is private: in a private profile, off the record,
+  // sharing nothing with the user's other pages and storing nothing past the
+  // profile's last page. A private window's new windows are private too.
   readonly attribute boolean isPrivate;
+
+  // The id of the browser profile the page is in, one of
+  // DomicileHost.browserProfiles; null for a page in none, such as an
+  // Electron app's. A window's new windows are in its profile.
+  readonly attribute DOMString? profile;
 
   // The page's storage partition, as a <webview>'s `partition` attribute
   // names it: "persist:<name>" on disk, any other name in memory. Empty for
@@ -59,4 +64,61 @@
   // tool such as `grim -T` names it by, as DomicileWindow.toplevelId. Null
   // until the compositor has listed the window.
   readonly attribute DOMString? toplevelId;
+
+  // For an Electron app's view (a WebContentsView): the id of the window
+  // that holds it. Null for every window. A view is part of its window, not a
+  // window: it is listed right after the window, bottom first, only while
+  // the window holds it, and is never a capture source of its own. Draw it
+  // with `<webview window>` as any window, where its app asks (`x`, `y`,
+  // `width`, `height`, in CSS pixels from the top left of the window's page)
+  // or wherever the shell lays it out. See docs/architecture/ELECTRON-APPS.md.
+  readonly attribute DOMString? parent;
+  readonly attribute long x;
+  readonly attribute long y;
+
+  // Whether its Electron app hid it. Keep a hidden view laid out, out of
+  // sight, as a page draws only while laid out. A hidden window is open, its
+  // page running, but the app wants it out of sight (win.hide, or `show:
+  // false`): don't show it until it is shown again. Its app shows it and
+  // then asks for focus. False for every other window.
+  readonly attribute boolean isHidden;
+
+  // An Electron app window's menu bar, for the shell to draw under its tab:
+  // the menu's entries as JSON, null for none. Each entry has a whole `id`
+  // from 1, a `type` (normal, separator, submenu, checkbox or radio), a
+  // `label` with Electron's `&` mnemonics, `enabled`, `visible` and
+  // `checked`, and maybe an `accelerator` as the app wrote it, an `icon` (a
+  // PNG data: URL) and a `submenu` of entries. Click an entry with
+  // DomicileHost.clickBrowserWindowMenu.
+  readonly attribute DOMString? menu;
+
+  // Whether the bar shows, as setMenuBarVisibility says. With
+  // `menuBarAutoHide`, as Electron's autoHideMenuBar, it shows while Alt is
+  // held or after Alt is tapped. A window with no menu has true and false.
+  readonly attribute boolean menuBarVisible;
+  readonly attribute boolean menuBarAutoHide;
+
+  // The message box an Electron app asks over this window, as JSON, null for
+  // none: `type` (none, info, error, question or warning), `title`,
+  // `message`, `detail`, `buttons` (1 to 16 labels, in the app's order),
+  // `defaultId` (the button Enter presses, -1 for none), `cancelId` (the
+  // button Escape presses), `checkboxLabel` (empty for no checkbox) and
+  // `checkboxChecked`. Show it over the window's page, and answer it with
+  // DomicileHost.answerBrowserWindowMessageBox; the window then lists its
+  // next box, if its app asked more.
+  readonly attribute DOMString? messageBox;
+
+  // The popup menu an Electron app shows over this window (Menu.popup), as
+  // JSON, null for none: `menu`, its entries as `menu`'s are, and `x` and
+  // `y`, where it goes in CSS pixels from the page's top left. Draw it over
+  // the page there, and answer it with
+  // DomicileHost.answerBrowserWindowPopupMenu.
+  readonly attribute DOMString? popupMenu;
+
+  // What an Electron app asks this window to be (win.maximize, minimize,
+  // setFullScreen). The shell decides, and says what it made the window with
+  // DomicileHost.setBrowserWindowState. Each is false for any other window.
+  readonly attribute boolean wantsMaximized;
+  readonly attribute boolean wantsMinimized;
+  readonly attribute boolean wantsFullscreen;
 };

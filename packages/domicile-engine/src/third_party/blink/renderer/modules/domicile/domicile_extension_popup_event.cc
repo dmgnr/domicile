@@ -19,15 +19,18 @@ DomicileExtensionPopupEvent::DomicileExtensionPopupEvent(
     const DomicileExtensionPopupEventInit* initializer)
     : Event(type, initializer),
       extension_id_(initializer->extensionId()),
-      popup_(initializer->popup()) {}
+      popup_(initializer->popup()),
+      profile_(initializer->profile()) {}
 
 DomicileExtensionPopupEvent::DomicileExtensionPopupEvent(
     const AtomicString& type,
     const String& extension_id,
-    const String& popup)
+    const String& popup,
+    const String& profile)
     : Event(type, Bubbles::kNo, Cancelable::kNo),
       extension_id_(extension_id),
-      popup_(popup) {}
+      popup_(popup),
+      profile_(profile) {}
 
 DomicileExtensionPopupEvent::~DomicileExtensionPopupEvent() = default;
 

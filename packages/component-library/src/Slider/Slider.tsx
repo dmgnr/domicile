@@ -65,7 +65,10 @@ const Meter = ({
       data-muted={muted ? "" : undefined}
       role="meter"
     >
-      <span className={meterFillStyles} style={{ inlineSize: `${percent}%` }} />
+      <span
+        className={meterFillStyles}
+        style={{ transform: `translateX(${String(percent - 100)}%)` }}
+      />
     </span>
   );
 };
@@ -99,12 +102,15 @@ const meterStyles = css({
   position: "absolute",
 });
 
-// A short transition, since levels arrive twenty times a second.
+// A short transition, since levels arrive twenty times a second. Slid in from
+// the start rather than widened, so a new level skips layout.
+// `translateX` is physical: a transform takes no logical direction.
 const meterFillStyles = css({
   backgroundColor: "success",
   blockSize: "100%",
   display: "block",
-  transition: "inline-size {durations.fastest} {easings.linear}",
+  inlineSize: "100%",
+  transition: "transform {durations.fastest} {easings.linear}",
 });
 
 const trackStyles = css({
@@ -119,6 +125,8 @@ const trackStyles = css({
 // where easing would lag the pointer.
 const indicatorStyles = css({
   "&:not([data-dragging])": {
+    // main-thread animation: base-ui sizes the indicator by width; it eases
+    // only on a jump, never while dragged.
     transition: "inline-size {durations.normal} {easings.outQuart}",
   },
   backgroundColor: "currentcolor",
@@ -133,6 +141,8 @@ const thumbStyles = css({
     outlineOffset: 0.5,
   },
   "&:not([data-dragging])": {
+    // main-thread animation: base-ui places the thumb by inset; it eases only
+    // on a jump, never while dragged.
     transition:
       "inset-inline-start {durations.normal} {easings.outQuart}, scale {durations.fast} {easings.out}",
   },

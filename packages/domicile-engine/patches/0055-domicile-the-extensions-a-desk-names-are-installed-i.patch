@@ -28,7 +28,7 @@ before it, and both blobs are that file's.
  2 files changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index bbd4817..aa74f14 100644
+index c8017f6..1ccf46e 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -5,6 +5,7 @@
@@ -39,7 +39,7 @@ index bbd4817..aa74f14 100644
  #include "chrome/browser/domicile/domicile_pointer_warp.h"
  #include "components/domicile/browser/color_scheme.h"
  #include "components/domicile/browser/control_channel.h"
-@@ -566,7 +567,19 @@ void PopulateChromeFrameBinders(
+@@ -598,7 +599,19 @@ void PopulateChromeFrameBinders(
                  // reason above: NativeTheme belongs to the UI thread.
                  base::BindPostTask(
                      content::GetUIThreadTaskRunner({}),
@@ -61,7 +61,7 @@ index bbd4817..aa74f14 100644
  
    // Domicile's engine fork: a <webview> asking for a guest to put behind it.
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
-index 4d70dcc..4a96793 100644
+index 01a3c16..3eb87b2 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
 @@ -4,6 +4,8 @@
@@ -73,7 +73,7 @@ index 4d70dcc..4a96793 100644
  #include <array>
  #include <optional>
  #include <string>
-@@ -2296,6 +2298,10 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+@@ -2322,6 +2324,10 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
    extensions::RegisterSettingsOverriddenUiPrefs(registry);
    ExtensionSettingsOverriddenDialog::RegisterProfilePrefs(registry);
  

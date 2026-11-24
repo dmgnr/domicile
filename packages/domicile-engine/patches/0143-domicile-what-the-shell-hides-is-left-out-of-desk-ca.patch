@@ -43,7 +43,7 @@ index 9f7515d..1a7396f 100644
      "//gpu/config",
      "//gpu/ipc/client",
 diff --git a/components/viz/service/display/surface_aggregator.cc b/components/viz/service/display/surface_aggregator.cc
-index 24d5cc7..b12a9bb 100644
+index 45b6bfb..c4dbf37 100644
 --- a/components/viz/service/display/surface_aggregator.cc
 +++ b/components/viz/service/display/surface_aggregator.cc
 @@ -41,6 +41,8 @@
@@ -55,9 +55,9 @@ index 24d5cc7..b12a9bb 100644
  #include "components/viz/service/display/overlay_candidate.h"
  #include "components/viz/service/display/renderer_utils.h"
  #include "components/viz/service/display/resolved_frame_data.h"
-@@ -1011,6 +1013,12 @@ void SurfaceAggregator::EmitSurfaceContent(
- 
-     MoveMatchingRequests(source.id, &copy_requests, &copy_pass->copy_requests);
+@@ -985,6 +987,12 @@ void SurfaceAggregator::EmitSurfaceContent(
+       copy_pass->copy_requests = resolved_pass.TakeCopyOutputRequests();
+     }
  
 +    // Domicile: the shell hid this pass from captures.
 +    if (source.subtree_capture_id ==
@@ -68,9 +68,9 @@ index 24d5cc7..b12a9bb 100644
      // Contributing passes aggregated in to the pass list need to take the
      // transform of the surface quad into account to update their transform to
      // the root surface.
-@@ -1567,6 +1575,12 @@ void SurfaceAggregator::CopyPasses(ResolvedFrameData& resolved_frame) {
- 
-     MoveMatchingRequests(source.id, &copy_requests, &copy_pass->copy_requests);
+@@ -1537,6 +1545,12 @@ void SurfaceAggregator::CopyPasses(ResolvedFrameData& resolved_frame) {
+       copy_pass->copy_requests = resolved_pass.TakeCopyOutputRequests();
+     }
  
 +    // Domicile: the shell hid this pass from captures.
 +    if (source.subtree_capture_id ==
@@ -81,7 +81,7 @@ index 24d5cc7..b12a9bb 100644
      // We add an additional render pass for the transform if the root render
      // pass has any copy requests.
      apply_surface_transform_to_root_pass =
-@@ -2312,6 +2326,25 @@ AggregatedFrame SurfaceAggregator::Aggregate(
+@@ -2295,6 +2309,25 @@ AggregatedFrame SurfaceAggregator::Aggregate(
  
    AddRootReadbackPass();
  
@@ -107,7 +107,7 @@ index 24d5cc7..b12a9bb 100644
    ProcessAddedAndRemovedSurfaces();
    contained_surfaces_.swap(previous_contained_surfaces_);
    contained_frame_sinks_.swap(previous_contained_frame_sinks_);
-@@ -2373,6 +2406,7 @@ void SurfaceAggregator::ResetAfterAggregate() {
+@@ -2356,6 +2389,7 @@ void SurfaceAggregator::ResetAfterAggregate() {
    expected_display_time_ = base::TimeTicks();
    display_trace_id_ = -1;
    has_copy_requests_ = false;
@@ -116,10 +116,10 @@ index 24d5cc7..b12a9bb 100644
    contained_surfaces_.clear();
    contained_frame_sinks_.clear();
 diff --git a/components/viz/service/display/surface_aggregator.h b/components/viz/service/display/surface_aggregator.h
-index aef13e7..cd4525e 100644
+index d518ed4..d88178d 100644
 --- a/components/viz/service/display/surface_aggregator.h
 +++ b/components/viz/service/display/surface_aggregator.h
-@@ -424,6 +424,13 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
+@@ -429,6 +429,13 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
    // This is valid during Aggregate after PrewalkSurface is called.
    bool has_copy_requests_ = false;
  

@@ -132,16 +132,17 @@ TEST(DeskTabsTest, ZeroZoomsToTheDefaultAndOutOfRangeIsRefused) {
   EXPECT_EQ(DeskZoomFactor(10, 1.0, 0.25, 5.0), std::nullopt);
 }
 
-TEST(DeskTabsTest, OnlyAutomaticPerOriginZoomIsTaken) {
-  // Guests zoom per site through HostZoomMap. "" means omitted, which
-  // defaults to that mode.
+TEST(DeskTabsTest, OnlyAutomaticZoomIsPerOrigin) {
+  // As in Chrome: every mode zooms per tab, and automatic per origin too. ""
+  // means omitted.
   EXPECT_TRUE(DeskTakesZoomSettings("", ""));
-  EXPECT_TRUE(DeskTakesZoomSettings("automatic", ""));
-  EXPECT_TRUE(DeskTakesZoomSettings("", "per-origin"));
   EXPECT_TRUE(DeskTakesZoomSettings("automatic", "per-origin"));
-  EXPECT_FALSE(DeskTakesZoomSettings("automatic", "per-tab"));
-  EXPECT_FALSE(DeskTakesZoomSettings("", "per-tab"));
-  EXPECT_FALSE(DeskTakesZoomSettings("manual", ""));
+  EXPECT_TRUE(DeskTakesZoomSettings("", "per-origin"));
+  EXPECT_TRUE(DeskTakesZoomSettings("automatic", "per-tab"));
+  EXPECT_TRUE(DeskTakesZoomSettings("manual", ""));
+  EXPECT_TRUE(DeskTakesZoomSettings("manual", "per-tab"));
+  EXPECT_TRUE(DeskTakesZoomSettings("disabled", "per-tab"));
+  EXPECT_FALSE(DeskTakesZoomSettings("manual", "per-origin"));
   EXPECT_FALSE(DeskTakesZoomSettings("disabled", "per-origin"));
 }
 

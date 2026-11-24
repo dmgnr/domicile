@@ -18,7 +18,8 @@
 # A false `true` would report a build of other code as the pull request's, so
 # the stamp is not trusted alone. `carries` also checks:
 #
-#   - the series identity (pin, patches and laid-down files, by content);
+#   - the series identity (pin, patches, laid-down files and Electron's Node,
+#     by content);
 #   - HEAD matches the stamped commit, since other workflows and people reset
 #     this tree;
 #   - the only changes in the checkout are the series' untracked files;
@@ -48,6 +49,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PACKAGE="$ROOT/packages/domicile-engine"
 SERIES="$PACKAGE/src"
 PATCHES="$PACKAGE/patches"
+# Electron's Node and its patches, which engine-node.sh puts in.
+NODE="$PACKAGE/node"
 
 # Outside `src/`, as in engine-sync.sh. Tests override it because they have no
 # /build.
@@ -61,7 +64,7 @@ series_identity() {
     printf 'pin %s\n' "$(pin)"
     # A `while read` loop instead of `xargs`, which may not be on the runner's
     # PATH.
-    for dir in "$PATCHES" "$SERIES"; do
+    for dir in "$PATCHES" "$SERIES" "$NODE"; do
       [ -d "$dir" ] || continue
       (cd "$dir" && find . -type f | LC_ALL=C sort |
         while IFS= read -r entry; do

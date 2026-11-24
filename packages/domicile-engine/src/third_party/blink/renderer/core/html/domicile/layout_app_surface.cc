@@ -3,6 +3,7 @@
 
 #include "third_party/blink/renderer/core/html/domicile/layout_app_surface.h"
 
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/domicile/html_app_element.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/platform/graphics/paint/foreign_layer_display_item.h"
@@ -17,11 +18,19 @@ void LayoutAppSurface::UpdateAfterLayout() {
   LayoutReplaced::UpdateAfterLayout();
 
   // Pixel-snapped to match the layer bounds in PaintReplaced(). A mismatch
-  // would scale the window. The element ignores an unchanged size.
+  // would scale the window. The element ignores an unchanged size and zoom.
   if (auto* app = DynamicTo<HTMLAppElement>(GetNode())) {
-    app->SurfaceBoxChanged(
-        ToPixelSnappedRect(ReplacedContentRect()).size());
+    app->SurfaceBoxChanged(ToPixelSnappedRect(ReplacedContentRect()).size(),
+                           CssZoom());
   }
+}
+
+// The effective zoom holds the page's own density and page zoom too (zoom for
+// device scale factor), which the frame's layout zoom factor is. What is left
+// is the CSS `zoom` of this element and its ancestors.
+double LayoutAppSurface::CssZoom() const {
+  NOT_DESTROYED();
+  return Style().EffectiveZoom() / GetFrame()->LayoutZoomFactor();
 }
 
 PhysicalNaturalSizingInfo LayoutAppSurface::GetNaturalDimensions() const {

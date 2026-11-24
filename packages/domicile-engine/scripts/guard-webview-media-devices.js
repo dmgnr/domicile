@@ -40,9 +40,9 @@ export const HostShell = () => {
         setTimeout(resolve, milliseconds);
       });
 
-    // The element has no guest until the page is attached, and Chrome lists
-    // devices a moment after it starts, so this asks until two cameras come
-    // back.
+    // The element has no guest until the page is attached, so this asks
+    // until two cameras come back. The engine answers the first ask once
+    // Chrome has listed them.
     const listed = async (tries, why) => {
       if (tries === 0) {
         say(`never-listed why=${why}`);

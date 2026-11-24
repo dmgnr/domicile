@@ -1,0 +1,353 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a profile drives a monitor in HDR
+
+Chromium drives a connector in HDR10 only when the snapshot's color space
+from the EDID is HDR10, which happens only on ChromeOS behind a flag.
+
+- DomicileDisplayLayout gains `hdr` and `sdr_white_nits`, and
+  DomicilePanel whether the connector is driven in HDR and the panel's
+  luminances, for the compositor (ozone_platform.h).
+- DisplayConfigurationParams gains `domicile_hdr`, carried over mojo.
+  DrmModeset asks for it where the panel takes it (domicile/hdr_output.h).
+- Once a commit modeset succeeds, DrmGpuDisplayManager has each
+  DrmDisplay set Colorspace, HDR_OUTPUT_METADATA and the planes' output
+  primaries as its constructor does for an HDR10 snapshot, now in
+  DrmDisplay::DomicileDriveColor.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../mojom/display_configuration_params.mojom  |  2 +
+ ...splay_configuration_params_mojom_traits.cc |  1 +
+ ...isplay_configuration_params_mojom_traits.h |  5 ++
+ .../types/display_configuration_params.cc     |  7 +-
+ .../types/display_configuration_params.h      |  3 +
+ ui/ozone/platform/drm/BUILD.gn                |  2 +
+ ui/ozone/platform/drm/gpu/drm_display.cc      | 89 ++++++++++++-------
+ ui/ozone/platform/drm/gpu/drm_display.h       | 12 +++
+ .../drm/gpu/drm_gpu_display_manager.cc        |  9 ++
+ ui/ozone/public/ozone_platform.h              | 23 +++++
+ 10 files changed, 121 insertions(+), 32 deletions(-)
+
+diff --git a/ui/display/mojom/display_configuration_params.mojom b/ui/display/mojom/display_configuration_params.mojom
+index d4c0459..f7923b8 100644
+--- a/ui/display/mojom/display_configuration_params.mojom
++++ b/ui/display/mojom/display_configuration_params.mojom
+@@ -13,4 +13,6 @@ struct DisplayConfigurationParams {
+   gfx.mojom.Point origin;
+   display.mojom.DisplayMode? mode;
+   bool enable_vrr;
++  // DOMICILE: drive the connector in HDR10.
++  bool domicile_hdr;
+ };
+diff --git a/ui/display/mojom/display_configuration_params_mojom_traits.cc b/ui/display/mojom/display_configuration_params_mojom_traits.cc
+index cb4666f..2e7fc7d 100644
+--- a/ui/display/mojom/display_configuration_params_mojom_traits.cc
++++ b/ui/display/mojom/display_configuration_params_mojom_traits.cc
+@@ -23,6 +23,7 @@ bool StructTraits<display::mojom::DisplayConfigurationParamsDataView,
+   out->origin = origin;
+   out->mode = std::move(mode);
+   out->enable_vrr = data.enable_vrr();
++  out->domicile_hdr = data.domicile_hdr();
+ 
+   return true;
+ }
+diff --git a/ui/display/mojom/display_configuration_params_mojom_traits.h b/ui/display/mojom/display_configuration_params_mojom_traits.h
+index 8125542..64a2243 100644
+--- a/ui/display/mojom/display_configuration_params_mojom_traits.h
++++ b/ui/display/mojom/display_configuration_params_mojom_traits.h
+@@ -34,6 +34,11 @@ struct StructTraits<display::mojom::DisplayConfigurationParamsDataView,
+     return display_configuration_params.enable_vrr;
+   }
+ 
++  static bool domicile_hdr(
++      const display::DisplayConfigurationParams& display_configuration_params) {
++    return display_configuration_params.domicile_hdr;
++  }
++
+   static bool Read(display::mojom::DisplayConfigurationParamsDataView data,
+                    display::DisplayConfigurationParams* out);
+ };
+diff --git a/ui/display/types/display_configuration_params.cc b/ui/display/types/display_configuration_params.cc
+index 7e1ae61..5d74dff 100644
+--- a/ui/display/types/display_configuration_params.cc
++++ b/ui/display/types/display_configuration_params.cc
+@@ -12,7 +12,9 @@ DisplayConfigurationParams::DisplayConfigurationParams(
+     : DisplayConfigurationParams(other.id,
+                                  other.origin,
+                                  other.mode.get(),
+-                                 other.enable_vrr) {}
++                                 other.enable_vrr) {
++  domicile_hdr = other.domicile_hdr;
++}
+ DisplayConfigurationParams::DisplayConfigurationParams(
+     DisplayConfigurationParams&& other) = default;
+ 
+@@ -32,6 +34,7 @@ DisplayConfigurationParams& DisplayConfigurationParams::operator=(
+   origin = other.origin;
+   mode = other.mode ? other.mode->Clone() : nullptr;
+   enable_vrr = other.enable_vrr;
++  domicile_hdr = other.domicile_hdr;
+   return *this;
+ }
+ 
+@@ -41,7 +44,7 @@ bool DisplayConfigurationParams::operator==(
+     const DisplayConfigurationParams& other) const {
+   return id == other.id && origin == other.origin &&
+          (mode == other.mode || (mode && other.mode && *mode == *other.mode)) &&
+-         enable_vrr == other.enable_vrr;
++         enable_vrr == other.enable_vrr && domicile_hdr == other.domicile_hdr;
+ }
+ 
+ }  // namespace display
+diff --git a/ui/display/types/display_configuration_params.h b/ui/display/types/display_configuration_params.h
+index c1aad7a..afdb763 100644
+--- a/ui/display/types/display_configuration_params.h
++++ b/ui/display/types/display_configuration_params.h
+@@ -36,6 +36,9 @@ struct DISPLAY_TYPES_EXPORT DisplayConfigurationParams {
+   // Set to nullptr to indicate that no mode is set.
+   std::unique_ptr<display::DisplayMode> mode = nullptr;
+   bool enable_vrr = false;
++  // DOMICILE: drive the connector in HDR10. Asked for only where its EDID
++  // takes PQ; see ui/ozone/platform/drm/domicile/drm_modeset.h.
++  bool domicile_hdr = false;
+ };
+ 
+ }  // namespace display
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index f79f43b..eed0f63 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -73,6 +73,8 @@ source_set("gbm") {
+     "domicile/drm_vt_switcher.h",
+     "domicile/edid_name.cc",
+     "domicile/edid_name.h",
++    "domicile/hdr_output.cc",
++    "domicile/hdr_output.h",
+     "domicile/ten_bit_scanout.cc",
+     "domicile/ten_bit_scanout.h",
+     "gpu/crtc_commit_request.cc",
+diff --git a/ui/ozone/platform/drm/gpu/drm_display.cc b/ui/ozone/platform/drm/gpu/drm_display.cc
+index dfd9a22..2ee1d7d 100644
+--- a/ui/ozone/platform/drm/gpu/drm_display.cc
++++ b/ui/ozone/platform/drm/gpu/drm_display.cc
+@@ -216,39 +216,14 @@ DrmDisplay::DrmDisplay(const scoped_refptr<DrmDevice>& drm,
+       drm_, primary_crtc_connector_pair_->connector.get());
+   tile_property_ = info->tile_property();
+ 
+-  SkColorSpacePrimaries output_primaries =
+-      display_snapshot.color_info().edid_primaries;
++  // DOMICILE: kept for DomicileSetHdr, which drives the connector the same
++  // way after a modeset asks for HDR.
++  domicile_edid_primaries_ = display_snapshot.color_info().edid_primaries;
+   // Do not allow display_snapshot and connector property state to go out of
+   // sync. HDR capability is determined in
+   // gfx::DisplayUtil::GetColorSpaceFromEdid
+-  if (display_snapshot.color_space() == gfx::ColorSpace::CreateHDR10()) {
+-    output_primaries = SkNamedPrimaries::kRec2020;
+-    SetColorspaceProperty(kColorSpaceBT2020RGBEnumName);
+-    SetHdrOutputMetadata(display_snapshot.color_space());
+-  } else {
+-    // The interpretation of kColorSpaceDefaultEnumName is left up to the
+-    // driver. For some devices, this is assumed to be Rec709. For others,
+-    // (especially wide color gamut devices), this is assumed to be P3.
+-    // TODO(https://crbug.com/471224089): Remove this feature flag, and
+-    // more robustly signal colorimetry.
+-    // `display::features::kDrmColorSpaceDefaultIsRec709` is declared inside a
+-    // `#if BUILDFLAG(IS_CHROMEOS)` in ui/display/display_features.h, so off
+-    // ChromeOS there is no flag to consult and the honest answer is the one a
+-    // disabled flag gives: leave the interpretation of
+-    // kColorSpaceDefaultEnumName to the driver, as the comment above says.
+-#if BUILDFLAG(IS_CHROMEOS)
+-    if (base::FeatureList::IsEnabled(
+-            display::features::kDrmColorSpaceDefaultIsRec709)) {
+-      output_primaries = SkNamedPrimaries::kRec709;
+-    }
+-#endif
+-    SetColorspaceProperty(kColorSpaceDefaultEnumName);
+-    ClearHdrOutputMetadata();
+-  }
+-  for (const auto& crtc_connector_pair : crtc_connector_pairs_) {
+-    drm_->plane_manager()->SetOutputColorSpace(crtc_connector_pair.crtc_id,
+-                                               output_primaries);
+-  }
++  DomicileDriveColor(display_snapshot.color_space() ==
++                     gfx::ColorSpace::CreateHDR10());
+   // DOMICILE: the browser draws this display in 10 bits when this holds; see
+   // ui/ozone/platform/drm/domicile/ten_bit_scanout.h.
+   if (TenBitScanoutFourcc(display_snapshot).has_value()) {
+@@ -700,6 +675,60 @@ DrmDisplay::GetCrtcConnectorPairForConnectorId(uint32_t connector_id) const {
+   return nullptr;
+ }
+ 
++// DOMICILE: the constructor's color setup, as a method, so a modeset can drive
++// a connector in HDR10 after the display is made. See DomicileSetHdr.
++void DrmDisplay::DomicileDriveColor(bool hdr10) {
++  domicile_hdr_ = hdr10;
++  SkColorSpacePrimaries output_primaries = domicile_edid_primaries_;
++  if (hdr10) {
++    output_primaries = SkNamedPrimaries::kRec2020;
++    SetColorspaceProperty(kColorSpaceBT2020RGBEnumName);
++    SetHdrOutputMetadata(gfx::ColorSpace::CreateHDR10());
++  } else {
++    // The interpretation of kColorSpaceDefaultEnumName is left up to the
++    // driver. For some devices, this is assumed to be Rec709. For others,
++    // (especially wide color gamut devices), this is assumed to be P3.
++    // TODO(https://crbug.com/471224089): Remove this feature flag, and
++    // more robustly signal colorimetry.
++    // `display::features::kDrmColorSpaceDefaultIsRec709` is declared inside a
++    // `#if BUILDFLAG(IS_CHROMEOS)` in ui/display/display_features.h, so off
++    // ChromeOS there is no flag to consult and the honest answer is the one a
++    // disabled flag gives: leave the interpretation of
++    // kColorSpaceDefaultEnumName to the driver, as the comment above says.
++#if BUILDFLAG(IS_CHROMEOS)
++    if (base::FeatureList::IsEnabled(
++            display::features::kDrmColorSpaceDefaultIsRec709)) {
++      output_primaries = SkNamedPrimaries::kRec709;
++    }
++#endif
++    SetColorspaceProperty(kColorSpaceDefaultEnumName);
++    ClearHdrOutputMetadata();
++  }
++  for (const auto& crtc_connector_pair : crtc_connector_pairs_) {
++    drm_->plane_manager()->SetOutputColorSpace(crtc_connector_pair.crtc_id,
++                                               output_primaries);
++  }
++}
++
++bool DrmDisplay::DomicileSetHdr(bool hdr) {
++  // SetHdrOutputMetadata CHECKs both; the browser asks only where the EDID
++  // says the panel takes PQ, so this is the guard against a stale ask.
++  const bool takes_pq =
++      hdr_static_metadata_.has_value() &&
++      hdr_static_metadata_->IsEotfSupported(
++          gfx::HDRStaticMetadata::Eotf::kPq);
++  if (hdr && !takes_pq) {
++    LOG(ERROR) << "domicile: display " << display_id_
++               << " was asked for HDR, but its EDID takes no PQ";
++    return false;
++  }
++  // Every modeset asks, and most change nothing: leave the connector be.
++  if (hdr != domicile_hdr_) {
++    DomicileDriveColor(hdr);
++  }
++  return true;
++}
++
+ bool DrmDisplay::ContainsCrtc(uint32_t crtc_id) const {
+   for (const auto& crtc_connector_pair : crtc_connector_pairs_) {
+     if (crtc_connector_pair.crtc_id == crtc_id) {
+diff --git a/ui/ozone/platform/drm/gpu/drm_display.h b/ui/ozone/platform/drm/gpu/drm_display.h
+index bc5d05b..ac6cc26 100644
+--- a/ui/ozone/platform/drm/gpu/drm_display.h
++++ b/ui/ozone/platform/drm/gpu/drm_display.h
+@@ -16,6 +16,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ref.h"
+ #include "base/memory/scoped_refptr.h"
++#include "third_party/skia/include/core/SkColorSpace.h"
+ #include "ui/display/types/display_constants.h"
+ #include "ui/gfx/color_space.h"
+ #include "ui/gfx/geometry/point.h"
+@@ -124,6 +125,10 @@ class DrmDisplay {
+   bool SetHdrOutputMetadata(const gfx::ColorSpace color_space);
+   bool SetColorspaceProperty(const char* color_space);
+   bool IsVrrCapable() const;
++  // DOMICILE: drives the connector in HDR10 (BT.2020 with PQ and the panel's
++  // HDR_OUTPUT_METADATA) or SDR. False, and SDR, for a panel whose EDID takes
++  // no PQ. See docs/architecture/COLOR.md in the Domicile repository.
++  bool DomicileSetHdr(bool hdr);
+ 
+   // Replace CRTCs in |crtc_connector_pairs_| according to mapping provided by
+   // |current_to_new_crtc_ids|. Must replace all CRTCs in
+@@ -142,6 +147,9 @@ class DrmDisplay {
+   gfx::HDRStaticMetadata::Eotf GetEotf(
+       const gfx::ColorSpace::TransferID transfer_id);
+   bool ClearHdrOutputMetadata();
++  // DOMICILE: the Colorspace property, HDR_OUTPUT_METADATA and the planes'
++  // output color space, for HDR10 or SDR.
++  void DomicileDriveColor(bool hdr10);
+ 
+   const int64_t display_id_;
+   const int64_t base_connector_id_;
+@@ -156,6 +164,10 @@ class DrmDisplay {
+   std::vector<drmModeModeInfo> modes_;
+   gfx::Point origin_;
+   std::optional<gfx::HDRStaticMetadata> hdr_static_metadata_;
++  // DOMICILE: the panel's primaries from its EDID, which SDR drives it in.
++  SkColorSpacePrimaries domicile_edid_primaries_;
++  // DOMICILE: whether it is driven in HDR10.
++  bool domicile_hdr_ = false;
+   std::unique_ptr<PrivacyScreenProperty> privacy_screen_property_;
+   std::optional<uint16_t> vsync_rate_min_from_edid_;
+   std::optional<TileProperty> tile_property_;
+diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
+index e6d09ee..7180ca4 100644
+--- a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
++++ b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
+@@ -597,6 +597,7 @@ bool DrmGpuDisplayManager::ConfigureDisplays(
+         }
+         out_requests.emplace_back(request.id, request.origin, out_mode.get(),
+                                   request.enable_vrr);
++        out_requests.back().domicile_hdr = request.domicile_hdr;
+       } else {
+         out_requests.emplace_back(request);
+       }
+@@ -635,6 +636,14 @@ bool DrmGpuDisplayManager::ConfigureDisplays(
+       for (const auto& controller : controllers_to_configure) {
+         FindDisplay(controller.display_id)->SetOrigin(controller.origin);
+       }
++      // DOMICILE: HDR10 is connector properties, set once the mode is up, as
++      // DrmDisplay's constructor sets them. A display asked for nothing is
++      // driven in SDR.
++      for (const auto& request : config_requests) {
++        if (DrmDisplay* display = FindDisplay(request.id)) {
++          display->DomicileSetHdr(request.domicile_hdr);
++        }
++      }
+     }
+   } else {
+     const std::string test_modest_outcome_histogram =
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index cfdb46b..beb6456 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -107,6 +107,21 @@ struct DomicileDisplayLayout {
+   // Whether to scan out with a variable refresh rate. Asked for only where
+   // the connector can; see ui/ozone/platform/drm/domicile/drm_modeset.h.
+   bool adaptive_sync = false;
++  // Whether to drive it in HDR10 (BT.2020 with PQ). Asked for only where the
++  // panel takes it; see ui/ozone/platform/drm/domicile/drm_modeset.h.
++  bool hdr = false;
++  // In HDR, the luminance SDR content's white is shown at, in cd/m².
++  float sdr_white_nits = 203.f;
++};
++
++// DOMICILE: whether a connector is driven in HDR10.
++enum class DomicileHdr {
++  // Its panel takes no PQ, or it cannot scan out in 10 bits.
++  kUnsupported,
++  // It can, and is not.
++  kOff,
++  // It is.
++  kOn,
+ };
+ 
+ // DOMICILE: whether a connector scans out with a variable refresh rate.
+@@ -141,6 +156,14 @@ struct DomicilePanel {
+   gfx::Size physical_size_mm;
+   // Whether it scans out with a variable refresh rate.
+   DomicileAdaptiveSync adaptive_sync = DomicileAdaptiveSync::kUnsupported;
++  // Whether it is driven in HDR10, and the panel's luminances from its EDID
++  // in cd/m², zero where unreported.
++  DomicileHdr hdr = DomicileHdr::kUnsupported;
++  float max_luminance = 0.f;
++  float max_average_luminance = 0.f;
++  float min_luminance = 0.f;
++  // In HDR, the luminance SDR content's white is shown at.
++  float sdr_white_nits = 0.f;
+ };
+ 
+ // DOMICILE: a tablet or touchscreen and the display it covers, from the

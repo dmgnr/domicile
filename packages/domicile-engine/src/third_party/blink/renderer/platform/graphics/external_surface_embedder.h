@@ -5,6 +5,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_EXTERNAL_SURFACE_EMBEDDER_H_
 
 #include <optional>
+#include <utility>
 
 #include "base/functional/callback.h"
 #include "components/domicile/mojom/external_surface.mojom-blink.h"
@@ -67,7 +68,8 @@ class PLATFORM_EXPORT ExternalSurfaceEmbedder {
   // so the producer joins its frame sink hierarchy and gets BeginFrames.
   // `size` is the size the producer renders at, and `scale` is the page's
   // device pixels per CSS pixel, which the producer uses to recover logical
-  // size.
+  // size. `zoom` is the element's CSS `zoom`, which the client draws at on top
+  // of `scale`.
   //
   // The browser replies only once a producer for that app exists, since an
   // <app> element can exist before its window. The callback may never run.
@@ -75,11 +77,23 @@ class PLATFORM_EXPORT ExternalSurfaceEmbedder {
   // Returns the LocalSurfaceId, so a caller that knows the FrameSinkId can
   // embed the surface before the reply.
   viz::LocalSurfaceId Embed(const String& app_id,
-             const viz::FrameSinkId& parent_frame_sink_id,
-             const gfx::Size& size,
-             double scale,
-             Allocation allocation,
-             EmbeddedCallback callback);
+                            const viz::FrameSinkId& parent_frame_sink_id,
+                            const gfx::Size& size,
+                            double scale,
+                            double zoom,
+                            Allocation allocation,
+                            EmbeddedCallback callback);
+
+  // Embed() at zoom 1, for a surface CSS `zoom` does not apply to.
+  viz::LocalSurfaceId Embed(const String& app_id,
+                            const viz::FrameSinkId& parent_frame_sink_id,
+                            const gfx::Size& size,
+                            double scale,
+                            Allocation allocation,
+                            EmbeddedCallback callback) {
+    return Embed(app_id, parent_frame_sink_id, size, scale, /*zoom=*/1.0,
+                 allocation, std::move(callback));
+  }
 
  private:
   void OnEmbedded(EmbeddedCallback callback,

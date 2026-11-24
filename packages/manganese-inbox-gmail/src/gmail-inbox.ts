@@ -5,6 +5,7 @@ import {
 import type { GoogleClient } from "@domicile-desktop/manganese-bar-module-gmail/consent";
 import { deskInbox } from "@domicile-desktop/manganese-bar-module-gmail/desk-inbox";
 import type { Inbox as GmailReading } from "@domicile-desktop/manganese-bar-module-gmail/inbox";
+import { writeMail } from "@domicile-desktop/manganese-bar-module-gmail/write-mail";
 import type { InboxReading } from "@domicile-desktop/manganese-notifications/inbox";
 import {
   Inbox,
@@ -27,19 +28,29 @@ type Options = {
   nickname: string;
   /** Its name in the launcher, such as `Email - Work`. `nickname` if not given. */
   launcherName?: string;
+  /**
+   * The id of the browser profile its Gmail window and sign-in open in, such
+   * as `work`. By default, the one Gmail's site opens in. Given one, the
+   * window opens Gmail's own address, with the profile's Google sign-in,
+   * rather than picking the account by its address.
+   */
+  profile?: string;
 };
 
 /**
  * One Gmail account's inbox in the notification drawer and the launcher,
  * read with the Gmail API: its conversations, with the unread ones counted
  * toward the bell. A press opens it in the account's own Gmail window, or
- * brings that window up, or signs it in. Goes in `runManganese`'s `inboxes`.
+ * brings that window up, or signs it in. Writes email for `mailto:` links in
+ * that window, from the account or one of its Gmail aliases. Goes in
+ * `runManganese`'s `inboxes`.
  */
 export const gmailInbox = ({
   client,
   email,
   launcherName,
   nickname,
+  profile,
 }: Options): Inbox =>
   Inbox.Watched({
     account: email,
@@ -47,7 +58,8 @@ export const gmailInbox = ({
     app: {
       appId: gmailAppId(email),
       pageNotifies: true,
-      url: inboxAddress(email),
+      ...(profile === undefined ? {} : { profile }),
+      url: inboxAddress(email, profile),
     },
     icon: EnvelopeSimpleIcon,
     ...(launcherName === undefined ? {} : { launcherName }),
@@ -55,17 +67,21 @@ export const gmailInbox = ({
     notifiesAs: nickname,
     open: (domicile, reading) => {
       if (reading?.kind === InboxReadingKind.SignedOut) {
-        deskInbox(domicile)(email, client, nickname).signIn();
+        deskInbox(domicile)(email, client, nickname, profile).signIn();
       } else {
-        domicile.browser.openApp(inboxAddress(email), {
+        domicile.browser.openApp(inboxAddress(email, profile), {
           id: gmailAppId(email),
           reuse: AppReuse.Focus,
+          ...(profile === undefined ? {} : { profile }),
         });
       }
     },
     read: perDesktop((domicile) =>
-      asReadings(deskInbox(domicile)(email, client, nickname).inbox),
+      asReadings(deskInbox(domicile)(email, client, nickname, profile).inbox),
     ),
+    write: (domicile, link, from) => {
+      void writeMail(domicile, client, email, link, from, profile);
+    },
   });
 
 /** `watch`'s readings, as the drawer reads them. */

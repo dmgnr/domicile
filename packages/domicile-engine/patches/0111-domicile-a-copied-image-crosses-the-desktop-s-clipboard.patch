@@ -36,7 +36,7 @@ index eef14dd..e3dc6dc 100644
  
    void SetDomicileCopiedCallback(DomicileCopied copied) override {
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 794467c..41f9803 100644
+index a9aead2..c130c12 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -12,6 +12,7 @@
@@ -47,7 +47,7 @@ index 794467c..41f9803 100644
  #include "base/containers/flat_set.h"
  #include "base/functional/callback.h"
  #include "base/message_loop/message_pump_type.h"
-@@ -404,16 +405,22 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -391,16 +392,22 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // window inside somebody else's session, and the clipboard the browser reads
    // there is that session's. See
    // ui/ozone/platform/drm/domicile/drm_clipboard.h.

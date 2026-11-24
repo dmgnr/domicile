@@ -31,7 +31,7 @@ save from a page in a <webview>.
  5 files changed, 26 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index c9ec54b..fa0395a 100644
+index dd53e13..2a8f8b5 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -6,6 +6,7 @@
@@ -42,7 +42,7 @@ index c9ec54b..fa0395a 100644
  #include "chrome/browser/domicile/domicile_shell_windows.h"
  #include "components/domicile/browser/desktop_prefs.h"
  #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-@@ -1761,6 +1762,12 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
+@@ -1762,6 +1763,12 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
  
  void ChromeBrowserMainParts::PreBrowserStart() {
    TRACE_EVENT0("startup", "ChromeBrowserMainParts::PreBrowserStart");

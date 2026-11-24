@@ -172,6 +172,8 @@ const panelStyles = css({
   },
   blockSize: "var(--accordion-panel-height)",
   overflow: "hidden",
+  // main-thread animation: opens to its content's height once, moving what is
+  // below.
   transition: "block-size {durations.normal} {easings.out}",
 });
 

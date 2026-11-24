@@ -18,10 +18,10 @@ job builds it on `crux`.
  1 file changed, 5 insertions(+), 1 deletion(-)
 
 diff --git a/third_party/blink/renderer/core/html/resources/html.css b/third_party/blink/renderer/core/html/resources/html.css
-index 64b6158..d76d7c2 100644
+index 4c1efd2..9f3bcd2 100644
 --- a/third_party/blink/renderer/core/html/resources/html.css
 +++ b/third_party/blink/renderer/core/html/resources/html.css
-@@ -1903,7 +1903,11 @@ iframe {
+@@ -1916,7 +1916,11 @@ iframe {
     way an <img> does; neither gets a border, because a shell draws its own
     chrome and a default frame border would be inside the window. */
  app {

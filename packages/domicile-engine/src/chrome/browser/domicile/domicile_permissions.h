@@ -22,6 +22,10 @@ namespace domicile {
 // A request the shell has no kind for (components/domicile/browser/
 // site_permissions.h) is ignored: no grant, nothing stored.
 //
+// An Electron app's page whose session has a permission request handler asks
+// the app instead, for the kinds Electron names (ElectronPermissionFor in
+// components/domicile/browser/electron_app.h).
+//
 // Called from AttachTabHelpers, before the guest's first navigation.
 void AttachPermissionPrompts(content::WebContents& guest);
 

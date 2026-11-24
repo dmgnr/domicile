@@ -139,14 +139,10 @@ describe("OverviewPicker", () => {
         return found;
       }
     };
-    const at = (ring: HTMLElement) => [
-      ring.style.getPropertyValue("inset-inline-start"),
-      ring.style.getPropertyValue("inset-block-start"),
-    ];
-    const placeOf = (box: Rect) => [
-      `${box.x.toString()}px`,
-      `${box.y.toString()}px`,
-    ];
+    // Placed with `translate`, so a swap slides them on the compositor.
+    const at = (ring: HTMLElement) => ring.style.getPropertyValue("translate");
+    const placeOf = (box: Rect) =>
+      `${box.x.toString()}px ${box.y.toString()}px`;
 
     it("slide with the workspaces they ring as those swap", () => {
       // The whole tile moves, ring and all, not just what is in it.

@@ -6,13 +6,15 @@
 //! requests on each side of that line, and that the shell's answer moves the
 //! seat.
 //!
-//! A press on a notification also lets the app that sent it ask: some apps
-//! (Electron before 42, so Slack) raise their window with a token of their
-//! own instead of the one the press hands them.
+//! A press on a notification or a click on a tray icon also lets its app ask:
+//! some apps (Electron before 42, so Slack) raise their window with a token of
+//! their own instead of the one the press hands them.
 
 mod running;
 
-use domicile_protocol::{ChromeMessage, HostMessage};
+use domicile_protocol::{
+    Bus as DbusBus, ChromeMessage, HostMessage, SystemRequest, TrayAction, TrayItem,
+};
 
 use crate::running::bus::Bus;
 use crate::running::Compositor;
@@ -194,6 +196,117 @@ fn a_pressed_notifications_app_is_heard_asking_with_its_own_token() {
             .expect("the pressed notification's app is heard"),
         HostMessage::FocusRequested { app_id: chat_id }
     );
+}
+
+/// Clicking an app's tray icon hands it a token and lets it raise its window
+/// with a token of its own, so a window in a hidden tab or on another
+/// workspace is shown.
+#[test]
+fn a_clicked_tray_icons_app_is_heard_asking_with_its_own_token() {
+    let bus = Bus::started();
+    let compositor = Compositor::started_on_a_bus(ONE_DISPLAY, &bus.address);
+    compositor.wait_for_log("this desktop hosts the system tray");
+    let mut chrome = compositor.chrome();
+    let mut chat = compositor.client_on_a_bus(
+        "chat",
+        &["--tray", "--ask-for-focus-when-left"],
+        &bus.address,
+    );
+    let chat_id = appeared(&mut chrome);
+    let _other = compositor.client("other");
+    let other_id = appeared(&mut chrome);
+    focus(&mut chrome, &chat_id);
+    let icon = tray_icon(&mut chrome);
+
+    chrome
+        .say(&ChromeMessage::ActivateTrayItem {
+            id: icon.id,
+            action: TrayAction::Primary,
+        })
+        .expect("the chrome socket takes a click");
+    assert!(
+        chat.wait_for_trace("tray.clicked()", 1),
+        "the tray icon was never clicked; it traced:\n{}",
+        chat.trace()
+    );
+    assert!(
+        chat.trace().contains("tray.token("),
+        "the tray icon was clicked without a token; it traced:\n{}",
+        chat.trace()
+    );
+    // The keyboard leaving `chat` makes it ask, with its old enter's serial.
+    focus(&mut chrome, &other_id);
+
+    assert_eq!(
+        chrome
+            .wait_for(|message| matches!(message, HostMessage::FocusRequested { .. }))
+            .expect("the clicked tray icon's app is heard"),
+        HostMessage::FocusRequested { app_id: chat_id }
+    );
+}
+
+/// Clicking an entry of an app's tray menu, such as "Show Slack", does the
+/// same as clicking its icon.
+#[test]
+fn a_clicked_tray_menus_app_is_heard_asking_with_its_own_token() {
+    let bus = Bus::started();
+    let compositor = Compositor::started_on_a_bus(ONE_DISPLAY, &bus.address);
+    compositor.wait_for_log("this desktop hosts the system tray");
+    let mut chrome = compositor.chrome();
+    let mut chat = compositor.client_on_a_bus(
+        "chat",
+        &["--tray", "--ask-for-focus-when-left"],
+        &bus.address,
+    );
+    let chat_id = appeared(&mut chrome);
+    let _other = compositor.client("other");
+    let other_id = appeared(&mut chrome);
+    focus(&mut chrome, &chat_id);
+    let icon = tray_icon(&mut chrome);
+
+    chrome
+        .say(&ChromeMessage::SystemRequest {
+            id: 1,
+            request: SystemRequest::DbusCall {
+                bus: DbusBus::Session,
+                destination: icon.bus,
+                path: icon.menu.expect("the test client's icon has a menu"),
+                interface: "com.canonical.dbusmenu".into(),
+                member: "Event".into(),
+                signature: "isvu".into(),
+                body: r#"[1, "clicked", {"signature": "i", "value": 0}, 0]"#.into(),
+            },
+        })
+        .expect("the chrome socket takes a system call");
+    assert!(
+        chat.wait_for_trace("menu.clicked(1)", 1),
+        "the tray menu was never clicked; it traced:\n{}",
+        chat.trace()
+    );
+    assert!(
+        chat.trace().contains("tray.token("),
+        "the tray menu was clicked without a token; it traced:\n{}",
+        chat.trace()
+    );
+    focus(&mut chrome, &other_id);
+
+    assert_eq!(
+        chrome
+            .wait_for(|message| matches!(message, HostMessage::FocusRequested { .. }))
+            .expect("the clicked tray menu's app is heard"),
+        HostMessage::FocusRequested { app_id: chat_id }
+    );
+}
+
+/// The first tray icon the chrome is told about.
+fn tray_icon(chrome: &mut domicile_test_chrome::Chrome) -> TrayItem {
+    let listed = chrome
+        .wait_for(|message| matches!(message, HostMessage::Tray { items } if !items.is_empty()))
+        .expect("a registered tray icon is listed to the chrome");
+    let HostMessage::Tray { items } = listed else {
+        unreachable!("the wait matched on this variant")
+    };
+    items[0].clone()
 }
 
 /// The id of the first notification the chrome is told about.

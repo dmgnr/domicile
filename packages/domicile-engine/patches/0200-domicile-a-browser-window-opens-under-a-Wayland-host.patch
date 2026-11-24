@@ -19,7 +19,7 @@ guards that run the shell nested in a Wayland compositor hit it at once.
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
-index 1200a60..f3fa512 100644
+index 90152b0..8853183 100644
 --- a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
 +++ b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
 @@ -148,7 +148,9 @@ void BrowserDesktopWindowTreeHostLinux::TabDraggingKindChanged(

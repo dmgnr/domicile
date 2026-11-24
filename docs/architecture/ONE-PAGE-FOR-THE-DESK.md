@@ -48,6 +48,8 @@ enters a gap, because pointer crossing follows `desk`.
 - `ShellWindows` (`domicile_shell_windows.cc`) keeps one window per CRTC.
 - The **host** is the only window that loads the shell. It sits on the fastest
   display (see [Key decisions](#key-decisions)).
+- When the host moves (its display sleeps, wakes or is unplugged), its window
+  moves with it. A new window would reload the shell.
 - The host's `WebContents` view is sized to the desk box and offset by the
   host's `desk` origin. The window clips it to the host's own slice.
 - Every other window is a `DeskPresenter`: a widget with no `WebContents`.
@@ -87,8 +89,16 @@ enters a gap, because pointer crossing follows `desk`.
 - `DrmScreen::GetCursorScreenPoint` answers where the host hears the pointer
   (`PointerHeardAt`), so a mouse move aura synthesizes after a window change
   or a warp lands where the cursor is.
-- Each CRTC keeps its own cursor (`DrmCursor`). The host sets the cursor shape
-  on every monitor.
+- When the host moves, the pointer stays where it is on screen
+  (`OzonePlatform::SetDomicilePointerStays`, `PointerStaysAt`). Upstream keeps
+  it at its spot in the window, which would carry a pointer on another monitor
+  to the host's new one, and focus would follow it. If no window holds the
+  spot yet (the presenter for the monitor the host left opens next), the
+  pointer waits there for it.
+- One cursor client serves every window, and `DrmCursor` takes the cursor
+  from any of them and draws it on the CRTC the pointer is on. A window added
+  or removed sets the cursor again (`DesktopNativeCursorManager::RedrawSoon`),
+  so the pointer stays current across a hotplug.
 - The page's cursor applies off the host monitor too: `RenderWidgetHostViewAura`
   takes a pointer outside its root but on the page as over itself
   (`DeskPagePoint`, patch `0159`).
@@ -136,8 +146,26 @@ the display holding most of it, as in sway. Other monitors resample its buffer.
   `wl_output.scale` of the displays it entered.
 - A window the shell has not reported, or one in a gap, is on every display at
   the densest scale.
+- CSS `zoom` on an `<app>` multiplies its density (#1976). The engine sends
+  the element's zoom (its effective zoom over the page's layout zoom factor)
+  with each box. The compositor configures the client at the box over the
+  page's scale times the zoom, and sends `preferred_scale` as the display's
+  scale times the zoom. The buffer still fills the box, so viz does not
+  resample it. Frames keep the page's scale.
+  - Surface: CSS `zoom`, not a `domicile.windows` setter. Layout already
+    carries it, and it applies to popups the same way.
+  - Not clamped, unlike scroll's 0.2–4: the shell zooms the popups itself,
+    so the compositor must use the same factor. The browser refuses a zoom
+    that is not a positive number.
+  - A client without fractional scale draws at the display's whole-number
+    scale and is resampled.
+  - Not `transform: scale()`: that animates per frame and would reconfigure
+    the client each frame. It resamples.
 - A popup (a menu, nested or not) takes its window's box moved by where the
-  menu sits over the window, at the size it was configured to. It enters the
+  menu sits over the window, at the size it was configured to. It shares its
+  window's zoom: its offset and size are multiplied by it, it draws at its
+  display's scale times it, and it is kept on screen in its window's zoomed
+  units. So is an input method's candidate list. It enters the
   displays that box overlaps, at the scale of the one with the largest overlap,
   and is placed again when its window moves or it repositions. A popup over a
   window the shell has not reported, or a layer surface's, is on every display

@@ -20,7 +20,7 @@ In this order:
 6. **A web search** for what you typed. Always there.
 
 Sites and searches each have a private row beside them. `!p` shows only
-private rows. See [Private windows](BROWSER.md#private-windows).
+private rows. `!g` shows only the Google search, so Enter searches. See [Private windows](BROWSER.md#private-windows).
 
 ## Files
 

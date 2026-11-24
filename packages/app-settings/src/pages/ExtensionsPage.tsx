@@ -10,9 +10,10 @@ import { XIcon } from "@phosphor-icons/react/dist/ssr/X";
 import { useId, useState } from "react";
 
 import { css } from "../../styled-system/css";
-import { circle, flex } from "../../styled-system/patterns";
+import { flex } from "../../styled-system/patterns";
 import { AddRow } from "../AddRow";
 import type { ConfigEditor, Report } from "../config-editor";
+import { ExtensionIcon } from "../ExtensionIcon";
 import type { Extensions } from "../extensions";
 import type {
   ExtensionSettings,
@@ -220,7 +221,6 @@ const uninstaller = ({
 
 /** Every setting an extension may have. */
 const SETTINGS = [
-  "private",
   "file_access",
   "user_scripts",
   "site_access",
@@ -305,7 +305,7 @@ const ExtensionRow = ({
   onUninstall,
   report,
 }: ExtensionRowProps) => {
-  const { description, enabled, name, optionsUrl, version } = extension;
+  const { description, enabled, icon, name, optionsUrl, version } = extension;
   // The config's, where it sets one, over the engine's.
   const settings = {
     ...extension.settings,
@@ -321,9 +321,7 @@ const ExtensionRow = ({
     <li className={rowStyles}>
       <div aria-labelledby={nameId} className={groupStyles} role="group">
         <div className={headStyles}>
-          <span aria-hidden className={avatarStyles}>
-            {name.slice(0, 1).toUpperCase()}
-          </span>
+          <ExtensionIcon icon={icon} name={name} size="md" />
           <div className={textStyles}>
             <span className={nameStyles}>
               <span id={nameId}>{name}</span>{" "}
@@ -350,19 +348,6 @@ const ExtensionRow = ({
               report={report}
               value={settings.site_access}
             />
-          )}
-          {enabled && settings.private !== undefined && (
-            <SettingRow title="Allow in private windows">
-              <Switch
-                checked={settings.private}
-                disabled={locked("private")}
-                hideLabel
-                label="Allow in private windows"
-                onCheckedChange={(allowed) => {
-                  onConfigure({ private: allowed });
-                }}
-              />
-            </SettingRow>
           )}
           {enabled && settings.file_access !== undefined && (
             <SettingRow title="Allow on local files">
@@ -412,7 +397,7 @@ const ExtensionRow = ({
                   beforeIcon={<TrashIcon size={14} />}
                   onClick={onUninstall}
                   size="sm"
-                  variant="danger"
+                  variant="dangerGhost"
                 >
                   Uninstall
                 </Button>
@@ -552,20 +537,11 @@ const groupStyles = flex({ direction: "column", gap: 2 });
 
 const headStyles = flex({ align: "center", gap: 3 });
 
-// Under the name, past the avatar.
+// Under the name, past the icon.
 const bodyStyles = flex({
   _empty: { display: "none" },
   direction: "column",
   paddingInlineStart: 12,
-});
-
-const avatarStyles = circle({
-  backgroundColor: "color-mix(in oklab, {colors.accent} 22%, {colors.card})",
-  color: "accent",
-  flexShrink: 0,
-  fontSize: "sm",
-  fontWeight: "semibold",
-  size: 9,
 });
 
 const textStyles = flex({

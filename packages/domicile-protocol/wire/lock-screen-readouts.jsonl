@@ -11,5 +11,8 @@
 {"library":"system-audio","request":{"call":"spawn","argv":["pactl","-f","json","list"],"env":{"LC_ALL":"C"},"stdin":false}}
 {"library":"system-audio","request":{"call":"spawn","argv":["pactl","--","set-sink-volume","alsa_output.pci","65536"],"env":{"LC_ALL":"C"},"stdin":false}}
 {"library":"system-audio","request":{"call":"spawn","argv":["pactl","--","set-sink-mute","alsa_output.pci","1"],"env":{"LC_ALL":"C"},"stdin":false}}
+{"library":"system-audio","request":{"call":"spawn","argv":["pactl","--","set-sink-mute","alsa_output.pci","0"],"env":{"LC_ALL":"C"},"stdin":false}}
+{"library":"system-audio","request":{"call":"spawn","argv":["pactl","-f","json","info"],"env":{"LC_ALL":"C"},"stdin":false}}
+{"library":"system-audio","request":{"call":"spawn","argv":["pactl","-f","json","list"],"env":{"LC_ALL":"C"},"stdin":false}}
 {"library":"system-bluetooth","request":{"call":"dbus_match","bus":"system","sender":"org.bluez"}}
 {"library":"system-bluetooth","request":{"call":"dbus_call","bus":"system","destination":"org.bluez","path":"/","interface":"org.freedesktop.DBus.ObjectManager","member":"GetManagedObjects","signature":"","body":"[]"}}

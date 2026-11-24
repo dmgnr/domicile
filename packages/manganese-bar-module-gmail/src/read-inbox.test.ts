@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { None } from "@cprussin/option-result";
-import { SCOPE } from "./consent";
+import { SCOPES } from "./consent";
 import type { Mail, MailNews } from "./gmail-api";
 import {
   answering,
@@ -10,6 +10,7 @@ import {
   heldStorage,
   INBOX,
   json,
+  SEND_AS,
   TOKEN,
   UNREAD,
 } from "./held-google";
@@ -22,15 +23,20 @@ const HOUR_MS = 60 * 60 * 1000;
 const ACCESS = json(200, {
   access_token: "a",
   expires_in: 3600,
-  scope: SCOPE,
+  scope: SCOPES.join(" "),
 });
+
+/** Gmail's addresses the account sends from, as a test reads none. */
+const NO_ALIASES = json(200, { sendAs: [] });
 
 const counted = (unread: number, total: number) =>
   json(200, { threadsTotal: total, threadsUnread: unread });
 
 /** Gmail's list of unread messages, newest first, each its own thread. */
 const unread = (...ids: readonly string[]) =>
-  json(200, { messages: ids.map((id) => ({ id, threadId: `t-${id}` })) });
+  json(200, {
+    messages: ids.map((id) => ({ id, threadId: `f${id.slice(1)}` })),
+  });
 
 /** Gmail's sender, subject and arrival of message `id`. */
 const headers = (id: string) =>
@@ -43,7 +49,7 @@ const headers = (id: string) =>
         { name: "Subject", value: `Subject ${id}` },
       ],
     },
-    threadId: `t-${id}`,
+    threadId: `f${id.slice(1)}`,
   });
 
 const mail = (id: string): Mail => ({
@@ -51,7 +57,7 @@ const mail = (id: string): Mail => ({
   id,
   receivedAt: 7,
   subject: `Subject ${id}`,
-  threadId: `t-${id}`,
+  threadId: `f${id.slice(1)}`,
 });
 
 const ignored = () => Promise.resolve();
@@ -94,10 +100,46 @@ describe("inboxReader", () => {
     expect(fetched).toHaveLength(0);
   });
 
+  it("names the addresses the account sends from", async () => {
+    const { domicile } = answering({
+      [INBOX]: [counted(2, 4)],
+      [UNREAD]: [unread()],
+      [SEND_AS]: [
+        json(200, {
+          sendAs: [
+            { isPrimary: true, sendAsEmail: EMAIL },
+            { sendAsEmail: "me@work.example", verificationStatus: "accepted" },
+          ],
+        }),
+      ],
+      [TOKEN]: [ACCESS],
+    });
+
+    expect(
+      await inboxReader(domicile, CLIENT, EMAIL, ignored, signedIn())(),
+    ).toStrictEqual(Inbox.Counted(4, 2, [], [EMAIL, "me@work.example"]));
+  });
+
+  it("asks for the addresses once per access token", async () => {
+    const { domicile, fetched } = answering({
+      [INBOX]: [counted(2, 4)],
+      [UNREAD]: [unread()],
+      [SEND_AS]: [NO_ALIASES],
+      [TOKEN]: [ACCESS],
+    });
+    const read = inboxReader(domicile, CLIENT, EMAIL, ignored, signedIn());
+
+    await read();
+    await read();
+
+    expect(fetched.filter((one) => one.url === SEND_AS)).toHaveLength(1);
+  });
+
   it("counts the inbox's conversations", async () => {
     const { domicile } = answering({
       [INBOX]: [counted(2, 4)],
       [UNREAD]: [unread()],
+      [SEND_AS]: [NO_ALIASES],
       [TOKEN]: [ACCESS],
     });
 
@@ -114,12 +156,13 @@ describe("inboxReader", () => {
       const { domicile } = answering({
         ...Object.fromEntries(newest.map((id) => [HEADERS(id), [headers(id)]])),
         [INBOX]: [counted(9, 20)],
+        [SEND_AS]: [NO_ALIASES],
         [TOKEN]: [ACCESS],
         [UNREAD]: [
           json(200, {
             messages: ids.map((id) => ({
               id,
-              threadId: id === "m9" ? "t-m10" : `t-${id}`,
+              threadId: id === "m9" ? "f10" : `f${id.slice(1)}`,
             })),
           }),
         ],
@@ -135,6 +178,7 @@ describe("inboxReader", () => {
         [HEADERS("m1")]: [headers("m1")],
         [HEADERS("m2")]: [headers("m2")],
         [INBOX]: [counted(2, 4)],
+        [SEND_AS]: [NO_ALIASES],
         [TOKEN]: [ACCESS],
         [UNREAD]: [unread("m1"), unread("m2", "m1")],
       });
@@ -154,6 +198,7 @@ describe("inboxReader", () => {
     const { domicile, fetched } = answering({
       [INBOX]: [counted(2, 4)],
       [UNREAD]: [unread()],
+      [SEND_AS]: [NO_ALIASES],
       [TOKEN]: [ACCESS],
     });
     const { clock, now } = heldClock();
@@ -170,6 +215,7 @@ describe("inboxReader", () => {
 
   it("is signed out, and forgets the token, once Google revokes it", async () => {
     const { domicile } = answering({
+      [SEND_AS]: [NO_ALIASES],
       [TOKEN]: [json(400, { error: "invalid_grant" })],
     });
     const storage = signedIn();
@@ -182,6 +228,7 @@ describe("inboxReader", () => {
 
   it("fails when Google gives no access token", async () => {
     const { domicile } = answering({
+      [SEND_AS]: [NO_ALIASES],
       [TOKEN]: [json(401, { error: "invalid_client" })],
     });
 
@@ -194,6 +241,7 @@ describe("inboxReader", () => {
     const { domicile, fetched } = answering({
       [INBOX]: [json(401, { error: { code: 401 } }), counted(1, 4)],
       [UNREAD]: [unread()],
+      [SEND_AS]: [NO_ALIASES],
       [TOKEN]: [ACCESS],
     });
     const read = inboxReader(domicile, CLIENT, EMAIL, ignored, signedIn());
@@ -208,6 +256,7 @@ describe("inboxReader", () => {
       const { domicile } = answering({
         [HEADERS("m1")]: [headers("m1")],
         [INBOX]: [counted(1, 4)],
+        [SEND_AS]: [NO_ALIASES],
         [TOKEN]: [ACCESS],
         [UNREAD]: [unread("m1")],
       });
@@ -224,6 +273,7 @@ describe("inboxReader", () => {
         [HEADERS("m2")]: [headers("m2")],
         [HEADERS("m3")]: [headers("m3")],
         [INBOX]: [counted(1, 4)],
+        [SEND_AS]: [NO_ALIASES],
         [TOKEN]: [ACCESS],
         [UNREAD]: [unread("m1"), unread("m3", "m2", "m1"), unread("m3", "m1")],
       });
@@ -245,6 +295,7 @@ describe("inboxReader", () => {
         [HEADERS("m1")]: [headers("m1")],
         [HEADERS("m2")]: [headers("m2")],
         [INBOX]: [counted(1, 4)],
+        [SEND_AS]: [NO_ALIASES],
         [TOKEN]: [ACCESS, json(400, { error: "invalid_grant" }), ACCESS],
         [UNREAD]: [unread("m1"), unread("m2", "m1")],
       });
@@ -267,6 +318,7 @@ describe("inboxReader", () => {
         [HEADERS("m1")]: [headers("m1")],
         [HEADERS("m2")]: [json(404, { error: { code: 404 } })],
         [INBOX]: [counted(1, 4)],
+        [SEND_AS]: [NO_ALIASES],
         [TOKEN]: [ACCESS],
         [UNREAD]: [unread("m1"), unread("m2", "m1")],
       });

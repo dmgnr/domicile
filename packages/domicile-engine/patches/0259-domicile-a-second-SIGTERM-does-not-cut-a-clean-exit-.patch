@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a second SIGTERM does not cut a clean exit short
+
+Chromium answers the first SIGTERM, SIGINT or SIGHUP with a graceful
+shutdown and puts the default action back, so a second one kills the
+browser on the spot. A session end always sends a second: systemd
+signals every process in the session's scope, the launcher too, and the
+launcher passes its own SIGTERM on to the engine. The browser died part
+way through SessionEnding(), before EndSession() wrote the clean-exit
+beacon, so every start counted a crash and grew the variations crash
+streak.
+
+After the first shutdown signal the browser now ignores all three. The
+launcher and systemd still end a hung browser with SIGKILL.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`. guard-clean-exit.sh checks it.
+---
+ chrome/browser/shutdown_signal_handlers_posix.cc | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/shutdown_signal_handlers_posix.cc b/chrome/browser/shutdown_signal_handlers_posix.cc
+index 2fe6adc..1f1ed9f 100644
+--- a/chrome/browser/shutdown_signal_handlers_posix.cc
++++ b/chrome/browser/shutdown_signal_handlers_posix.cc
+@@ -39,10 +39,17 @@ int g_shutdown_pipe_read_fd = -1;
+ 
+ // Common code between SIG{HUP, INT, TERM}Handler.
+ void GracefulShutdownHandler(int signal) {
+-  // Reinstall the default handler.  We had one shot at graceful shutdown.
++  // Ignore every later shutdown signal. A session end sends more than one:
++  // systemd signals each process in the session, and the launcher that
++  // started this one signals it too. The default action would kill the
++  // browser part way through SessionEnding(), before it records a clean exit,
++  // and the next start would count a crash. A launcher that will not wait
++  // sends SIGKILL.
+   struct sigaction action = {};
+-  action.sa_handler = SIG_DFL;
+-  RAW_CHECK(sigaction(signal, &action, nullptr) == 0);
++  action.sa_handler = SIG_IGN;
++  for (int shutdown_signal : {SIGTERM, SIGINT, SIGHUP}) {
++    RAW_CHECK(sigaction(shutdown_signal, &action, nullptr) == 0);
++  }
+ 
+   RAW_CHECK(g_pipe_pid != -1);
+   RAW_CHECK(g_shutdown_pipe_write_fd != -1);

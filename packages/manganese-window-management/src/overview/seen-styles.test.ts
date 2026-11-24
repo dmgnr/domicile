@@ -50,8 +50,15 @@ describe("seenAt", () => {
   });
 
   it("eases between its states, so closing partway through opening turns back", () => {
-    expect(seenStyles.raw({}).transition).toContain("transform");
+    expect(seenStyles.raw({ seen: true }).transition).toContain("transform");
     expect(seenStyles.raw({ arriving: true })).not.toHaveProperty("animation");
+  });
+
+  it("drops its move at once as the overview finishes closing, so its window keeps its place in the stack", () => {
+    // A box still easing to no transform is a stacking context of its own,
+    // and with the wrapper's depth gone, a float under it sinks below the
+    // tiled windows until the ease ends.
+    expect(seenStyles.raw({ seen: false })).not.toHaveProperty("transition");
   });
 
   it("is out of view while its window is, so it comes into view with it", () => {

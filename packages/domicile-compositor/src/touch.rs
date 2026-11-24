@@ -181,6 +181,9 @@ impl DomicileCompositor {
         let native = surface
             .client()
             .is_some_and(|client| self.touch_clients.reads_touch(&client.id()));
+        // The subsurface under the finger takes the point, and its motion
+        // after, as any compositor hit-tests a surface tree.
+        let (target, origin) = self.input_origin(&surface, surface_point(&surface, at));
         let active = self.touches.get_or_insert_with(|| ActiveTouches {
             owner,
             app_id: app_id.to_owned(),
@@ -203,7 +206,7 @@ impl DomicileCompositor {
             let handle = self.seat.get_touch().unwrap();
             handle.down(
                 self,
-                Some((surface, (0.0, 0.0).into())),
+                Some((target, origin.into())),
                 &DownEvent {
                     slot: slot(id),
                     location: location.into(),

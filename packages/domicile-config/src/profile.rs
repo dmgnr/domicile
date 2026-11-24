@@ -10,14 +10,14 @@
 //! set is exactly the connected set wins. See `docs/DISPLAYS.md#profiles`.
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
 
 /// One arrangement of monitors, and where each goes.
 ///
 /// Applies when the displays it names are exactly the connected ones.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     /// The profile's name, unique in the config. The log prints it when the
@@ -35,8 +35,8 @@ impl Profile {
     /// monitor would stay dark; if an overlap matched, windows could land on a
     /// missing screen.
     ///
-    /// An entry can name a monitor by output (`drm-3`) or by panel
-    /// (`DEL DELL U3219Q G3MS413`), so two entries can resolve to the same
+    /// An entry can name a monitor by output (`drm-3`), connector (`DP-1`)
+    /// or panel (`DEL DELL U3219Q G3MS413`), so two entries can resolve to the same
     /// monitor. Comparing counts is not enough; each entry must find a
     /// different monitor.
     fn resolve<'a>(&self, connected: &'a [Connected]) -> Option<Vec<&'a Connected>> {
@@ -92,17 +92,24 @@ impl Profile {
     }
 }
 
+/// SDR content's white on an HDR monitor when a profile states none, in cd/m²:
+/// the reference white of ITU-R BT.2408.
+pub const DEFAULT_SDR_WHITE: u32 = 203;
+
+/// The brightest luminance the PQ curve encodes, in cd/m².
+const MAX_PQ_NITS: u32 = 10_000;
+
 /// One display of a profile: which monitor, and what to do with it.
 ///
 /// Every field but `display` defaults to leaving the monitor as it is.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayPlacement {
     /// The connected display this entry places, matched by exact name.
     ///
     /// On a tty the output name is `drm-<id>`, or the connector (`HDMI-A-1`)
     /// for a monitor with no EDID name. Ozone derives the id from the EDID, so
-    /// it survives a replug. A panel name also matches.
+    /// it survives a replug. A panel name or connector (`DP-1`) also matches.
     pub display: String,
     /// Whether the display is part of the desktop.
     ///
@@ -119,6 +126,7 @@ pub struct DisplayPlacement {
     /// window) cannot set one, so there it is a check: the profile applies
     /// only while the monitor is at this mode.
     #[serde(default)]
+    #[schemars(schema_with = "crate::optional_nonzero_size_schema")]
     pub mode: Option<(u32, u32)>,
     /// The refresh rate to scan out, in Hz, such as `59.94` or `120`. The
     /// monitor's advertised rate nearest it is used, at `mode` or else the
@@ -128,6 +136,8 @@ pub struct DisplayPlacement {
     /// native size, and otherwise the highest rate the monitor offers at
     /// `mode`, as sway picks.
     #[serde(default)]
+    // In mHz it must fit an `i32`.
+    #[schemars(extend("exclusiveMinimum" = 0.0, "maximum" = 2147483.647))]
     pub refresh: Option<f64>,
     /// Whether to scan out with a variable refresh rate (adaptive sync,
     /// FreeSync, G-Sync Compatible), so a frame that runs late is shown as
@@ -138,6 +148,21 @@ pub struct DisplayPlacement {
     /// mode without it. Each display reports whether it took.
     #[serde(default)]
     pub adaptive_sync: bool,
+    /// Whether to drive the monitor in HDR (HDR10: BT.2020 primaries with the
+    /// PQ curve), so HDR video and images reach its full brightness and
+    /// color.
+    ///
+    /// Off by default. Asked for only where the monitor's EDID says it takes
+    /// PQ and the connector scans out in 10 bits; elsewhere it stays SDR.
+    #[serde(default)]
+    pub hdr: bool,
+    /// In HDR, how bright ordinary (SDR) content's white is, in cd/m² (nits).
+    /// Raise it if SDR windows look dim beside the monitor in SDR.
+    ///
+    /// Absent is 203, the reference white of ITU-R BT.2408. Ignored in SDR.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = MAX_PQ_NITS))]
+    pub sdr_white: Option<u32>,
     /// The top-left corner in the profile's coordinate space. May be negative.
     ///
     /// Absent puts the display in a row right of the positioned ones, in
@@ -153,6 +178,7 @@ pub struct DisplayPlacement {
     /// compositor's `Screens` advertises that, and `xdg_output` carries the
     /// logical size.
     #[serde(default = "unscaled")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub scale: f64,
     /// Which way up the monitor is.
     #[serde(default)]
@@ -160,13 +186,30 @@ pub struct DisplayPlacement {
 }
 
 impl DisplayPlacement {
+    /// An entry for `display` with every field at its default: enabled, at
+    /// its native mode, unscaled, unturned, and placed in the row.
+    fn at_its_defaults(display: &str) -> DisplayPlacement {
+        DisplayPlacement {
+            display: display.to_string(),
+            enabled: true,
+            mode: None,
+            refresh: None,
+            adaptive_sync: false,
+            hdr: false,
+            sdr_white: None,
+            position: None,
+            scale: unscaled(),
+            transform: Transform::default(),
+        }
+    }
+
     /// The connected display this entry names, or `None` if it is not
     /// connected.
     ///
     /// Any of the display's names match, as in kanshi: the output name is
-    /// always present, and the panel name is what a person can read off a
-    /// running desktop. The vendor may be spelled as in the EDID or as in
-    /// hwdata; see [`Connected::spelled_out`]. `validate` refuses an empty
+    /// always present, the panel name is what a person can read off a
+    /// running desktop, and the connector is what the kernel calls it. The
+    /// vendor may be spelled as in the EDID or as in hwdata; see [`Connected::spelled_out`]. `validate` refuses an empty
     /// `display`, which [`Connected::is_named`] never matches.
     fn connected_in<'a>(&self, connected: &'a [Connected]) -> Option<&'a Connected> {
         connected
@@ -218,6 +261,16 @@ impl DisplayPlacement {
                 )));
             }
         }
+        // PQ ends at 10,000 cd/m², and zero is no white at all.
+        if let Some(white) = self.sdr_white {
+            if !(1..=MAX_PQ_NITS).contains(&white) {
+                return Err(ConfigError::Validation(format!(
+                    "{at} sdr_white for {} is {white}, and an HDR white is \
+                     between 1 and {MAX_PQ_NITS} cd/m²",
+                    self.display
+                )));
+            }
+        }
         // Zero gives no desktop, a negative scale inverts it, and NaN passes
         // every later comparison. A scale too large for a given monitor needs
         // its mode; [`Layout::of`] refuses that.
@@ -235,7 +288,7 @@ impl DisplayPlacement {
 /// Which way up a monitor is, named for the matching `wl_output.transform`.
 ///
 /// Rotations only; nothing needs flips.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum Transform {
     /// The connector's native orientation.
     #[default]
@@ -287,6 +340,9 @@ pub struct Connected {
     /// sway and kanshi print this form. Both forms match, so either spelling
     /// works in a config.
     pub spelled_out: String,
+    /// The connector it is plugged into, as the kernel names it (`eDP-1`), or
+    /// empty if the engine reports none.
+    pub connector: String,
     /// The mode the connector is scanning out, in physical pixels.
     pub mode: (u32, u32),
     /// Every mode size the monitor offers, in physical pixels. Empty when the
@@ -299,10 +355,15 @@ impl Connected {
     ///
     /// An empty name never matches: every monitor with no EDID name shares
     /// the empty description.
-    pub(crate) fn is_named(&self, name: &str) -> bool {
-        [&self.name, &self.description, &self.spelled_out]
-            .into_iter()
-            .any(|own| !own.is_empty() && own == name)
+    pub fn is_named(&self, name: &str) -> bool {
+        [
+            &self.name,
+            &self.description,
+            &self.spelled_out,
+            &self.connector,
+        ]
+        .into_iter()
+        .any(|own| !own.is_empty() && own == name)
     }
 }
 
@@ -441,6 +502,11 @@ pub struct Scanout {
     pub refresh_mhz: Option<u32>,
     /// Whether the profile asks for a variable refresh rate.
     pub adaptive_sync: bool,
+    /// Whether the profile asks for HDR.
+    pub hdr: bool,
+    /// In HDR, SDR content's white in cd/m²: [`DisplayPlacement::sdr_white`]
+    /// or [`DEFAULT_SDR_WHITE`].
+    pub sdr_white: u32,
     /// Where the profile put this display on the desktop, or `None` if it is
     /// dark.
     ///
@@ -611,6 +677,8 @@ fn scanout(
                     .refresh
                     .map(|hertz| (hertz * 1000.0).round() as u32),
                 adaptive_sync: placement.adaptive_sync,
+                hdr: placement.hdr,
+                sdr_white: placement.sdr_white.unwrap_or(DEFAULT_SDR_WHITE),
                 desk: placed
                     .iter()
                     .find(|placed| placed.name == display.name)
@@ -829,6 +897,132 @@ pub(crate) fn validate(profiles: &[Profile]) -> Result<(), ConfigError> {
         profile.validate(index, &profiles[..index])?;
     }
     Ok(())
+}
+
+/// What `domicile configure-display` changes about one monitor until the
+/// desktop restarts. Each field left `None` stays as the config has it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DisplayOverride {
+    /// The monitor, by any name a profile matches it by.
+    pub display: String,
+    pub enabled: Option<bool>,
+    pub mode: Option<(u32, u32)>,
+    pub refresh: Option<f64>,
+    pub adaptive_sync: Option<bool>,
+    pub hdr: Option<bool>,
+    pub sdr_white: Option<u32>,
+    pub position: Option<(i32, i32)>,
+    pub scale: Option<f64>,
+    pub transform: Option<Transform>,
+}
+
+impl DisplayOverride {
+    /// This one with `later` laid over it: each field `later` sets wins.
+    pub fn and_then(self, later: DisplayOverride) -> DisplayOverride {
+        DisplayOverride {
+            display: later.display,
+            enabled: later.enabled.or(self.enabled),
+            mode: later.mode.or(self.mode),
+            refresh: later.refresh.or(self.refresh),
+            adaptive_sync: later.adaptive_sync.or(self.adaptive_sync),
+            hdr: later.hdr.or(self.hdr),
+            sdr_white: later.sdr_white.or(self.sdr_white),
+            position: later.position.or(self.position),
+            scale: later.scale.or(self.scale),
+            transform: later.transform.or(self.transform),
+        }
+    }
+
+    fn apply(&self, placement: &mut DisplayPlacement) {
+        if let Some(enabled) = self.enabled {
+            placement.enabled = enabled;
+        }
+        if let Some(mode) = self.mode {
+            placement.mode = Some(mode);
+        }
+        if let Some(refresh) = self.refresh {
+            placement.refresh = Some(refresh);
+        }
+        if let Some(adaptive_sync) = self.adaptive_sync {
+            placement.adaptive_sync = adaptive_sync;
+        }
+        if let Some(hdr) = self.hdr {
+            placement.hdr = hdr;
+        }
+        if let Some(white) = self.sdr_white {
+            placement.sdr_white = Some(white);
+        }
+        if let Some(position) = self.position {
+            placement.position = Some(position);
+        }
+        if let Some(scale) = self.scale {
+            placement.scale = scale;
+        }
+        if let Some(transform) = self.transform {
+            placement.transform = transform;
+        }
+    }
+}
+
+/// What the profile `domicile configure-display` makes is called, when no
+/// profile of the config's matches the monitors.
+pub const CONFIGURED_PROFILE: &str = "domicile configure-display";
+
+/// `profiles` with `overrides` laid over the one that matches `connected`.
+///
+/// When none matches, a profile of every connected monitor in the engine's
+/// order, each at the defaults, is put first to take them, so a monitor no
+/// profile names can still be configured.
+///
+/// An override for a monitor that is not connected is kept for when it is,
+/// and changes nothing now. Errs when the result is not a valid profile, such
+/// as one that turns every monitor off.
+pub(crate) fn overridden(
+    profiles: &[Profile],
+    connected: &[Connected],
+    overrides: &[DisplayOverride],
+) -> Result<Vec<Profile>, ConfigError> {
+    let mut profiles = profiles.to_vec();
+    if overrides.is_empty() {
+        return Ok(profiles);
+    }
+    let matching = match profiles
+        .iter()
+        .position(|profile| profile.resolve(connected).is_some())
+    {
+        Some(matching) => matching,
+        None => {
+            profiles.insert(
+                0,
+                Profile {
+                    name: CONFIGURED_PROFILE.to_string(),
+                    displays: connected
+                        .iter()
+                        .map(|display| DisplayPlacement::at_its_defaults(&display.name))
+                        .collect(),
+                },
+            );
+            0
+        }
+    };
+    for change in overrides {
+        let Some(monitor) = connected
+            .iter()
+            .find(|display| display.is_named(&change.display))
+        else {
+            continue;
+        };
+        for placement in &mut profiles[matching].displays {
+            if placement
+                .connected_in(connected)
+                .is_some_and(|placed| placed.name == monitor.name)
+            {
+                change.apply(placement);
+            }
+        }
+    }
+    validate(&profiles)?;
+    Ok(profiles)
 }
 
 /// Displays are enabled by default.

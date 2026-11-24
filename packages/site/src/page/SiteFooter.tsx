@@ -10,6 +10,12 @@ type Props = {
   links: readonly { label: string; href: string }[];
 };
 
+/** Every page's policies, which Google's sign-in review looks for. */
+const POLICIES = [
+  { href: "/privacy", label: "Privacy" },
+  { href: "/terms", label: "Terms" },
+];
+
 /** A landing page's foot. */
 export const SiteFooter = ({ children, links }: Props) => (
   <footer className={footerStyles}>
@@ -22,7 +28,7 @@ export const SiteFooter = ({ children, links }: Props) => (
             {link.label}
           </a>
         ))}
-        {links.map((link) => (
+        {[...links, ...POLICIES].map((link) => (
           <a className={linkStyles} href={link.href} key={link.label}>
             {link.label}
           </a>

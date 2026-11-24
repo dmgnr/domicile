@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 20 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page that never activates says where its tiles'
+ raster tasks are
+
+0249's line counts required tiles "being rastered", but not whether
+their tasks are still queued, running, finished and never collected, or
+waiting on an image decode. A frozen page in the CI VM repro had tiles
+"being rastered" for good. The line now counts their tasks by state and
+by unfinished decode dependencies, names each listed tile's task state,
+and says whether tasks are scheduled and completed ones were checked.
+---
+ cc/tiles/tile_manager.cc | 53 +++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 47 insertions(+), 6 deletions(-)
+
+diff --git a/cc/tiles/tile_manager.cc b/cc/tiles/tile_manager.cc
+index eaaf894..9da2610 100644
+--- a/cc/tiles/tile_manager.cc
++++ b/cc/tiles/tile_manager.cc
+@@ -1767,6 +1767,17 @@ bool TileManager::IsReadyToActivate() const {
+              RasterTilePriorityQueue::Type::REQUIRED_FOR_ACTIVATION);
+ }
+ 
++namespace {
++// For a tile "being rastered", where its task is.
++const char* DomicileTaskStateName(TaskState& state) {
++  return state.IsFinished()    ? " (task finished, not collected)"
++         : state.IsRunning()   ? " (task running)"
++         : state.IsScheduled() ? " (task scheduled)"
++         : state.IsCanceled()  ? " (task canceled)"
++                               : " (task new)";
++}
++}  // namespace
++
+ std::string TileManager::DomicileWhyNotReadyToActivate() const {
+   // Tiles the raster queue offers; a required tile it never offers is never
+   // rastered, and so never lets the pending tree activate.
+@@ -1786,6 +1797,12 @@ std::string TileManager::DomicileWhyNotReadyToActivate() const {
+   int rastering = 0;
+   int never_offered = 0;
+   int never_offered_on_monitor = 0;
++  int tasks_new = 0;
++  int tasks_scheduled = 0;
++  int tasks_running = 0;
++  int tasks_finished = 0;
++  int tasks_canceled = 0;
++  int tasks_waiting_on_decodes = 0;
+   std::string tiles;
+   for (std::unique_ptr<RasterTilePriorityQueue> queue =
+            client_->BuildRasterQueue(
+@@ -1813,6 +1830,19 @@ std::string TileManager::DomicileWhyNotReadyToActivate() const {
+     const bool is_offered = offered.contains(tile);
+     if (tile->HasRasterTask()) {
+       ++rastering;
++      // Where its task is: a task that finished but was never collected
++      // leaves the tile "being rastered" for good, as does one waiting on an
++      // image decode that never ends.
++      TaskState& task_state = tile->raster_task_->state();
++      tasks_new += task_state.IsNew();
++      tasks_scheduled += task_state.IsScheduled();
++      tasks_running += task_state.IsRunning();
++      tasks_finished += task_state.IsFinished();
++      tasks_canceled += task_state.IsCanceled();
++      for (const scoped_refptr<TileTask>& dependency :
++           tile->raster_task_->dependencies()) {
++        tasks_waiting_on_decodes += !dependency->state().IsFinished();
++      }
+     } else if (!is_offered) {
+       ++never_offered;
+       never_offered_on_monitor += monitor;
+@@ -1823,8 +1853,8 @@ std::string TileManager::DomicileWhyNotReadyToActivate() const {
+       base::StringAppendF(
+           &tiles,
+           "%s{tile %llu, %s tree, scale %g, monitor ratio %g%s, rect %s, "
+-          "bin %s, %s, distance %g, occluded %s, rastering %s, offered %s, "
+-          "required for draw %s}",
++          "bin %s, %s, distance %g, occluded %s, rastering %s%s, offered "
++          "%s, required for draw %s}",
+           to_raster > 1 ? ", " : "",
+           static_cast<unsigned long long>(tile->id()),
+           tiling->tree() == ACTIVE_TREE ? "active" : "pending",
+@@ -1838,7 +1868,11 @@ std::string TileManager::DomicileWhyNotReadyToActivate() const {
+           TileResolutionToString(priority.resolution).c_str(),
+           priority.distance_to_visible,
+           prioritized_tile.is_occluded() ? "yes" : "no",
+-          tile->HasRasterTask() ? "yes" : "no", is_offered ? "yes" : "no",
++          tile->HasRasterTask() ? "yes" : "no",
++          tile->HasRasterTask()
++              ? DomicileTaskStateName(tile->raster_task_->state())
++              : "",
++          is_offered ? "yes" : "no",
+           tile->required_for_draw() ? "yes" : "no");
+     }
+   }
+@@ -1855,15 +1889,22 @@ std::string TileManager::DomicileWhyNotReadyToActivate() const {
+       "tiles still to raster %d (on a monitor's tiling %d, on the active tree "
+       "%d, being rastered %d, never offered for raster %d, %d of them on a "
+       "monitor's tiling), out-of-memory placeholders %d, out of memory last "
+-      "pass %s, all scheduled %s, tile memory %s; first tiles to raster [%s]; "
+-      "tile manager %s",
++      "pass %s, all scheduled %s, tile memory %s; the tasks of those being "
++      "rastered: new %d, scheduled %d, running %d, finished but not collected "
++      "%d, canceled %d, waiting on an unfinished image decode %d; tasks "
++      "scheduled %s, completed tasks checked since %s; first tiles to raster "
++      "[%s]; tile manager %s",
+       IsReadyToActivate() ? "yes" : "no",
+       pending_required_for_activation_callback_id_ ? "yes" : "no", to_raster,
+       on_monitor, on_active, rastering, never_offered,
+       never_offered_on_monitor, out_of_memory,
+       did_oom_on_last_assign_ ? "yes" : "no",
+       all_tiles_that_need_to_be_rasterized_are_scheduled_ ? "yes" : "no",
+-      memory.c_str(), tiles.c_str(), state.ToJSON().c_str());
++      memory.c_str(), tasks_new, tasks_scheduled, tasks_running,
++      tasks_finished, tasks_canceled, tasks_waiting_on_decodes,
++      has_scheduled_tile_tasks_ ? "yes" : "no",
++      did_check_for_completed_tasks_since_last_schedule_tasks_ ? "yes" : "no",
++      tiles.c_str(), state.ToJSON().c_str());
+ }
+ 
+ bool TileManager::IsReadyToDraw() const {

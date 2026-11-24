@@ -32,9 +32,11 @@ pub fn session_bus() -> Result<zbus::blocking::Connection, zbus::Error> {
     connected(zbus::blocking::connection::Builder::session()?)
 }
 
-/// Shows a notification through the server on `bus`.
+/// Shows a notification through the server on `bus`, drawn with `icon`: an
+/// icon's name or a path, as `app_icon` takes it, or empty for Domicile's.
 pub fn notify(
     bus: &zbus::blocking::Connection,
+    icon: &str,
     summary: &str,
     body: &str,
 ) -> Result<(), zbus::Error> {
@@ -47,7 +49,7 @@ pub fn notify(
         &(
             APP_NAME,
             0_u32,
-            "",
+            icon,
             summary,
             body,
             Vec::<&str>::new(),

@@ -16,7 +16,7 @@ The observer now skips a domicile::WebViewGuest the same way.
  2 files changed, 10 insertions(+)
 
 diff --git a/chrome/browser/performance_manager/BUILD.gn b/chrome/browser/performance_manager/BUILD.gn
-index df597cf..30a7b16 100644
+index a54dd26..3cc792d 100644
 --- a/chrome/browser/performance_manager/BUILD.gn
 +++ b/chrome/browser/performance_manager/BUILD.gn
 @@ -176,6 +176,7 @@ source_set("impl") {

@@ -23,7 +23,7 @@ job builds it on `crux`, and `guard-control-arrival.sh` fires the
  2 files changed, 18 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 0b852d0..7d8d167 100644
+index 3c7b504..84826cf 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -297,6 +297,8 @@ generated_dictionary_sources_in_modules = [
@@ -35,7 +35,7 @@ index 0b852d0..7d8d167 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event_init.cc",
-@@ -2398,6 +2400,16 @@ generated_interface_sources_in_modules = [
+@@ -2402,6 +2404,16 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_display.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shell_config_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shell_config_event.h",

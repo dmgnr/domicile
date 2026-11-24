@@ -10,16 +10,19 @@
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "chrome/browser/domicile/domicile_browser_profiles.h"
 #include "chrome/browser/domicile/domicile_browser_windows.h"
 #include "chrome/browser/domicile/domicile_chrome_dialogs.h"
 #include "chrome/browser/domicile/domicile_desk_functions.h"
 #include "chrome/browser/domicile/domicile_device_chooser.h"
 #include "chrome/browser/domicile/domicile_devtools.h"
+#include "chrome/browser/domicile/domicile_electron_socket.h"
 #include "chrome/browser/domicile/domicile_external_apps.h"
 #include "chrome/browser/domicile/domicile_permissions.h"
 #include "chrome/browser/domicile/domicile_printing.h"
 #include "chrome/browser/domicile/domicile_prompts.h"
 #include "chrome/browser/domicile/domicile_sign_in.h"
+#include "chrome/browser/domicile/domicile_spellcheck.h"
 #include "chrome/browser/domicile/domicile_window_controller.h"
 #include "chrome/browser/extensions/domicile_desk_hooks.h"
 #include "chrome/browser/profiles/profile.h"
@@ -106,10 +109,17 @@ void StartDesk(Profile* profile) {
     RegisterDeskFunctions();
     // Browser windows: tabs opened by guests and shown by <webview window>.
     StartBrowserWindows();
+    // Browser profiles, which the compositor names on the control channel.
+    StartBrowserProfiles();
+    // Electron apps, whose windows are browser windows.
+    StartElectronSocket();
     // DevTools for the context menu's "inspect" and <webview>.inspect().
     WebViewGuest::SetInspect(base::BindRepeating(&OpenDevTools));
     // The system print dialog for <webview>.print().
     WebViewGuest::SetPrint(base::BindRepeating(&PrintPage));
+    // The config's spell checking, and the context menu's "Add to
+    // dictionary".
+    StartSpellcheck();
     // Camera and microphone requests, asked through the shell's prompt.
     UseChromeForGuestMedia();
     // WebHID, WebUSB and Web Serial choosers, drawn by the shell.
@@ -122,7 +132,7 @@ void StartDesk(Profile* profile) {
     // asked by the shell.
     UseTheShellForPrompts();
     // Any Chrome dialog left fails closed, and Chrome's payment and account
-    // sheets and picture-in-picture window are off.
+    // sheets are off.
     RefuseChromeDialogs();
     return true;
   }();

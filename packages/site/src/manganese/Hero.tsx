@@ -17,7 +17,10 @@ export const Hero = () => (
       </>
     }
     lede="A complete tiling Wayland desktop that feels like Sway, where websites tile and tab right alongside your apps. Use it every day as it comes, or change its bar, launcher or anything else in React and CSS."
-    tag={{ href: "/", label: "One desktop built on Domicile →" }}
+    tag={{
+      href: "/docs/manganese/release-notes",
+      label: "New: your Electron apps on the desktop's browser, and profiles →",
+    }}
     title="Sway, with more <div>s."
   >
     <CopyCommand command="nix run github:cprussin/domicile/release#manganese" />

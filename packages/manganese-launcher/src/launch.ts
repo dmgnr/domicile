@@ -10,10 +10,14 @@ export enum LaunchKind {
 }
 
 export const Launch = {
-  /** Open `url` in a browser window on the desktop, private or not. */
-  Browsed: (url: string, isPrivate: boolean) => ({
+  /**
+   * Open `url` in a browser window on the desktop, private or not, in
+   * browser profile `profile` or with none its site's.
+   */
+  Browsed: (url: string, isPrivate: boolean, profile?: string) => ({
     isPrivate,
     kind: LaunchKind.Browsed as const,
+    profile,
     url,
   }),
   /**

@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page that never drew is no stall
+
+Patches 0241, 0245 and 0248 log at ERROR when a shown page draws nothing
+at its new size for 2 seconds. On lyra (2026-11-21) every one of them, 12
+in 25 minutes, was a page that had never drawn at all: a new page waiting
+on its first navigation (no URL, no root layer, never acked a size), an
+empty cross-site ad frame (no root layer), and a page nothing on screen
+embeds (frames committed, every one dropped undrawn, none ever shown).
+None of those is stuck.
+
+Each now says so at VERBOSE and stops. A page that drew and then stops,
+the freeze these lines are for, still logs at ERROR: the widget when it
+has acked a size before, the compositor when it has shown a frame before,
+and its compositor thread when it has content.
+
+Log only.
+---
+ cc/trees/layer_tree_host.cc                       | 15 +++++++++++++++
+ cc/trees/layer_tree_host_impl.cc                  |  9 +++++++++
+ .../renderer_host/render_widget_host_impl.cc      | 10 ++++++++++
+ 3 files changed, 34 insertions(+)
+
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index 9087172..bea2286 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -1033,6 +1033,21 @@ void LayerTreeHost::DomicileReportTargetWait() {
+   if (domicile_frames_presented_since_target_ > 0 || !visible_) {
+     return;
+   }
++  // A page that has never shown a frame is not stuck: a new page waiting on
++  // its first navigation, an empty frame, or a page nothing on screen
++  // embeds. Only a page that showed frames and stopped is an error.
++  if (domicile_last_presented_at_.is_null()) {
++    VLOG(1) << "domicile: compositor " << id_ << " (pid "
++            << base::GetCurrentProcId() << ", page at "
++            << (domicile_source_url_.empty() ? "no URL yet"
++                                             : domicile_source_url_)
++            << ") has shown no frame yet, at its new surface "
++            << domicile_target_.ToString() << " either: commits "
++            << domicile_commits_since_target_
++            << ", frames the display dropped undrawn "
++            << domicile_frames_undrawn_since_target_ << ".";
++    return;
++  }
+   LOG(ERROR) << "domicile: compositor " << id_ << " (pid "
+              << base::GetCurrentProcId() << ", page at "
+              << (domicile_source_url_.empty() ? "no URL yet"
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index 716dde3..f63dc3d 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -2072,6 +2072,15 @@ void LayerTreeHostImpl::DomicileReportTargetWait() {
+   if (!visible_) {
+     return;
+   }
++  // Nor does a page that has committed no content yet: a new page waiting on
++  // its first navigation, or an empty frame. Only a page with content that
++  // stops sending frames is an error.
++  if (active_tree_->LayerListIsEmpty()) {
++    VLOG(1) << "domicile: compositor " << id_
++            << " thread has no content to send at its new surface "
++            << target_local_surface_id_.ToString() << " (no root layer yet).";
++    return;
++  }
+   const viz::LocalSurfaceId& active =
+       active_tree()->local_surface_id_from_parent();
+   const base::TimeTicks now = base::TimeTicks::Now();
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index 7fef984..cbc4447 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -1692,6 +1692,16 @@ void RenderWidgetHostImpl::DomicileReportAckWait() {
+       is_hidden_) {
+     return;
+   }
++  // A page that has never acked a size has never drawn: a new page waiting
++  // on its first navigation, or an empty frame. Only a page that drew and
++  // stopped acking is an error, so its ack is not reported either.
++  if (domicile_last_acked_size_.IsEmpty()) {
++    VLOG(1) << "domicile: widget " << GetFrameSinkId().ToString()
++            << " has not drawn its first frame, at "
++            << old_visual_properties_->new_size_device_px.ToString()
++            << ", in " << kDomicileAckWait;
++    return;
++  }
+   domicile_ack_wait_reported_ = true;
+   LOG(ERROR) << "domicile: widget " << GetFrameSinkId().ToString()
+              << " has not acked its resize to "

@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use domicile_recorder::args::parse;
-use domicile_recorder::command::Command;
+use domicile_recorder::command::{started, Command};
 use domicile_recorder::pipeline::description;
 use domicile_recorder::recording::{encoder, Recording};
 
@@ -29,7 +29,6 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eprintln!("domicile-recorder: encoding with {encoder:?}");
     let recording = match Recording::start(&description(&args.sources, encoder, &args.file)) {
         Ok(recording) => recording,
         Err(why) => {
@@ -37,8 +36,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // The compositor waits for this line before it says the recording runs.
-    println!("recording");
+    println!("{}", started(&encoder));
     let commands = commands();
     loop {
         if let Some(why) = recording.failure() {

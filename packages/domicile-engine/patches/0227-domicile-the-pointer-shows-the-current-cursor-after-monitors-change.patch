@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the pointer shows the current cursor after monitors
+ change
+
+After an undock the pointer stayed Chromium's art until the cursor
+changed, such as over a native window. Every window shares one cursor
+client, but DrmCursor took a cursor only from the window under the
+pointer or the desk's host, so a cursor set while an unplugged
+monitor's window was going away never reached the screen.
+
+- DrmCursor::SetCursor takes the cursor from any window. With no window
+  yet, it keeps it for the first.
+- DesktopNativeCursorManager sets the cursor again after a window is
+  added or removed, once the change is done.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ ui/ozone/platform/drm/host/drm_cursor.cc           | 14 ++++++++++----
+ .../desktop_aura/desktop_native_cursor_manager.cc  |  9 +++++++++
+ .../desktop_aura/desktop_native_cursor_manager.h   | 10 ++++++++++
+ 3 files changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.cc b/ui/ozone/platform/drm/host/drm_cursor.cc
+index 278a7ef..88474de 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.cc
++++ b/ui/ozone/platform/drm/host/drm_cursor.cc
+@@ -91,15 +91,21 @@ void DrmCursor::SetCursor(gfx::AcceleratedWidget window,
+ 
+   base::AutoLock lock(lock_);
+ 
+-  // DOMICILE: the desk's host sets the cursor on every monitor; the pointer
+-  // is over its page wherever it is.
+-  if ((window_ != window && window != desk_host_) ||
+-      cursor_ == platform_cursor) {
++  // DOMICILE: FROM ANY WINDOW. Every window shares one cursor client, so each
++  // sets the same cursor, and the pointer shows it wherever it is. Taken only
++  // from the window under it, a cursor set while that window was going away
++  // (an unplugged monitor's) never reached the screen, and the old one stayed
++  // until the cursor changed again.
++  if (cursor_ == platform_cursor) {
+     return;
+   }
+ 
+   cursor_ = platform_cursor;
+ 
++  // No window holds the pointer yet; the first one added shows it.
++  if (window_ == gfx::kNullAcceleratedWidget) {
++    return;
++  }
+   SendCursorShowLocked();
+ }
+ 
+diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
+index a13d8c1..bc62c00 100644
+--- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
++++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/notimplemented.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "base/trace_event/trace_event.h"
+ #include "ui/aura/client/cursor_shape_client.h"
+ #include "ui/aura/window_event_dispatcher.h"
+@@ -33,10 +34,12 @@ DesktopNativeCursorManager::~DesktopNativeCursorManager() {
+ 
+ void DesktopNativeCursorManager::AddHost(aura::WindowTreeHost* host) {
+   hosts_.insert(host);
++  RedrawSoon();
+ }
+ 
+ void DesktopNativeCursorManager::RemoveHost(aura::WindowTreeHost* host) {
+   hosts_.erase(host);
++  RedrawSoon();
+ }
+ 
+ void DesktopNativeCursorManager::SetDisplay(
+@@ -128,6 +131,12 @@ void DesktopNativeCursorManager::OnThemeLoaded() {
+   Redraw();
+ }
+ 
++void DesktopNativeCursorManager::RedrawSoon() {
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&DesktopNativeCursorManager::Redraw,
++                                weak_factory_.GetWeakPtr()));
++}
++
+ void DesktopNativeCursorManager::Redraw() {
+   // The first colors arrive from the constructor, before any cursor has been
+   // set and so before there is anything on screen to redraw.
+diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
+index 65de2f2..c646a72 100644
+--- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
++++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
+@@ -10,6 +10,7 @@
+ #include <set>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "ui/base/cursor/cursor_factory.h"
+ #include "ui/views/views_export.h"
+@@ -90,6 +91,12 @@ class VIEWS_EXPORT DesktopNativeCursorManager
+   // last set through.
+   void Redraw();
+ 
++  // Domicile: `Redraw` once the window being added or removed is done. A
++  // monitor's windows coming and going move the pointer to another window,
++  // which must show the current cursor; after the change, so the window the
++  // pointer lands on exists.
++  void RedrawSoon();
++
+   wm::CursorLoader cursor_loader_;
+ 
+   // The delegate the last cursor was set through, which is what a recolor
+@@ -105,6 +112,9 @@ class VIEWS_EXPORT DesktopNativeCursorManager
+   // must hear first. See `OnThemeLoaded`.
+   base::ScopedObservation<ui::CursorFactory, ui::CursorFactoryObserver>
+       cursor_factory_observation_{this};
++
++  // Domicile: for `RedrawSoon`, which must not outlive this manager.
++  base::WeakPtrFactory<DesktopNativeCursorManager> weak_factory_{this};
+ };
+ 
+ }  // namespace views

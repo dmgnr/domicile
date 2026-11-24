@@ -1,0 +1,524 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a virtual GPU draws the pointer where clicks land
+
+The DRM cursor was set with drmModeSetCursor, which carries no hotspot.
+A virtual GPU (vmwgfx, virtio-gpu, qxl) hands the cursor image to its
+host, which draws it at the host's pointer by that hotspot, so with 0,0
+an arrow's tip was drawn 6,4 px up and left of where clicks landed.
+
+The host now sends each cursor's hotspot to the GPU process with its
+bitmaps, and every CRTC sets it with drmModeSetCursor2. The cursor is
+still placed by its image's top left. Chromium sets the cursor through
+the legacy ioctls only, never as an atomic plane, so the atomic HOTSPOT
+properties have nothing to carry.
+---
+ ui/ozone/platform/drm/common/drm_wrapper.cc   |  7 ++--
+ ui/ozone/platform/drm/common/drm_wrapper.h    |  9 +++-
+ ui/ozone/platform/drm/gpu/crtc_controller.cc  | 10 +++--
+ ui/ozone/platform/drm/gpu/crtc_controller.h   |  4 +-
+ ui/ozone/platform/drm/gpu/drm_thread.cc       |  4 +-
+ ui/ozone/platform/drm/gpu/drm_thread.h        |  1 +
+ ui/ozone/platform/drm/gpu/drm_window.cc       |  6 ++-
+ ui/ozone/platform/drm/gpu/drm_window.h        |  5 ++-
+ .../platform/drm/gpu/drm_window_unittest.cc   | 42 ++++++++++++++++++-
+ ui/ozone/platform/drm/gpu/fake_drm_device.cc  |  4 +-
+ ui/ozone/platform/drm/gpu/fake_drm_device.h   |  9 +++-
+ .../drm/gpu/hardware_display_controller.cc    |  6 ++-
+ .../drm/gpu/hardware_display_controller.h     |  6 ++-
+ .../hardware_display_controller_unittest.cc   |  6 +--
+ .../drm/gpu/hardware_display_plane_manager.cc |  3 +-
+ ui/ozone/platform/drm/host/drm_cursor.cc      | 12 +++---
+ ui/ozone/platform/drm/host/drm_cursor.h       |  4 ++
+ .../platform/drm/host/host_cursor_proxy.cc    |  5 ++-
+ .../platform/drm/host/host_cursor_proxy.h     |  1 +
+ .../platform/drm/mojom/device_cursor.mojom    |  4 +-
+ 20 files changed, 115 insertions(+), 33 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/common/drm_wrapper.cc b/ui/ozone/platform/drm/common/drm_wrapper.cc
+index 2c3beca..45e7f81 100644
+--- a/ui/ozone/platform/drm/common/drm_wrapper.cc
++++ b/ui/ozone/platform/drm/common/drm_wrapper.cc
+@@ -190,12 +190,13 @@ bool DrmWrapper::MoveCursor(uint32_t crtc_id, const gfx::Point& point) {
+ 
+ bool DrmWrapper::SetCursor(uint32_t crtc_id,
+                            uint32_t handle,
+-                           const gfx::Size& size) {
++                           const gfx::Size& size,
++                           const gfx::Point& hotspot) {
+   CHECK(drm_fd_.is_valid(), base::NotFatalUntil::M163);
+   TRACE_EVENT2("drm", "DrmWrapper::SetCursor", "crtc_id", crtc_id, "handle",
+                handle);
+-  return !drmModeSetCursor(drm_fd_.get(), crtc_id, handle, size.width(),
+-                           size.height());
++  return !drmModeSetCursor2(drm_fd_.get(), crtc_id, handle, size.width(),
++                            size.height(), hotspot.x(), hotspot.y());
+ }
+ 
+ /************
+diff --git a/ui/ozone/platform/drm/common/drm_wrapper.h b/ui/ozone/platform/drm/common/drm_wrapper.h
+index bb7486b..650c34c 100644
+--- a/ui/ozone/platform/drm/common/drm_wrapper.h
++++ b/ui/ozone/platform/drm/common/drm_wrapper.h
+@@ -124,9 +124,16 @@ class DrmWrapper {
+ 
+   // Set the cursor to be displayed in CRTC |crtc_id|. (width, height) is the
+   // cursor size pointed by |handle|.
++  //
++  // DOMICILE: |hotspot| is the point in the image that the pointer is at. A
++  // GPU drawing the cursor itself ignores it, but a virtual one (vmwgfx,
++  // virtio-gpu, qxl) hands the image to the host, which draws it at the host's
++  // pointer by this point. At 0,0, the host draws an arrow's tip away from
++  // where clicks land.
+   virtual bool SetCursor(uint32_t crtc_id,
+                          uint32_t handle,
+-                         const gfx::Size& size);
++                         const gfx::Size& size,
++                         const gfx::Point& hotspot);
+ 
+   /************
+    * DRM Master
+diff --git a/ui/ozone/platform/drm/gpu/crtc_controller.cc b/ui/ozone/platform/drm/gpu/crtc_controller.cc
+index b6c83e6..8acf8dd 100644
+--- a/ui/ozone/platform/drm/gpu/crtc_controller.cc
++++ b/ui/ozone/platform/drm/gpu/crtc_controller.cc
+@@ -81,11 +81,13 @@ std::vector<uint64_t> CrtcController::GetFormatModifiers(uint32_t format) {
+   return drm_->plane_manager()->GetFormatModifiers(crtc_, format);
+ }
+ 
+-void CrtcController::SetCursor(uint32_t handle, const gfx::Size& size) {
+-  if (is_enabled() && !drm_->SetCursor(crtc_, handle, size)) {
+-    PLOG(ERROR) << "drmModeSetCursor: device " << drm_->device_path().value()
++void CrtcController::SetCursor(uint32_t handle,
++                               const gfx::Size& size,
++                               const gfx::Point& hotspot) {
++  if (is_enabled() && !drm_->SetCursor(crtc_, handle, size, hotspot)) {
++    PLOG(ERROR) << "drmModeSetCursor2: device " << drm_->device_path().value()
+                 << " crtc " << crtc_ << " handle " << handle << " size "
+-                << size.ToString();
++                << size.ToString() << " hotspot " << hotspot.ToString();
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/drm/gpu/crtc_controller.h b/ui/ozone/platform/drm/gpu/crtc_controller.h
+index d91d3b3..0824f40 100644
+--- a/ui/ozone/platform/drm/gpu/crtc_controller.h
++++ b/ui/ozone/platform/drm/gpu/crtc_controller.h
+@@ -63,7 +63,9 @@ class CrtcController {
+   // gbm will pick a modifier as it allocates the bo.
+   std::vector<uint64_t> GetFormatModifiers(uint32_t fourcc_format);
+ 
+-  void SetCursor(uint32_t handle, const gfx::Size& size);
++  void SetCursor(uint32_t handle,
++                 const gfx::Size& size,
++                 const gfx::Point& hotspot);
+   void MoveCursor(const gfx::Point& location);
+ 
+   // Adds trace records to |context|.
+diff --git a/ui/ozone/platform/drm/gpu/drm_thread.cc b/ui/ozone/platform/drm/gpu/drm_thread.cc
+index 39b026e..95c52c1 100644
+--- a/ui/ozone/platform/drm/gpu/drm_thread.cc
++++ b/ui/ozone/platform/drm/gpu/drm_thread.cc
+@@ -338,10 +338,12 @@ void DrmThread::SetWindowBounds(gfx::AcceleratedWidget widget,
+ 
+ void DrmThread::SetCursor(gfx::AcceleratedWidget widget,
+                           const std::vector<SkBitmap>& bitmaps,
++                          const gfx::Point& hotspot,
+                           const std::optional<gfx::Point>& location,
+                           base::TimeDelta frame_delay) {
+   TRACE_EVENT0("drm", "DrmThread::SetCursor");
+-  screen_manager_->GetWindow(widget)->SetCursor(bitmaps, location, frame_delay);
++  screen_manager_->GetWindow(widget)->SetCursor(bitmaps, hotspot, location,
++                                                frame_delay);
+ }
+ 
+ void DrmThread::MoveCursor(gfx::AcceleratedWidget widget,
+diff --git a/ui/ozone/platform/drm/gpu/drm_thread.h b/ui/ozone/platform/drm/gpu/drm_thread.h
+index b32835b..aeac0fb 100644
+--- a/ui/ozone/platform/drm/gpu/drm_thread.h
++++ b/ui/ozone/platform/drm/gpu/drm_thread.h
+@@ -216,6 +216,7 @@ class DrmThread : public base::Thread,
+   // ozone::mojom::DeviceCursor
+   void SetCursor(gfx::AcceleratedWidget widget,
+                  const std::vector<SkBitmap>& bitmaps,
++                 const gfx::Point& hotspot,
+                  const std::optional<gfx::Point>& location,
+                  base::TimeDelta frame_delay) override;
+   void MoveCursor(gfx::AcceleratedWidget widget,
+diff --git a/ui/ozone/platform/drm/gpu/drm_window.cc b/ui/ozone/platform/drm/gpu/drm_window.cc
+index 7d4e17b..b597f43 100644
+--- a/ui/ozone/platform/drm/gpu/drm_window.cc
++++ b/ui/ozone/platform/drm/gpu/drm_window.cc
+@@ -65,9 +65,11 @@ void DrmWindow::SetBounds(const gfx::Rect& bounds) {
+ }
+ 
+ void DrmWindow::SetCursor(const std::vector<SkBitmap>& bitmaps,
++                          const gfx::Point& hotspot,
+                           const std::optional<gfx::Point>& location,
+                           base::TimeDelta frame_delay) {
+   cursor_bitmaps_ = bitmaps;
++  cursor_hotspot_ = hotspot;
+   if (location.has_value()) {
+     cursor_location_ = location.value();
+   }
+@@ -141,10 +143,10 @@ void DrmWindow::UpdateCursorImage() {
+   if (!controller_)
+     return;
+   if (cursor_bitmaps_.size()) {
+-    controller_->SetCursor(cursor_bitmaps_[cursor_frame_]);
++    controller_->SetCursor(cursor_bitmaps_[cursor_frame_], cursor_hotspot_);
+   } else {
+     // No cursor set.
+-    controller_->SetCursor(SkBitmap());
++    controller_->SetCursor(SkBitmap(), gfx::Point());
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/drm/gpu/drm_window.h b/ui/ozone/platform/drm/gpu/drm_window.h
+index 0ed2943..e82c02f 100644
+--- a/ui/ozone/platform/drm/gpu/drm_window.h
++++ b/ui/ozone/platform/drm/gpu/drm_window.h
+@@ -77,8 +77,10 @@ class DrmWindow {
+   void SetBounds(const gfx::Rect& bounds);
+ 
+   // Update the HW cursor bitmap & move to the location if specified.
+-  // If the bitmap is empty, the cursor is hidden.
++  // If the bitmap is empty, the cursor is hidden. |hotspot| is the point in
++  // each bitmap that the pointer is at.
+   void SetCursor(const std::vector<SkBitmap>& bitmaps,
++                 const gfx::Point& hotspot,
+                  const std::optional<gfx::Point>& location,
+                  base::TimeDelta frame_delay);
+ 
+@@ -120,6 +122,7 @@ class DrmWindow {
+ 
+   base::RepeatingTimer cursor_timer_;
+   std::vector<SkBitmap> cursor_bitmaps_;
++  gfx::Point cursor_hotspot_;
+   gfx::Point cursor_location_;
+   int cursor_frame_ = 0;
+ 
+diff --git a/ui/ozone/platform/drm/gpu/drm_window_unittest.cc b/ui/ozone/platform/drm/gpu/drm_window_unittest.cc
+index 854fc8c..ad465a5 100644
+--- a/ui/ozone/platform/drm/gpu/drm_window_unittest.cc
++++ b/ui/ozone/platform/drm/gpu/drm_window_unittest.cc
+@@ -175,7 +175,7 @@ TEST_F(DrmWindowTest, SetCursorImage) {
+   const gfx::Size cursor_size(6, 4);
+   screen_manager_->GetWindow(kDefaultWidgetHandle)
+       ->SetCursor(std::vector<SkBitmap>(1, AllocateBitmap(cursor_size)),
+-                  gfx::Point(4, 2), base::TimeDelta());
++                  gfx::Point(), gfx::Point(4, 2), base::TimeDelta());
+ 
+   SkBitmap cursor;
+   std::vector<sk_sp<SkSurface>> cursor_buffers = GetCursorBuffers(drm_);
+@@ -201,7 +201,7 @@ TEST_F(DrmWindowTest, CheckCursorSurfaceAfterChangingDevice) {
+   const gfx::Size cursor_size(6, 4);
+   screen_manager_->GetWindow(kDefaultWidgetHandle)
+       ->SetCursor(std::vector<SkBitmap>(1, AllocateBitmap(cursor_size)),
+-                  gfx::Point(4, 2), base::TimeDelta());
++                  gfx::Point(), gfx::Point(4, 2), base::TimeDelta());
+ 
+   // Add another device.
+   InitializeDrmState(drm2_.get());
+@@ -227,6 +227,44 @@ TEST_F(DrmWindowTest, CheckCursorSurfaceAfterChangingDevice) {
+   EXPECT_NE(0u, drm2_->get_cursor_handle_for_crtc(crtc_id_));
+ }
+ 
++// DOMICILE: a virtual GPU (vmwgfx, virtio-gpu, qxl) hands the cursor image to
++// its host, which draws it at the host's pointer by its hotspot. Each CRTC is
++// told the hotspot, or the arrow's tip is drawn away from where clicks land.
++using DrmCursorHotspotTest = DrmWindowTest;
++
++TEST_F(DrmCursorHotspotTest, TheCrtcIsToldWhereThePointerIsInTheImage) {
++  screen_manager_->GetWindow(kDefaultWidgetHandle)
++      ->SetCursor(std::vector<SkBitmap>(1, AllocateBitmap(gfx::Size(24, 24))),
++                  gfx::Point(6, 4), gfx::Point(94, 96), base::TimeDelta());
++
++  EXPECT_EQ(gfx::Point(6, 4), drm_->get_crtc_cursor_hotspot(crtc_id_));
++  // Still the image's top left: the host takes the hotspot off, not us.
++  EXPECT_EQ(gfx::Point(94, 96), drm_->get_crtc_cursor_location(crtc_id_));
++}
++
++TEST_F(DrmCursorHotspotTest, TheHotspotFollowsTheWindowOntoAnotherDevice) {
++  screen_manager_->GetWindow(kDefaultWidgetHandle)
++      ->SetCursor(std::vector<SkBitmap>(1, AllocateBitmap(gfx::Size(24, 24))),
++                  gfx::Point(6, 4), gfx::Point(94, 96), base::TimeDelta());
++
++  InitializeDrmState(drm2_.get());
++  screen_manager_->AddDisplayController(drm2_, crtc_id_, connector_id_);
++  std::vector<ControllerConfigParams> controllers_to_enable;
++  controllers_to_enable.emplace_back(
++      /*display_id=*/2, drm2_, crtc_id_, connector_id_,
++      gfx::Point(0, kDefaultMode.vdisplay),
++      std::make_unique<drmModeModeInfo>(kDefaultMode));
++  screen_manager_->ConfigureDisplayControllers(
++      controllers_to_enable, {display::ModesetFlag::kTestModeset,
++                              display::ModesetFlag::kCommitModeset});
++  screen_manager_->GetWindow(kDefaultWidgetHandle)
++      ->SetBounds(gfx::Rect(0, kDefaultMode.vdisplay, kDefaultMode.hdisplay,
++                            kDefaultMode.vdisplay));
++
++  EXPECT_NE(0u, drm2_->get_cursor_handle_for_crtc(crtc_id_));
++  EXPECT_EQ(gfx::Point(6, 4), drm2_->get_crtc_cursor_hotspot(crtc_id_));
++}
++
+ TEST_F(DrmWindowTest, CheckPageflipSuccessOnSuccessfulSwap) {
+   DrmOverlayPlaneList planes;
+   planes.push_back(DrmOverlayPlane::TestPlane(CreateBuffer()));
+diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.cc b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
+index 3207cc8..247f69e 100644
+--- a/ui/ozone/platform/drm/gpu/fake_drm_device.cc
++++ b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
+@@ -815,8 +815,10 @@ bool FakeDrmDevice::SetObjectProperty(uint32_t object_id,
+ 
+ bool FakeDrmDevice::SetCursor(uint32_t crtc_id,
+                               uint32_t handle,
+-                              const gfx::Size& size) {
++                              const gfx::Size& size,
++                              const gfx::Point& hotspot) {
+   crtc_cursor_map_[crtc_id] = handle;
++  crtc_cursor_hotspot_map_[crtc_id] = hotspot;
+   return true;
+ }
+ 
+diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.h b/ui/ozone/platform/drm/gpu/fake_drm_device.h
+index 5ea0f5b..81fb3e1 100644
+--- a/ui/ozone/platform/drm/gpu/fake_drm_device.h
++++ b/ui/ozone/platform/drm/gpu/fake_drm_device.h
+@@ -249,6 +249,11 @@ class FakeDrmDevice : public DrmDevice {
+     return it != crtc_cursor_map_.end() ? it->second : 0;
+   }
+ 
++  gfx::Point get_crtc_cursor_hotspot(uint32_t crtc) const {
++    const auto it = crtc_cursor_hotspot_map_.find(crtc);
++    return it != crtc_cursor_hotspot_map_.end() ? it->second : gfx::Point();
++  }
++
+   gfx::Point get_crtc_cursor_location(uint32_t crtc) const {
+     const auto it = crtc_cursor_location_map_.find(crtc);
+     return it != crtc_cursor_location_map_.end() ? it->second : gfx::Point();
+@@ -397,7 +402,8 @@ class FakeDrmDevice : public DrmDevice {
+                          uint32_t property_value) override;
+   bool SetCursor(uint32_t crtc_id,
+                  uint32_t handle,
+-                 const gfx::Size& size) override;
++                 const gfx::Size& size,
++                 const gfx::Point& hotspot) override;
+   bool MoveCursor(uint32_t crtc_id, const gfx::Point& point) override;
+   bool CommitProperties(drmModeAtomicReq* request,
+                         uint32_t flags,
+@@ -501,6 +507,7 @@ class FakeDrmDevice : public DrmDevice {
+ 
+   std::map<uint32_t, uint32_t> crtc_cursor_map_;
+   std::unordered_map<uint32_t, gfx::Point> crtc_cursor_location_map_;
++  std::unordered_map<uint32_t, gfx::Point> crtc_cursor_hotspot_map_;
+ 
+   std::set<uint32_t> framebuffer_ids_;
+   std::map<uint32_t, uint32_t> crtc_fb_;
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
+index e940fca..bbec2ca 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
+@@ -499,7 +499,9 @@ void HardwareDisplayController::MoveCursor(const gfx::Point& location) {
+   UpdateCursorLocation();
+ }
+ 
+-void HardwareDisplayController::SetCursor(SkBitmap bitmap) {
++void HardwareDisplayController::SetCursor(SkBitmap bitmap,
++                                          const gfx::Point& hotspot) {
++  cursor_hotspot_ = hotspot;
+   if (bitmap.drawsNothing()) {
+     current_cursor_ = nullptr;
+   } else {
+@@ -755,7 +757,7 @@ void HardwareDisplayController::UpdateCursorImage() {
+   }
+ 
+   for (const auto& controller : crtc_controllers_) {
+-    controller->SetCursor(handle, size);
++    controller->SetCursor(handle, size, cursor_hotspot_);
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller.h b/ui/ozone/platform/drm/gpu/hardware_display_controller.h
+index 1cdf54e..05124fa 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_controller.h
++++ b/ui/ozone/platform/drm/gpu/hardware_display_controller.h
+@@ -164,8 +164,9 @@ class HardwareDisplayController {
+   // Moves the hardware cursor to |location|.
+   void MoveCursor(const gfx::Point& location);
+ 
+-  // Set the hardware cursor to show the contents of |bitmap| at |location|.
+-  void SetCursor(SkBitmap bitmap);
++  // Set the hardware cursor to show the contents of |bitmap|, with the pointer
++  // at |hotspot| in it.
++  void SetCursor(SkBitmap bitmap, const gfx::Point& hotspot);
+ 
+   void AddCrtc(std::unique_ptr<CrtcController> controller);
+   std::unique_ptr<CrtcController> RemoveCrtc(
+@@ -285,6 +286,7 @@ class HardwareDisplayController {
+                  CursorSizeComparator>
+       cursor_buffer_map_;
+   gfx::Point cursor_location_;
++  gfx::Point cursor_hotspot_;
+   raw_ptr<DrmDumbBuffer> current_cursor_ = nullptr;
+ 
+   // Maps each fourcc_format to its preferred modifier which was generated
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc b/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
+index c3d8c30..26d6c3e 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
+@@ -1728,15 +1728,15 @@ TEST_F(HardwareDisplayControllerTest, DynamicCursorSize) {
+ 
+   // HardwareDisplayController should select the smallest size in the supported
+   // list that fits the input cursor bitmap.
+-  controller_->SetCursor(CreateBitmap(25, 25));
++  controller_->SetCursor(CreateBitmap(25, 25), gfx::Point());
+   EXPECT_EQ(gfx::Size(64, 64), controller_->CurrentCursorSizeForTesting());
+ 
+-  controller_->SetCursor(CreateBitmap(25, 65));
++  controller_->SetCursor(CreateBitmap(25, 65), gfx::Point());
+   EXPECT_EQ(gfx::Size(128, 128), controller_->CurrentCursorSizeForTesting());
+ 
+   // If the input bitmap exceeds the max supported size, make sure the largest
+   // size supported is used.
+-  controller_->SetCursor(CreateBitmap(300, 300));
++  controller_->SetCursor(CreateBitmap(300, 300), gfx::Point());
+   EXPECT_EQ(gfx::Size(256, 256), controller_->CurrentCursorSizeForTesting());
+ }
+ 
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager.cc
+index 6422816..f228441 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager.cc
+@@ -548,7 +548,8 @@ void HardwareDisplayPlaneManager::UpdateCrtcAndPlaneStatesAfterModeset(
+         disable_planes_lists.insert(crtc_request.plane_list());
+ 
+       // TODO(crbug.com/40151802): Use atomic APIs to reset cursor plane.
+-      if (!drm_->SetCursor(crtc_request.crtc_id(), 0, gfx::Size())) {
++      if (!drm_->SetCursor(crtc_request.crtc_id(), 0, gfx::Size(),
++                           gfx::Point())) {
+         PLOG(ERROR) << "Failed to drmModeSetCursor: device:"
+                     << drm_->device_path().value()
+                     << " crtc:" << crtc_request.crtc_id();
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.cc b/ui/ozone/platform/drm/host/drm_cursor.cc
+index f4f3ac8..44df301 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.cc
++++ b/ui/ozone/platform/drm/host/drm_cursor.cc
+@@ -41,6 +41,7 @@ class NullProxy : public DrmCursorProxy {
+ 
+   void CursorSet(gfx::AcceleratedWidget window,
+                  const std::vector<SkBitmap>& bitmaps,
++                 const gfx::Point& hotspot,
+                  const std::optional<gfx::Point>& point,
+                  base::TimeDelta frame_delay) override {}
+   void Move(gfx::AcceleratedWidget window, const gfx::Point& point) override {}
+@@ -544,8 +545,8 @@ void DrmCursor::SendCursorShowLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
+     return;
+   }
+ 
+-  CursorSetLockTested(window_, cursor_->bitmaps(), GetBitmapLocationLocked(),
+-                      cursor_->frame_delay());
++  CursorSetLockTested(window_, cursor_->bitmaps(), cursor_->hotspot(),
++                      GetBitmapLocationLocked(), cursor_->frame_delay());
+ }
+ 
+ // DOMICILE: the compositor's screen casts draw the pointer on screen, which
+@@ -573,8 +574,8 @@ void DrmCursor::SetDeskCursorImageLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
+ }
+ 
+ void DrmCursor::SendCursorHideLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
+-  CursorSetLockTested(window_, std::vector<SkBitmap>(), std::nullopt,
+-                      base::TimeDelta());
++  CursorSetLockTested(window_, std::vector<SkBitmap>(), gfx::Point(),
++                      std::nullopt, base::TimeDelta());
+ }
+ 
+ void DrmCursor::SendCursorMoveLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
+@@ -587,10 +588,11 @@ void DrmCursor::SendCursorMoveLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
+ // Lock-testing helpers.
+ void DrmCursor::CursorSetLockTested(gfx::AcceleratedWidget window,
+                                     const std::vector<SkBitmap>& bitmaps,
++                                    const gfx::Point& hotspot,
+                                     const std::optional<gfx::Point>& point,
+                                     base::TimeDelta frame_delay) {
+   lock_.AssertAcquired();
+-  proxy_->CursorSet(window, bitmaps, point, frame_delay);
++  proxy_->CursorSet(window, bitmaps, hotspot, point, frame_delay);
+ }
+ 
+ void DrmCursor::MoveLockTested(gfx::AcceleratedWidget window,
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.h b/ui/ozone/platform/drm/host/drm_cursor.h
+index 8cab80f..acec381 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.h
++++ b/ui/ozone/platform/drm/host/drm_cursor.h
+@@ -38,8 +38,11 @@ class DrmCursorProxy {
+   virtual ~DrmCursorProxy() = default;
+ 
+   // Sets the cursor |bitmaps| on |window| at |point| with |frame_delay|.
++  // |hotspot| is the point in each bitmap that the pointer is at; |point| is
++  // the bitmap's top left.
+   virtual void CursorSet(gfx::AcceleratedWidget window,
+                          const std::vector<SkBitmap>& bitmaps,
++                         const gfx::Point& hotspot,
+                          const std::optional<gfx::Point>& point,
+                          base::TimeDelta frame_delay) = 0;
+   // Moves the cursor in |window| to |point|.
+@@ -146,6 +149,7 @@ class DrmCursor : public CursorDelegateEvdev {
+   // Lock-testing helpers.
+   void CursorSetLockTested(gfx::AcceleratedWidget window,
+                            const std::vector<SkBitmap>& bitmaps,
++                           const gfx::Point& hotspot,
+                            const std::optional<gfx::Point>& point,
+                            base::TimeDelta frame_delay);
+   void MoveLockTested(gfx::AcceleratedWidget window, const gfx::Point& point);
+diff --git a/ui/ozone/platform/drm/host/host_cursor_proxy.cc b/ui/ozone/platform/drm/host/host_cursor_proxy.cc
+index 0efa110..bf1f7bc 100644
+--- a/ui/ozone/platform/drm/host/host_cursor_proxy.cc
++++ b/ui/ozone/platform/drm/host/host_cursor_proxy.cc
+@@ -40,13 +40,14 @@ HostCursorProxy::~HostCursorProxy() {
+ 
+ void HostCursorProxy::CursorSet(gfx::AcceleratedWidget widget,
+                                 const std::vector<SkBitmap>& bitmaps,
++                                const gfx::Point& hotspot,
+                                 const std::optional<gfx::Point>& location,
+                                 base::TimeDelta frame_delay) {
+   if (ui_thread_ref_ == base::PlatformThread::CurrentRef()) {
+-    main_cursor_->SetCursor(widget, bitmaps, location, frame_delay);
++    main_cursor_->SetCursor(widget, bitmaps, hotspot, location, frame_delay);
+   } else {
+     InitializeOnEvdevIfNecessary();
+-    evdev_cursor_->SetCursor(widget, bitmaps, location, frame_delay);
++    evdev_cursor_->SetCursor(widget, bitmaps, hotspot, location, frame_delay);
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/drm/host/host_cursor_proxy.h b/ui/ozone/platform/drm/host/host_cursor_proxy.h
+index 16b7d6f..8192f1c 100644
+--- a/ui/ozone/platform/drm/host/host_cursor_proxy.h
++++ b/ui/ozone/platform/drm/host/host_cursor_proxy.h
+@@ -37,6 +37,7 @@ class HostCursorProxy : public DrmCursorProxy {
+   // DrmCursorProxy.
+   void CursorSet(gfx::AcceleratedWidget window,
+                  const std::vector<SkBitmap>& bitmaps,
++                 const gfx::Point& hotspot,
+                  const std::optional<gfx::Point>& point,
+                  base::TimeDelta frame_delay) override;
+   void Move(gfx::AcceleratedWidget window, const gfx::Point& point) override;
+diff --git a/ui/ozone/platform/drm/mojom/device_cursor.mojom b/ui/ozone/platform/drm/mojom/device_cursor.mojom
+index 202f25e..33613cf 100644
+--- a/ui/ozone/platform/drm/mojom/device_cursor.mojom
++++ b/ui/ozone/platform/drm/mojom/device_cursor.mojom
+@@ -14,9 +14,11 @@ import "ui/gfx/mojom/accelerated_widget.mojom";
+ // dedicated thread within the Ozone platform.
+ interface DeviceCursor {
+   // Sets the cursor |bitmaps| on |window| with |frame_delay|. If |point|
+-  // is present, sets the cursor at |point| as well.
++  // is present, sets the cursor at |point| as well. |hotspot| is the point in
++  // each bitmap that the pointer is at; |point| is the bitmap's top left.
+   SetCursor(gfx.mojom.AcceleratedWidget window,
+             array<skia.mojom.BitmapN32> bitmaps,
++            gfx.mojom.Point hotspot,
+             gfx.mojom.Point? point,
+             mojo_base.mojom.TimeDelta frame_delay);
+ 

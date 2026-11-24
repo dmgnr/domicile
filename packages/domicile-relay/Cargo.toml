@@ -1,0 +1,19 @@
+[package]
+name = "domicile-relay"
+description = "Forwards connections for a desk's own address to the desk, without decrypting them, so agents on the web can reach it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# A desk proves it holds the key its address is named for.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+
+[[bin]]
+name = "domicile-relay"
+path = "src/main.rs"

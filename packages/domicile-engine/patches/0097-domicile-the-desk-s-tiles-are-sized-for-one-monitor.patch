@@ -60,7 +60,7 @@ index d5980ce..ea368fe 100644
        device_viewport_rect(prev.device_viewport_rect),
        visual_device_viewport_size(prev.visual_device_viewport_size),
 diff --git a/cc/trees/commit_state.h b/cc/trees/commit_state.h
-index 3471208..8487e82 100644
+index f7296b0..d58783a 100644
 --- a/cc/trees/commit_state.h
 +++ b/cc/trees/commit_state.h
 @@ -103,6 +103,7 @@ struct CC_EXPORT CommitState {
@@ -72,10 +72,10 @@ index 3471208..8487e82 100644
    gfx::OverlayTransform display_transform_hint = gfx::OVERLAY_TRANSFORM_NONE;
    gfx::Rect device_viewport_rect;
 diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
-index 0ead33d..c278764 100644
+index 18099d9..c7b24a4 100644
 --- a/cc/trees/layer_tree_host.cc
 +++ b/cc/trees/layer_tree_host.cc
-@@ -1725,6 +1725,19 @@ void LayerTreeHost::SetDomicileTileBytes(size_t bytes) {
+@@ -1733,6 +1733,19 @@ void LayerTreeHost::SetDomicileTileBytes(size_t bytes) {
    SetNeedsCommit();
  }
  
@@ -96,10 +96,10 @@ index 0ead33d..c278764 100644
      const gfx::DisplayColorSpaces& display_color_spaces) {
    if (pending_commit_state()->display_color_spaces == display_color_spaces)
 diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
-index dec15b4..acf29cd 100644
+index 93fa2bc..85ad1cf 100644
 --- a/cc/trees/layer_tree_host.h
 +++ b/cc/trees/layer_tree_host.h
-@@ -700,6 +700,9 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+@@ -710,6 +710,9 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
    // DOMICILE: the tile memory those monitors need, which the compositor's
    // budget is raised to. See cc/domicile/display_regions.h.
    void SetDomicileTileBytes(size_t bytes);
@@ -110,10 +110,10 @@ index dec15b4..acf29cd 100644
    bool HasCompositorDrivenScrollAnimationForTesting() const {
      DCHECK(IsMainThread());
 diff --git a/third_party/blink/renderer/platform/widget/widget_base.cc b/third_party/blink/renderer/platform/widget/widget_base.cc
-index 87b48a9..1328838 100644
+index c36e698..8b27a28 100644
 --- a/third_party/blink/renderer/platform/widget/widget_base.cc
 +++ b/third_party/blink/renderer/platform/widget/widget_base.cc
-@@ -2039,6 +2039,8 @@ void WidgetBase::UpdateDomicileDisplayRegions() {
+@@ -2043,6 +2043,8 @@ void WidgetBase::UpdateDomicileDisplayRegions() {
    }
    LayerTreeHost()->SetDomicileDisplayRegions(cc::DomicileDisplayRegionsOf(
        displays, widget_screen_rect_.origin(), GetOriginalDeviceScaleFactor()));

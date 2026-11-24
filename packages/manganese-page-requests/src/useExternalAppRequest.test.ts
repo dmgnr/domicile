@@ -4,7 +4,9 @@ import {
   WEBVIEW_EXTERNAL_APP_WITHDRAWN_EVENT,
 } from "@domicile-desktop/sdk/webview-element";
 import { act, renderHook } from "@testing-library/react";
+import { createElement } from "react";
 
+import { ShellLinksContext } from "./shell-links";
 import { useExternalAppRequest } from "./useExternalAppRequest";
 
 /**
@@ -93,5 +95,34 @@ describe("useExternalAppRequest", () => {
 
     expect(result.current).toBeUndefined();
     expect(answers).toStrictEqual([]);
+  });
+});
+
+describe("useExternalAppRequest with links the shell opens", () => {
+  it("hands the shell a link it opens itself, and asks nothing", () => {
+    const view = document.createElement("webview");
+    const answers: string[] = [];
+    const opened: string[] = [];
+    const { result } = renderHook(() => useExternalAppRequest(view), {
+      wrapper: ({ children }) =>
+        createElement(
+          ShellLinksContext,
+          {
+            value: {
+              open: (url) => {
+                opened.push(url);
+              },
+              opens: (url) => url.startsWith("zoommtg:"),
+            },
+          },
+          children,
+        ),
+    });
+
+    opens(view, answers);
+
+    expect(opened).toStrictEqual(["zoommtg://zoom.us/join?confno=1"]);
+    expect(answers).toStrictEqual(["dismiss"]);
+    expect(result.current).toBeUndefined();
   });
 });

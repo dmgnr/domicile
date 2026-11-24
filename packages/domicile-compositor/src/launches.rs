@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 /// The file's contents.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,14 +53,14 @@ pub fn left(path: &Path, started: impl Fn(u32) -> Option<u64>) -> Left {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Left::default(),
         Err(err) => {
-            warn!(%err, path = %path.display(), "the last compositor's launches would not read; launching none of them again");
+            tracing::error!(%err, path = %path.display(), "the last compositor's launches would not read; launching none of them again");
             return Left::default();
         }
     };
     match serde_json::from_str::<Record>(&text) {
         Ok(record) => lost(record, started),
         Err(err) => {
-            warn!(%err, path = %path.display(), "the last compositor's launches would not parse; launching none of them again");
+            tracing::error!(%err, path = %path.display(), "the last compositor's launches would not parse; launching none of them again");
             Left::default()
         }
     }
@@ -151,7 +150,7 @@ impl Launches {
         let written =
             std::fs::write(&staging, document).and_then(|()| std::fs::rename(&staging, &self.path));
         if let Err(err) = written {
-            warn!(%err, path = %self.path.display(), "the launched clients would not save; a compositor crash will not launch them again");
+            tracing::error!(%err, path = %self.path.display(), "the launched clients would not save; a compositor crash will not launch them again");
         }
     }
 }

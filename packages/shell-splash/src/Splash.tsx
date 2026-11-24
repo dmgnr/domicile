@@ -82,7 +82,9 @@ const Scene = ({ progress }: { readonly progress: Progress }) => (
       <span className={glowStyles} data-glow="deep" />
       <span className={glowStyles} data-glow="core" />
     </div>
-    <div aria-hidden className={gridStyles} />
+    <div aria-hidden className={gridStyles}>
+      <div className={gridDotsStyles} />
+    </div>
     <div aria-hidden className={vignetteStyles} />
     <div className={contentStyles} data-content="">
       <Mark />
@@ -341,6 +343,7 @@ const sceneStyles = css({
   isolation: "isolate",
   overflow: "hidden",
   position: "absolute",
+  // main-thread animation: the aurora eases to `danger` once, on a failure.
   transition: `
     --glow-cool {durations.ending} {easings.in-out},
     --glow-core {durations.ending} {easings.in-out},
@@ -404,14 +407,23 @@ const glowStyles = css({
   position: "absolute",
 });
 
+// Holds the mask still while the dots creep under it.
 const gridStyles = css({
+  inset: 0,
+  maskImage:
+    "radial-gradient(ellipse at center, {colors.foreground}, transparent 65%)",
+  overflow: "hidden",
+  position: "absolute",
+});
+
+// A cell bigger than the screen on each side, so sliding one cell with a
+// transform loops without a seam.
+const gridDotsStyles = css({
   animation: "gridCreep {durations.drift} {easings.linear} infinite",
   backgroundImage:
     "radial-gradient(color-mix(in oklab, {colors.foreground} 18%, transparent) 1px, transparent 1px)",
   backgroundSize: "{spacing.8} {spacing.8}",
-  inset: 0,
-  maskImage:
-    "radial-gradient(ellipse at center, {colors.foreground}, transparent 65%)",
+  inset: -8,
   position: "absolute",
 });
 

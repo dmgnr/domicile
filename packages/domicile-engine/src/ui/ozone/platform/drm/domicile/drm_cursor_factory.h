@@ -28,7 +28,7 @@ class PlatformCursor;
 // `wm::CursorLoader` uses any non-null platform cursor and loads assets only
 // on null. `BitmapCursorFactory` returns a typed cursor with no bitmap, which
 // suits compositors that draw cursors by type. ozone/drm passes that empty
-// bitmap to `drmModeSetCursor` with handle 0, which hides the cursor without
+// bitmap to `drmModeSetCursor2` with handle 0, which hides the cursor without
 // any error. Ash avoids this by building its loader with
 // `use_platform_cursors=false`; `views::DesktopNativeCursorManager` uses the
 // default, true.
@@ -37,7 +37,8 @@ class PlatformCursor;
 // and `DrmCursor` hides the cursor on that type. Null would show an arrow.
 //
 // A theme loads on the thread pool, once per size in pixels, the first time a
-// cursor is asked for at that size. Until then the answer is null. When it
+// cursor is asked for at that size. Until then the nearest loaded size stands
+// in, or the answer is null when none has loaded. When it
 // loads, and when the theme changes, the factory tells its observers, which
 // drop their cursors and set the one on screen again.
 //
@@ -87,6 +88,13 @@ class DrmCursorFactory : public BitmapCursorFactory,
   void OnDeskCursorThemeChanged() override;
 
  private:
+  // A theme's cursors by size in pixels.
+  using Sizes =
+      base::flat_map<int, base::flat_map<mojom::CursorType, XCursorImages>>;
+
+  // The loaded size nearest `size`, or `loaded_.end()` when none is.
+  Sizes::const_iterator NearestLoaded(int size) const;
+
   void Loaded(const DeskCursorTheme& theme,
               int size,
               base::flat_map<mojom::CursorType, XCursorImages> images);
@@ -95,9 +103,11 @@ class DrmCursorFactory : public BitmapCursorFactory,
   const ThemeLoader load_;
 
   // The theme's cursors by size in pixels.
-  base::flat_map<int, base::flat_map<mojom::CursorType, XCursorImages>> loaded_;
+  Sizes loaded_;
   // Sizes posted to the thread pool and not yet back.
   base::flat_set<int> loading_;
+  // Types the theme lacks that were already logged.
+  base::flat_set<mojom::CursorType> said_lacking_;
 
   base::ScopedObservation<DeskCursorThemeSource,
                           DeskCursorThemeSource::Observer>

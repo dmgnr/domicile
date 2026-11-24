@@ -49,6 +49,12 @@ export enum PortalKind {
   Screenshot,
   /** Pick a pixel of a frozen desk, for its color. */
   PickColor,
+  /**
+   * An agent, such as Claude Code through `domicile mcp`, asks to see and use
+   * the desk: all of it, or only the windows the user checks. Answer with
+   * {@link PortalAnswer.Agent}.
+   */
+  Agent,
   /** A kind this SDK cannot parse. Answer it with {@link PortalAnswer.Refused}. */
   Unknown,
 }
@@ -181,6 +187,82 @@ export type Devices = {
 export type RemoteDesktopBody = {
   devices: Devices;
   clipboard: boolean;
+};
+
+/** A window an agent may be let reach. */
+export type AgentWindow = {
+  /** Its `domicile list-windows` id. */
+  id: string;
+  /** A browser window rather than a native one. */
+  browser: boolean;
+  /** Empty when it has none. */
+  title: string;
+  /** A native window's desktop entry id, or a browser window's app id. */
+  app: string | undefined;
+};
+
+/** An agent's ask: its name, and the windows the user may pick from. */
+export type AgentBody = {
+  /** What the agent calls itself, such as "Claude Code". Not checked. */
+  agent: string;
+  /** Every window open but private browser windows, which no agent reaches. */
+  windows: readonly AgentWindow[];
+  /**
+   * What it reaches now, when the user asked to change it with
+   * {@link PortalAnswer.Change}; canceling keeps it. `undefined` when it
+   * asks to come in.
+   */
+  current: AgentReach | undefined;
+  /** Whether it comes in without asking now, so Remember starts on. */
+  remembered: boolean;
+};
+
+/** What an agent may reach. */
+export type AgentReach =
+  /** Every window, the pointer and the keyboard. */
+  | { kind: "desk" }
+  /**
+   * These windows alone, through their accessibility trees and their own
+   * screenshots. Never the pointer or the keyboard.
+   */
+  | { kind: "windows"; windows: readonly AgentWindow[] };
+
+/** An agent let in now. */
+export type ConnectedAgent = {
+  /** Its {@link CapturingKind.Agent} session's id. */
+  session: number;
+  agent: string;
+  reach: AgentReach;
+};
+
+/** An agent let reach the whole desk without asking, until forgotten. */
+export type RememberedAgent = {
+  agent: string;
+  /** When it was last let in, in milliseconds since the Unix epoch. */
+  lastUsedMs: number;
+};
+
+/** The agents the desk knows. */
+export type KnownAgents = {
+  /** Let in now, oldest first. */
+  connected: readonly ConnectedAgent[];
+  /** Let in without asking, most recently used first. */
+  remembered: readonly RememberedAgent[];
+};
+
+/** One thing an agent did, in its words. */
+export type AgentAction = {
+  said: string;
+  /** When, in milliseconds since the Unix epoch, as `Date.now()` counts. */
+  atMs: number;
+};
+
+/** An agent the user let in. */
+export type AgentSessionBody = {
+  agent: string;
+  reach: AgentReach;
+  /** What it did last, newest first; a handful at most. */
+  actions: readonly AgentAction[];
 };
 
 /** What an input capture session asks to take. */
@@ -555,6 +637,11 @@ export const PortalRequest = {
     body,
     kind: PortalKind.Account as const,
   }),
+  Agent: (base: PortalRequestBase, body: AgentBody) => ({
+    ...base,
+    body,
+    kind: PortalKind.Agent as const,
+  }),
   AppChooser: (base: PortalRequestBase, body: AppChooserBody) => ({
     ...base,
     body,
@@ -677,6 +764,10 @@ export enum PortalAnswerKind {
   ScreenshotBrowserWindow,
   /** The pixel of a {@link PortalKind.PickColor} the user picked. */
   PickColor,
+  /** What the user lets a {@link PortalKind.Agent} reach. */
+  Agent,
+  /** The user asked to change what a {@link CapturingKind.Agent} reaches. */
+  Change,
   /** The user dismissed or denied the dialog. */
   Canceled,
   /** The shell has no dialog for this kind. */
@@ -685,12 +776,23 @@ export enum PortalAnswerKind {
 
 export const PortalAnswer = {
   Access: () => ({ kind: PortalAnswerKind.Access as const }),
+  /**
+   * Windows must be ones the request offered, and at least one. `remember`
+   * lets the agent in without asking next time, and takes the whole desk.
+   */
+  Agent: (reach: AgentReach, remember = false) => ({
+    kind: PortalAnswerKind.Agent as const,
+    reach,
+    remember,
+  }),
   /** `choice` must be one of the request's `choices`. */
   AppChooser: (choice: string) => ({
     choice,
     kind: PortalAnswerKind.AppChooser as const,
   }),
   Canceled: () => ({ kind: PortalAnswerKind.Canceled as const }),
+  /** Asks the user again what the agent session with this id reaches. */
+  Change: () => ({ kind: PortalAnswerKind.Change as const }),
   Discard: () => ({ kind: PortalAnswerKind.Discard as const }),
   /** Not empty; the request's own name unless `editableName`. */
   DynamicLauncher: (name: string) => ({
@@ -792,6 +894,8 @@ export enum CapturingKind {
    * Paused, resumed and discarded as well as stopped.
    */
   Recording,
+  /** An agent the user let see and use the desk. */
+  Agent,
   /** A kind this SDK cannot parse. It can still be stopped. */
   Unknown,
 }
@@ -805,6 +909,11 @@ export type CapturingBase = {
 };
 
 export const Capturing = {
+  Agent: (base: CapturingBase, body: AgentSessionBody) => ({
+    ...base,
+    ...body,
+    kind: CapturingKind.Agent as const,
+  }),
   InputCapture: (base: CapturingBase, body: InputCaptureBody) => ({
     ...base,
     ...body,

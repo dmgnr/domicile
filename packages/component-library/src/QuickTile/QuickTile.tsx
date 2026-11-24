@@ -10,21 +10,24 @@ type Props = {
   icon: ReactNode;
   /** Names the tile. */
   label: string;
+  /** Lights the icon in the accent color, such as while connected. */
+  lit: boolean;
   /** Opens the details; without it, such as on a locked desktop, the tile only shows its state. */
   onMore?: (() => void) | undefined;
 };
 
 /**
  * A quick settings tile into the details of something nearly always on,
- * such as Wi-Fi: its icon, label and status, and an arrow. The whole tile is
- * one button; its on/off switch lives in the details. Without details it only
- * shows its state.
+ * such as Wi-Fi: its icon in a circle, label and status, and an arrow. The
+ * circle takes the accent color while lit, as a `QuickToggle`'s does while
+ * on. The whole tile is one button; its on/off switch lives in the details.
+ * Without details it only shows its state.
  *
  * For something turned on and off often, use a `QuickToggle`.
  *
  * Drawn in `currentcolor`, so it reads on a panel over the wallpaper.
  */
-export const QuickTile = ({ detail, icon, label, onMore }: Props) => {
+export const QuickTile = ({ detail, icon, label, lit, onMore }: Props) => {
   const face = (
     <>
       <span aria-hidden className={iconStyles}>
@@ -37,11 +40,17 @@ export const QuickTile = ({ detail, icon, label, onMore }: Props) => {
     </>
   );
   return onMore === undefined ? (
-    <span className={tileStyles({ still: true })}>{face}</span>
+    <span
+      className={tileStyles({ still: true })}
+      data-lit={lit ? "" : undefined}
+    >
+      {face}
+    </span>
   ) : (
     <button
       aria-label={`${label} details`}
       className={tileStyles({ still: false })}
+      data-lit={lit ? "" : undefined}
       onClick={onMore}
       type="button"
     >
@@ -66,7 +75,7 @@ const tileStyles = cva({
     minBlockSize: 12,
     minInlineSize: 0,
     paddingInlineEnd: 2,
-    paddingInlineStart: 2.5,
+    paddingInlineStart: 2,
     textAlign: "start",
   },
   variants: {
@@ -93,7 +102,20 @@ const caretStyles = css({
   marginInlineStart: "auto",
 });
 
-const iconStyles = css({ display: "inline-flex", flexShrink: 0 });
+const iconStyles = css({
+  "[data-lit] > &": { backgroundColor: "accent", color: "background" },
+  alignItems: "center",
+  backgroundColor: "fill",
+  blockSize: 8,
+  borderRadius: "full",
+  color: "textFaint",
+  display: "inline-flex",
+  flexShrink: 0,
+  inlineSize: 8,
+  justifyContent: "center",
+  transition:
+    "background-color {durations.fast} {easings.default}, color {durations.fast} {easings.default}",
+});
 
 const textStyles = css({
   display: "flex",

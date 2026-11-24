@@ -43,7 +43,7 @@ at the page on the screen they are on.
  4 files changed, 86 insertions(+), 6 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 6e20eb6..76bd429 100644
+index 8cb217f..c682ea6 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -132,6 +132,8 @@ source_set("gbm") {
@@ -55,7 +55,7 @@ index 6e20eb6..76bd429 100644
      "domicile/drm_clipboard.cc",
      "domicile/drm_clipboard.h",
      "domicile/drm_screen.cc",
-@@ -262,6 +264,7 @@ source_set("gbm_unittests") {
+@@ -264,6 +266,7 @@ source_set("gbm_unittests") {
      "domicile/drm_input_devices_unittest.cc",
      "domicile/drm_master_unittest.cc",
      "domicile/drm_modeset_unittest.cc",

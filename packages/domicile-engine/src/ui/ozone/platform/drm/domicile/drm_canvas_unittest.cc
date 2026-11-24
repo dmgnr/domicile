@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -108,6 +109,9 @@ class DrmCanvasTest : public testing::Test {
     return bitmap.getColor(0, 0);
   }
 
+  // A DrmDevice is deleted on the sequence it was made on, so this outlives
+  // every device.
+  base::test::SingleThreadTaskEnvironment task_environment_;
   Seen seen_;
   scoped_refptr<FakeDrmDevice> drm_;
   DrmCanvas canvas_;

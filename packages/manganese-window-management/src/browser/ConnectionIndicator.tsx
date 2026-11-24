@@ -6,7 +6,7 @@ import { InfoIcon } from "@phosphor-icons/react/dist/ssr/Info";
 import { QuestionIcon } from "@phosphor-icons/react/dist/ssr/Question";
 import { WarningIcon } from "@phosphor-icons/react/dist/ssr/Warning";
 import { WarningOctagonIcon } from "@phosphor-icons/react/dist/ssr/WarningOctagon";
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
 import { css } from "../../styled-system/css";
 
 type Props = {
@@ -84,7 +84,7 @@ const dangerousMarkStyles = css({
  * /docs/guidelines/FILES.md.
  */
 const INDICATORS: Readonly<
-  Record<ConnectionSafety, { body: string; mark: ReactNode; title: string }>
+  Record<ConnectionSafety, { body: string; mark: ReactElement; title: string }>
 > = {
   [ConnectionSafety.Dangerous]: {
     body: "The browser could not establish a private connection to this site. Its certificate did not validate, or the page is running content that undoes the encryption. You should not enter anything sensitive here.",

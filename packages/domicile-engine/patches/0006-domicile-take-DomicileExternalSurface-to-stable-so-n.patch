@@ -22,10 +22,10 @@ half and lives outside this package.
  1 file changed, 11 insertions(+), 4 deletions(-)
 
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-index 28a1b82..55a263d 100644
+index 9d2295d..cd3a0b2 100644
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -2755,13 +2755,20 @@
+@@ -2834,13 +2834,20 @@
      },
      // Domicile's engine fork: canvas.embedExternalSurface(), which points a
      // <canvas>'s cc::SurfaceLayer at a viz surface the browser brokered to a

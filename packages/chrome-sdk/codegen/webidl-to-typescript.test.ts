@@ -113,6 +113,14 @@ interface Host {
   grab(shortcut: Shortcut | string): void;`);
   });
 
+  it("emits a promise of nothing as a promise of void", () => {
+    expect(
+      emit(`interface Host {
+  Promise<undefined> uninstall(DOMString id);
+};`),
+    ).toContain("  uninstall(id: string): Promise<void>;");
+  });
+
   it("emits an optional argument as an optional parameter", () => {
     expect(
       emit(`interface Host {

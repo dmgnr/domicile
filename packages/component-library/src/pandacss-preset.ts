@@ -280,7 +280,6 @@ export const domicilePreset = definePreset({
             transition: `
               color {durations.fastest} {easings.linear},
               border-color {durations.fastest} {easings.linear},
-              box-shadow {durations.fastest} {easings.linear},
               background-color {durations.fastest} {easings.linear},
               outline-color {durations.fast} {easings.linear},
               opacity {durations.slow} {easings.out},
@@ -449,6 +448,11 @@ export const domicilePreset = definePreset({
               base: "color-mix(in oklab, {colors.foreground} 65%, {colors.background})",
             },
           },
+          // Text on a `danger` fill. Theme-independent, so it reads the same
+          // on the red in either theme.
+          onDanger: {
+            value: "white",
+          },
           // Text and panels drawn over the wallpaper. Theme-independent
           // because the wallpaper doesn't change with the theme.
           onPhoto: {
@@ -613,12 +617,16 @@ export const domicilePreset = definePreset({
         sizes: quarterStepSpacing,
         spacing: quarterStepSpacing,
         zIndex: {
-          // Above everything, so an open panel can't be used while locked.
-          lock: { value: "202" },
-          modal: { value: "201" },
-          modalBackdrop: { value: "200" },
-          // Below modals so it never covers a dialog, and below the lock
-          // screen. Panda's default (1700) would be above both.
+          // Above everything, so an open panel can't be used while locked and
+          // the veil blurs the whole desk. The highest z-index there is, since
+          // a shell stacks its windows at depths of its own.
+          lock: { value: "2147483647" },
+          // Popups and dialogs: over every window, a fullscreen one's
+          // included, for the same reason.
+          modal: { value: "2147483646" },
+          modalBackdrop: { value: "2147483645" },
+          // Below windows a shell raises, such as a fullscreen one, and
+          // below modals so it never covers a dialog.
           toast: { value: "199" },
         },
       },

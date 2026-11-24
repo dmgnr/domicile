@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import type { Audio, AudioChoice } from "./audio";
 import { Meter } from "./audio";
-import { INFO, LIST } from "./pactl.fixture";
+import { FILTERED_LIST, INFO, LIST } from "./pactl.fixture";
 import { reading } from "./reading";
 
 const read = (list: string = LIST): Audio =>
@@ -25,6 +25,7 @@ describe("reading", () => {
       {
         default: true,
         description: "Built-in Audio Analog Stereo",
+        filtered: false,
         id: "output:alsa_output.analog-stereo",
         monitor: false,
         muted: false,
@@ -33,17 +34,20 @@ describe("reading", () => {
           choice("analog-output-speaker", "Speakers", true),
           choice("analog-output-headphones", "Headphones", false),
         ],
+        through: [],
         volume: 39_322 / 65_536,
       },
       // An invalid volume reads as silence.
       {
         default: false,
         description: "HDMI",
+        filtered: false,
         id: "output:hdmi",
         monitor: false,
         muted: true,
         port: undefined,
         ports: [],
+        through: [],
         volume: 0,
       },
     ]);
@@ -152,25 +156,63 @@ describe("reading", () => {
   });
 
   it("hides a filter's own stream", () => {
-    // A laptop's speaker correction: a sink to play to, and a stream from it
-    // into the hardware, tied by their link group.
-    const list = LIST.replace(
-      `"sinks": [`,
-      `"sinks": [
-    {"index": 76, "name": "audio_effect.laptop-convolver", "description": "Framework Speakers",
-     "mute": false, "volume": {"front-left": {"value": 45875}}, "monitor_source": "audio_effect.laptop-convolver.monitor",
-     "properties": {"node.link-group": "filter-chain-3901-18"}, "ports": [], "active_port": null},`,
-    ).replace(
-      `"sink_inputs": [`,
-      `"sink_inputs": [
-    {"index": 77, "sink": 51, "mute": false, "volume": {"mono": {"value": 65536}},
-     "properties": {"media.name": "Framework Speakers", "node.link-group": "filter-chain-3901-18"}},`,
-    );
-
-    expect(read(list).playback.map(({ id }) => id)).toStrictEqual([
+    expect(read(FILTERED_LIST).playback.map(({ id }) => id)).toStrictEqual([
       "playback:42",
       "playback:43",
       "playback:44",
+    ]);
+  });
+
+  it("reads a filter as muted when the hardware behind it is", () => {
+    const [filter, hardware] = read(FILTERED_LIST).outputs;
+
+    expect(filter?.muted).toBe(true);
+    expect(filter?.through).toStrictEqual([
+      { id: "playback:77", muted: false },
+      { id: "output:alsa_output.analog-stereo", muted: true },
+    ]);
+    expect(filter?.filtered).toBe(false);
+    expect(hardware?.through).toStrictEqual([]);
+    expect(hardware?.filtered).toBe(true);
+  });
+
+  it("reads an input filter's chain back to the microphone", () => {
+    // Echo cancellation: a filter source to record from, and its stream
+    // recording the microphone.
+    const list = LIST.replace(
+      `"sources": [`,
+      `"sources": [
+    {"index": 80, "name": "echo-cancel-source", "description": "Echo-Cancel Source",
+     "mute": false, "volume": {"mono": {"value": 65536}}, "monitor_source": null,
+     "properties": {"node.link-group": "echo-cancel-4"}, "ports": [], "active_port": null},`,
+    ).replace(
+      `"source_outputs": [`,
+      `"source_outputs": [
+    {"index": 81, "source": 53, "mute": false, "volume": {"mono": {"value": 65536}},
+     "properties": {"node.link-group": "echo-cancel-4"}},`,
+    );
+
+    const inputs = read(list).inputs;
+
+    expect(inputs[0]?.muted).toBe(true);
+    expect(inputs[0]?.through).toStrictEqual([
+      { id: "recording:81", muted: false },
+      { id: "input:alsa_input.analog-stereo", muted: true },
+    ]);
+    // The monitor shares a filter's group in PipeWire, but records its sink.
+    const monitored = read(
+      list.replace(
+        `"monitor_source": "alsa_output.analog-stereo",
+     "properties": {}`,
+        `"monitor_source": "alsa_output.analog-stereo",
+     "properties": {"node.link-group": "echo-cancel-4"}`,
+      ),
+    ).inputs[1];
+    expect(monitored?.through).toStrictEqual([]);
+    expect(inputs.map(({ filtered }) => filtered)).toStrictEqual([
+      false,
+      false,
+      true,
     ]);
   });
 

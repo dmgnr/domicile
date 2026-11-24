@@ -21,7 +21,7 @@ ok() { printf '  ok    %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n    %s\n' "$1" "$2"; FAILED=$((FAILED + 1)); }
 
 TOGETHER="webview-framing shell-local-network webview-content-script extension-installer extension-in-private
-  extension-tray extension-open-popup extension-side-panel webview-keyboard webview-escape webview-history webview-untrusted-cert webview-find
+  extension-tray extension-menu extension-open-popup extension-side-panel webview-keyboard webview-escape webview-history webview-untrusted-cert webview-find
   webview-click webview-activate webview-new-window webview-window-open webview-routed-link webview-target-url webview-fullscreen webview-wake-lock webview-device-request webview-dialog webview-beforeunload webview-print webview-context-menu webview-upload
   webview-download webview-save-picker webview-tabs webview-active-tab webview-passkey-extension
   webview-popup-window windows-state webview-notifications
@@ -37,7 +37,7 @@ cat >"$WORK/repo/stand-in.sh" <<STUB
 #!/usr/bin/env bash
 date +%s.%N >"$WORK/\$1.start"
 cat "$WORK"/noise/*/owner >"$WORK/\$1.noise" 2>/dev/null
-case "\$1" in (guard-webview-*|guard-windows-state|guard-shell-local-network|guard-extension-installer|guard-extension-in-private|guard-extension-tray|guard-extension-open-popup|guard-extension-side-panel) sleep 1 ;; esac
+case "\$1" in (guard-webview-*|guard-windows-state|guard-shell-local-network|guard-extension-installer|guard-extension-in-private|guard-extension-tray|guard-extension-menu|guard-extension-open-popup|guard-extension-side-panel) sleep 1 ;; esac
 [ "\${FAIL:-}" = "\$1" ] && { echo "\$1 broke"; exit 1; }
 date +%s.%N >"$WORK/\$1.end"
 STUB

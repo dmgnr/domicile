@@ -56,7 +56,7 @@ the shell opens for it -- runs on `crux` with the rest of the engine job.
  3 files changed, 5 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index c5c679e..758a667 100644
+index a3f4eb0..5282c59 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1208,6 +1208,8 @@ generated_interface_sources_in_core = [
@@ -69,7 +69,7 @@ index c5c679e..758a667 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index e9bf0ff..eccfa3a 100644
+index f4f41cf..e298878 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -462,6 +462,7 @@ static_idl_files_in_core = [
@@ -81,7 +81,7 @@ index e9bf0ff..eccfa3a 100644
    "//third_party/blink/renderer/core/html/html_head_element.idl",
    "//third_party/blink/renderer/core/html/html_heading_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 2942afd..ca668d4 100644
+index ac94d90..b35876d 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -98,6 +98,8 @@ blink_core_sources_html = [

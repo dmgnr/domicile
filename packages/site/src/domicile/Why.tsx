@@ -79,12 +79,13 @@ const DOMICILE: Diagram = {
   lanes: [
     { source: { code: "<webview>", label: "Websites" } },
     { source: { label: "Domicile apps" } },
+    { source: { label: "Electron apps" } },
     { source: { code: "<app>", label: "Native apps" } },
     { source: { code: "HTML", label: "Your desktop" } },
   ],
   stages: [
     {
-      body: "Native apps still draw their own windows, and Domicile's Wayland server hands them to the engine. The engine lays out your desktop, websites, Domicile apps and windows with CSS, and composites them in one frame.",
+      body: "Native apps still draw their own windows, and Domicile's Wayland server hands them to the engine. The engine lays out your desktop, websites, Domicile and Electron apps, and windows with CSS, and composites them in one frame.",
       icon: <BrowsersIcon />,
       title: "Domicile",
       tone: "engine",
@@ -111,9 +112,9 @@ export const Why = () => (
         changes is what arranges and composites them: one engine, with CSS.
       </li>
       <li>
-        Domicile apps are web pages in app windows, so they share the one
-        engine. Electron apps still work as native apps, with their own
-        Chromium.
+        Domicile apps and Electron apps are web pages in app windows, so they
+        share the one engine. An Electron app can also run as a native app, with
+        its own Chromium.
       </li>
       <li>
         It's a different arrangement, not a speedup. Pixels are still drawn,

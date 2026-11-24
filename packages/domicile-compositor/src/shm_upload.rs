@@ -14,12 +14,13 @@ use smithay::backend::allocator::Modifier;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{Bind, Color32F, Frame, ImportMemWl as _, Renderer as _};
-use smithay::reexports::wayland_server::protocol::wl_buffer;
+use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_shm};
 use smithay::utils::{Buffer as BufferCoords, Physical, Rectangle, Size, Transform};
 use smithay::wayland::compositor::SurfaceData;
 use smithay::wayland::shm::{shm_format_to_fourcc, with_buffer_contents};
 use thiserror::Error;
 
+use crate::engine::FOURCCS;
 use crate::uploads::Shape;
 
 /// Draws `texture` over all of `target`. Returns the draw's fence when
@@ -175,6 +176,76 @@ pub fn render_modifiers(renderer: &GlesRenderer, fourcc: u32) -> Vec<u64> {
         .collect()
 }
 
+/// The `wl_shm` formats to offer beyond the two every compositor offers:
+/// those the engine imports, the renderer reads from memory, and the GPU can
+/// copy into a buffer of: see [`upload_fourcc`].
+pub fn shm_formats(renderer: &GlesRenderer) -> Vec<wl_shm::Format> {
+    let drawn = drawn_formats(renderer);
+    offered(renderer.shm_formats(), |fourcc| drawn.contains(&fourcc))
+}
+
+/// The fourcc of the GPU buffer a `fourcc` frame is copied into: see
+/// [`drawn_as`]. `fourcc` itself when the GPU draws neither, so allocating
+/// that buffer fails and says so.
+pub fn upload_fourcc(renderer: &GlesRenderer, fourcc: u32) -> u32 {
+    let drawn = drawn_formats(renderer);
+    drawn_as(fourcc, |fourcc| drawn.contains(&fourcc)).unwrap_or(fourcc)
+}
+
+/// The fourccs the GPU can both draw into and sample.
+fn drawn_formats(renderer: &GlesRenderer) -> Vec<u32> {
+    let context = renderer.egl_context();
+    let sampled = context.dmabuf_texture_formats();
+    context
+        .dmabuf_render_formats()
+        .iter()
+        .filter(|format| sampled.contains(format))
+        .map(|format| format.code as u32)
+        .collect()
+}
+
+/// The fourcc a `fourcc` frame is copied into: its own when the engine
+/// imports it and `drawn` says the GPU draws into it, else its twin with
+/// alpha. A frame without alpha draws opaque, so the twin's alpha comes out
+/// whole. The engine imports no 10-bit or half-float format without alpha,
+/// and some drivers draw into `ABGR2101010` but not `XBGR2101010`.
+fn drawn_as(fourcc: u32, drawn: impl Fn(u32) -> bool) -> Option<u32> {
+    let takes = |fourcc: u32| FOURCCS.contains(&fourcc) && drawn(fourcc);
+    if takes(fourcc) {
+        Some(fourcc)
+    } else {
+        alpha_twin(fourcc).filter(|twin| takes(*twin))
+    }
+}
+
+/// The format with alpha that `fourcc`, a format without, pads.
+fn alpha_twin(fourcc: u32) -> Option<u32> {
+    match fourcc {
+        0x3432_5258 => Some(0x3432_5241), // XRGB8888 -> ARGB8888
+        0x3432_4258 => Some(0x3432_4241), // XBGR8888 -> ABGR8888
+        0x3033_5258 => Some(0x3033_5241), // XRGB2101010 -> ARGB2101010
+        0x3033_4258 => Some(0x3033_4241), // XBGR2101010 -> ABGR2101010
+        0x4834_4258 => Some(0x4834_4241), // XBGR16161616F -> ABGR16161616F
+        _ => None,
+    }
+}
+
+/// The formats in `read` that the engine imports and the GPU can copy into a
+/// buffer of, `drawn` saying which it draws into.
+fn offered(
+    read: impl IntoIterator<Item = wl_shm::Format>,
+    drawn: impl Fn(u32) -> bool,
+) -> Vec<wl_shm::Format> {
+    read.into_iter()
+        .filter(|format| {
+            shm_format_to_fourcc(*format)
+                .map(|fourcc| fourcc as u32)
+                .and_then(|fourcc| drawn_as(fourcc, &drawn))
+                .is_some()
+        })
+        .collect()
+}
+
 /// Why copying a frame into the buffer failed.
 #[derive(Debug, Error)]
 pub enum CopyError {
@@ -231,6 +302,158 @@ mod tests {
         drop(framebuffer);
         let pixels = renderer.map_texture(&mapping).expect("maps");
         assert_eq!(pixels, CORNERS);
+    }
+
+    /// Four `Abgr2101010` pixels whose channels an 8-bit copy would round:
+    /// 1, 2 and 3 tenth-bit steps, and opaque.
+    const TEN_BIT: [u32; 4] = [
+        (3 << 30) | (3 << 20) | (2 << 10) | 1,
+        (3 << 30) | (1 << 20) | (3 << 10) | 2,
+        (3 << 30) | (2 << 20) | (1 << 10) | 3,
+        (3 << 30) | (1021 << 20) | (1022 << 10) | 1023,
+    ];
+
+    #[test]
+    fn a_10_bit_frame_keeps_its_10_bits() {
+        let (mut renderer, _) = headless_renderer().expect("EGL: llvmpipe will do");
+        let size = Size::from((2, 2));
+        let bytes: Vec<u8> = TEN_BIT
+            .iter()
+            .flat_map(|pixel| pixel.to_le_bytes())
+            .collect();
+        let texture = renderer
+            .import_memory(&bytes, Fourcc::Abgr2101010, size, false)
+            .expect("the pixels import");
+        let mut target: GlesRenderbuffer = renderer
+            .create_buffer(Fourcc::Abgr2101010, size)
+            .expect("a renderbuffer");
+
+        copy(
+            &mut renderer,
+            &texture,
+            &mut target,
+            Size::from((2, 2)),
+            false,
+        )
+        .expect("the copy draws");
+
+        let framebuffer = renderer.bind(&mut target).expect("binds");
+        let mapping = renderer
+            .copy_framebuffer(
+                &framebuffer,
+                Rectangle::from_size(size),
+                Fourcc::Abgr2101010,
+            )
+            .expect("reads back");
+        drop(framebuffer);
+        let pixels = renderer.map_texture(&mapping).expect("maps");
+        assert_eq!(pixels, bytes);
+    }
+
+    #[test]
+    fn a_frame_without_alpha_copied_into_its_alpha_twin_is_opaque() {
+        let (mut renderer, _) = headless_renderer().expect("EGL: llvmpipe will do");
+        let size = Size::from((1, 1));
+        // #3366CC in 10 bits, its padding zero as clients leave it.
+        let pixel: u32 = (819 << 20) | (409 << 10) | 205;
+        let texture = renderer
+            .import_memory(&pixel.to_le_bytes(), Fourcc::Xbgr2101010, size, false)
+            .expect("the pixel imports");
+        let mut target: GlesRenderbuffer = renderer
+            .create_buffer(Fourcc::Abgr2101010, size)
+            .expect("a renderbuffer");
+
+        copy(
+            &mut renderer,
+            &texture,
+            &mut target,
+            Size::from((1, 1)),
+            false,
+        )
+        .expect("the copy draws");
+
+        let framebuffer = renderer.bind(&mut target).expect("binds");
+        let mapping = renderer
+            .copy_framebuffer(
+                &framebuffer,
+                Rectangle::from_size(size),
+                Fourcc::Abgr2101010,
+            )
+            .expect("reads back");
+        drop(framebuffer);
+        let copied = renderer.map_texture(&mapping).expect("maps");
+        assert_eq!(copied, ((3 << 30) | pixel).to_le_bytes());
+    }
+
+    mod drawn_as {
+        use super::super::drawn_as;
+
+        const XBGR2101010: u32 = 0x3033_4258;
+        const ABGR2101010: u32 = 0x3033_4241;
+        const XRGB8888: u32 = 0x3432_5258;
+        const RGB565: u32 = 0x3631_4752;
+
+        #[test]
+        fn a_format_the_engine_imports_and_the_gpu_draws_into_is_drawn_as_itself() {
+            assert_eq!(drawn_as(ABGR2101010, |_| true), Some(ABGR2101010));
+            assert_eq!(drawn_as(XRGB8888, |_| true), Some(XRGB8888));
+        }
+
+        #[test]
+        fn a_deep_format_without_alpha_is_drawn_as_its_alpha_twin_even_where_the_gpu_draws_it() {
+            assert_eq!(drawn_as(XBGR2101010, |_| true), Some(ABGR2101010));
+        }
+
+        #[test]
+        fn a_format_without_alpha_the_gpu_cannot_draw_is_drawn_as_its_alpha_twin() {
+            assert_eq!(
+                drawn_as(XBGR2101010, |fourcc| fourcc == ABGR2101010),
+                Some(ABGR2101010)
+            );
+        }
+
+        #[test]
+        fn a_format_with_no_drawable_twin_is_not_drawn() {
+            assert_eq!(drawn_as(XBGR2101010, |_| false), None);
+            assert_eq!(drawn_as(RGB565, |fourcc| fourcc != RGB565), None);
+        }
+    }
+
+    mod offered {
+        use smithay::reexports::wayland_server::protocol::wl_shm::Format;
+
+        use super::super::offered;
+
+        const ABGR16161616F: u32 = 0x4834_4241;
+        const ABGR2101010: u32 = 0x3033_4241;
+
+        #[test]
+        fn a_format_whose_alpha_twin_the_gpu_draws_is_offered() {
+            let offered = offered([Format::Xbgr2101010], |fourcc| fourcc == ABGR2101010);
+
+            assert_eq!(offered, [Format::Xbgr2101010]);
+        }
+
+        #[test]
+        fn a_10_bit_format_the_gpu_draws_is_offered() {
+            let offered = offered([Format::Xrgb8888, Format::Abgr2101010], |_| true);
+
+            assert_eq!(offered, [Format::Xrgb8888, Format::Abgr2101010]);
+        }
+
+        #[test]
+        fn a_format_the_engine_does_not_import_is_not_offered() {
+            assert_eq!(offered([Format::Rgb565], |_| true), []);
+        }
+
+        #[test]
+        fn a_format_the_gpu_cannot_draw_into_is_not_offered() {
+            let offered = offered([Format::Abgr16161616f, Format::Argb8888], |fourcc| {
+                fourcc != ABGR16161616F
+            });
+
+            assert_eq!(offered, [Format::Argb8888]);
+        }
     }
 
     mod through_the_cache {

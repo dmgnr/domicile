@@ -16,7 +16,9 @@ import {
   currentOn,
   NO_WINDOWS,
   reduceWindows,
+  screenHolding,
   screenOfApp,
+  shutIdsOf,
   WindowAction,
   workspaceHere,
   workspaceNamed,
@@ -55,13 +57,26 @@ const listed = (
   id,
   isApp: false,
   isCaptured: false,
+  isHidden: false,
   isPrivate: false,
+  menu: undefined,
+  menuBarAutoHide: false,
+  menuBarVisible: true,
+  messageBox: undefined,
+  parent: undefined,
   partition: "",
+  popupMenu: undefined,
   popupWindow: popup.popupWindow === 0 ? undefined : popup.popupWindow,
+  profile: "default",
   title: "",
   toplevelId: undefined,
   url,
+  wantsFullscreen: false,
+  wantsMaximized: false,
+  wantsMinimized: false,
   width: popup.width,
+  x: 0,
+  y: 0,
 });
 
 /** Screens of 1920 by 1080, left to right in the order named. */
@@ -421,6 +436,78 @@ describe("the browser windows the engine lists", () => {
 });
 
 // A dialog, such as pinentry, or a window a floating rule names.
+describe("the windows their apps hide", () => {
+  /** Electron window `id`, as the engine lists it, `hidden` or not. */
+  const app = (id: string, hidden: boolean) => ({
+    ...listed(id, "file:///app/index.html"),
+    appId: "slack",
+    isApp: true,
+    isHidden: hidden,
+  });
+
+  /** Slack's window listed and shown beside kitty. */
+  const shown = () =>
+    reduce(
+      desktop("kitty"),
+      WindowAction.BrowserWindowsListed([app("1", false)], []),
+    );
+
+  it("opens a window its app hid on no workspace, its page running", () => {
+    const state = reduce(
+      desktop("kitty"),
+      WindowAction.BrowserWindowsListed([app("1", true)], []),
+    );
+
+    expect(state.windows.map(({ id }) => id)).toContain(BROWSER("1"));
+    expect(windowsOn(workspaceHere(state))).toEqual([APP("kitty")]);
+    expect(activeIdOf(state)).toBe(APP("kitty"));
+    expect(shutIdsOf(state)).toEqual([BROWSER("1")]);
+  });
+
+  it("takes the window off its workspace when its app hides it", () => {
+    const state = reduce(
+      shown(),
+      WindowAction.BrowserWindowsListed([app("1", true)], []),
+    );
+
+    expect(state.windows.map(({ id }) => id)).toContain(BROWSER("1"));
+    expect(windowsOn(workspaceHere(state))).toEqual([APP("kitty")]);
+    expect(closedBrowsersOf(state)).toEqual(["1"]);
+  });
+
+  it("shows the window on the workspace on screen when its app shows it", () => {
+    const hidden = reduce(
+      shown(),
+      WindowAction.BrowserWindowsListed([app("1", true)], []),
+    );
+    const state = reduce(
+      hidden,
+      WindowAction.BrowserWindowsListed([app("1", false)], []),
+    );
+
+    expect(windowsOn(workspaceHere(state))).toEqual([
+      APP("kitty"),
+      BROWSER("1"),
+    ]);
+    expect(shutIdsOf(state)).toEqual([]);
+  });
+
+  it("leaves a window where it is when its listing changes otherwise", () => {
+    const before = shown();
+    const state = reduce(
+      before,
+      WindowAction.BrowserWindowsListed(
+        [{ ...app("1", false), title: "Slack" }],
+        [],
+      ),
+    );
+
+    expect(windowsOn(workspaceHere(state))).toEqual(
+      windowsOn(workspaceHere(before)),
+    );
+  });
+});
+
 describe("the apps that run in the background", () => {
   /** App window `id` of app `appId`, as the engine lists it. */
   const app = (id: string, appId: string) => ({
@@ -669,6 +756,41 @@ describe("the screens", () => {
     expect(windowsOn(workspaceOn(state, "left"))).toEqual([APP("kitty")]);
   });
 
+  it("numbers the screens a desk starts with in reading order", () => {
+    // The host lists the center monitor before the laptop left of it.
+    const state = reduce(
+      desktop("kitty"),
+      WindowAction.ScreensDescribed([
+        { box: { height: 1080, width: 1920, x: 1920, y: 0 }, name: "center" },
+        { box: { height: 1080, width: 1920, x: 0, y: 0 }, name: "laptop" },
+        { box: { height: 1080, width: 1920, x: 3840, y: 0 }, name: "right" },
+      ]),
+    );
+
+    expect(state.screens.map(({ current, name }) => [name, current])).toEqual([
+      ["center", "2"],
+      ["laptop", "1"],
+      ["right", "3"],
+    ]);
+    expect(state.focused).toBe("laptop");
+  });
+
+  it("numbers the monitors plugged in together in reading order", () => {
+    const state = reduce(
+      desktop("kitty"),
+      WindowAction.ScreensDescribed(sideBySide("laptop")),
+      WindowAction.ScreensDescribed([
+        { box: { height: 1080, width: 1920, x: 3840, y: 0 }, name: "right" },
+        { box: { height: 1080, width: 1920, x: 0, y: 0 }, name: "laptop" },
+        { box: { height: 1080, width: 1920, x: 1920, y: 0 }, name: "center" },
+      ]),
+    );
+
+    expect(currentOn(state, "laptop")).toBe("1");
+    expect(currentOn(state, "center")).toBe("2");
+    expect(currentOn(state, "right")).toBe("3");
+  });
+
   it("finds the screen a client's window is on, for its dialogs", () => {
     const state = reduce(
       desktop("kitty"),
@@ -677,6 +799,18 @@ describe("the screens", () => {
 
     expect(screenOfApp(state, "kitty")).toBe("left");
     expect(screenOfApp(state, "closed")).toBeUndefined();
+  });
+
+  it("finds the screen a window's workspace is on, shown or not, for its picture-in-picture video", () => {
+    const state = reduce(
+      desktop("kitty"),
+      WindowAction.ScreensDescribed(sideBySide("left", "right")),
+      WindowAction.WorkspaceSelected("3"),
+    );
+
+    expect(currentOn(state, "left")).toBe("3");
+    expect(screenHolding(state, APP("kitty"))).toBe("left");
+    expect(screenHolding(state, APP("closed"))).toBeUndefined();
   });
 
   it("shows a workspace nobody else is on when a monitor is plugged in", () => {
@@ -861,7 +995,6 @@ describe("the workspaces", () => {
       desktop("mail", "kitty"),
       WindowAction.ContainerSplit(Axis.Vertical),
       WindowAction.AppAppeared("editor", "editor"),
-      WindowAction.LayoutSet(Layout.Tabbed),
       WindowAction.ParentFocused(),
       WindowAction.WindowSentToWorkspace("2"),
     );
@@ -1347,14 +1480,6 @@ describe("the keyed commands", () => {
 
     expect(state.mode).toBe("resize");
   });
-
-  it("leaves the state alone for an `exec`, which is the compositor's to spawn", () => {
-    const state = desktop("kitty");
-
-    expect(reduceWindows(state, WindowAction.CommandExecuted(["kitty"]))).toBe(
-      state,
-    );
-  });
 });
 
 describe("what the compositor says about the keyboard", () => {
@@ -1454,7 +1579,6 @@ describe("the pointer", () => {
       WindowAction.LayoutSet(Layout.SplitH),
       WindowAction.ContainerSplit(Axis.Vertical),
       WindowAction.AppAppeared("mail", "mail"),
-      WindowAction.LayoutSet(Layout.Tabbed),
       WindowAction.FocusStepped(Direction.Left),
       WindowAction.FocusStepped(Direction.Left),
       WindowAction.WindowHovered(APP("mail")),
@@ -1505,16 +1629,25 @@ describe("the pointer", () => {
 
   it("answers a press in the window it is already in with the same state", () => {
     // `AppWindow` reports every press, most of which change nothing. Returning
-    // a new object would re-render the desktop on every click and undo `focus
-    // parent`.
-    const state = reduce(
-      desktop("kitty", "editor"),
-      WindowAction.ParentFocused(),
-    );
+    // a new object would re-render the desktop on every click.
+    const state = desktop("kitty", "editor");
 
     expect(
       reduceWindows(state, WindowAction.WindowSelected(APP("editor"))),
     ).toBe(state);
+  });
+
+  it("ends a selection around the window pressed in", () => {
+    const state = reduce(
+      desktop("kitty", "editor"),
+      WindowAction.ParentFocused(),
+      WindowAction.WindowSelected(APP("editor")),
+    );
+
+    expect(focusedNodeOf(workspaceHere(state).tiling)).toMatchObject({
+      id: APP("editor"),
+      kind: NodeKind.Window,
+    });
   });
 
   it("goes to the workspace of a window that asks to be reached", () => {
@@ -1546,6 +1679,59 @@ describe("the pointer", () => {
 
     expect(state.focused).toBe("left");
     expect(activeIdOf(state)).toBe(APP("kitty"));
+  });
+
+  describe("coming back to a selected group from another screen", () => {
+    /** Kitty and the editor tabbed and selected on the left, mail on the right. */
+    const selected = () =>
+      reduce(
+        desktop(),
+        WindowAction.ScreensDescribed(sideBySide("left", "right")),
+        WindowAction.AppAppeared("kitty", "kitty"),
+        WindowAction.AppAppeared("editor", "editor"),
+        WindowAction.WorkspaceSelected("2"),
+        WindowAction.AppAppeared("mail", "mail"),
+        WindowAction.WindowHovered(APP("editor")),
+        WindowAction.ParentFocused(),
+      );
+
+    it("ends the selection after crossing a window there", () => {
+      // As crossing another group on the same screen does.
+      const state = reduce(
+        selected(),
+        WindowAction.WindowHovered(APP("mail")),
+        WindowAction.WindowHovered(APP("editor")),
+      );
+
+      expect(focusedNodeOf(workspaceOn(state, "left").tiling)).toMatchObject({
+        id: APP("editor"),
+        kind: NodeKind.Window,
+      });
+    });
+
+    it("ends the selection after crossing an empty spot there", () => {
+      const state = reduce(
+        selected(),
+        WindowAction.ScreenHovered("right"),
+        WindowAction.WindowHovered(APP("editor")),
+      );
+
+      expect(focusedNodeOf(workspaceOn(state, "left").tiling)).toMatchObject({
+        id: APP("editor"),
+        kind: NodeKind.Window,
+      });
+    });
+
+    it("keeps the selection while the pointer stays on its screen", () => {
+      const state = reduce(
+        selected(),
+        WindowAction.WindowHovered(APP("editor")),
+      );
+
+      expect(focusedNodeOf(workspaceOn(state, "left").tiling).kind).toBe(
+        NodeKind.Container,
+      );
+    });
   });
 
   it("moves the keyboard to a screen it crossed onto with no window under it", () => {
@@ -1815,6 +2001,46 @@ describe("the buttons on a tab group's strip", () => {
       global: false,
       ...GROUP,
     });
+  });
+});
+
+describe("a page's text, link or image dropped on a tab strip", () => {
+  it("opens its tab where the drop aimed, and only that one", () => {
+    const state = reduce(
+      desktop("kitty", "editor"),
+      WindowAction.TabDropped(
+        { id: APP("kitty"), up: 0 },
+        Direction.Left,
+        "https://a.example/",
+      ),
+      WindowAction.BrowserWindowsListed([listed("1", "https://a.example/")]),
+      WindowAction.BrowserWindowsListed([
+        listed("1", "https://a.example/"),
+        listed("2", "https://b.example/"),
+      ]),
+    );
+
+    // The second opens beside the focus, as any new window does.
+    expect(windowsOf(workspaceHere(state).tiling)).toEqual([
+      BROWSER("1"),
+      BROWSER("2"),
+      APP("kitty"),
+      APP("editor"),
+    ]);
+  });
+
+  it("closes the launcher, as opening a page from it does", () => {
+    const state = reduce(
+      desktop("kitty"),
+      WindowAction.LauncherToggled(),
+      WindowAction.TabDropped(
+        { id: APP("kitty"), up: 0 },
+        Direction.Right,
+        "https://a.example/",
+      ),
+    );
+
+    expect(state.launcherOpen).toBe(false);
   });
 });
 
@@ -2228,7 +2454,6 @@ describe("the launcher", () => {
       WindowAction.LayoutSet(Layout.SplitH),
       WindowAction.ContainerSplit(Axis.Vertical),
       WindowAction.AppAppeared("mail", "mail"),
-      WindowAction.LayoutSet(Layout.Tabbed),
       WindowAction.FocusStepped(Direction.Left),
       WindowAction.FocusStepped(Direction.Left),
       WindowAction.NewTabPressed(APP("mail")),
@@ -2277,7 +2502,7 @@ describe("the launcher", () => {
 
   it("shuts behind the file it opened, and opens no window itself", () => {
     // The file opener is a spawned Wayland client, so its window arrives
-    // through `app_appeared`, as with `CommandExecuted`.
+    // through `app_appeared`.
     const launched = reduce(
       NO_WINDOWS,
       WindowAction.LauncherToggled(),
@@ -2481,6 +2706,44 @@ describe("the overview", () => {
     expect(reduce(opened, WindowAction.OverviewToggled()).overviewOpen).toBe(
       false,
     );
+  });
+
+  describe("`layer up` and `layer down`", () => {
+    const out = () =>
+      reduce(
+        desktop("kitty", "editor"),
+        WindowAction.WindowSentToScratchpad(),
+        WindowAction.ScratchpadBrought(),
+      );
+
+    it("puts the scratchpad away going up, and opens the overview once it is", () => {
+      const away = reduce(out(), WindowAction.LayerRaised());
+      const opened = reduce(away, WindowAction.LayerRaised());
+
+      expect([away.scratchpad, away.overviewOpen]).toEqual([
+        [APP("editor")],
+        false,
+      ]);
+      expect(opened.overviewOpen).toBe(true);
+      expect(reduceWindows(opened, WindowAction.LayerRaised())).toBe(opened);
+    });
+
+    it("closes the overview going down, and pulls the scratchpad down once it is", () => {
+      const opened = reduce(
+        desktop("kitty", "editor"),
+        WindowAction.WindowSentToScratchpad(),
+        WindowAction.OverviewShown(),
+      );
+      const closed = reduce(opened, WindowAction.LayerLowered());
+      const pulled = reduce(closed, WindowAction.LayerLowered());
+
+      expect([closed.overviewOpen, closed.scratchpad]).toEqual([
+        false,
+        [APP("editor")],
+      ]);
+      expect(activeIdOf(pulled)).toBe(APP("editor"));
+      expect(reduceWindows(pulled, WindowAction.LayerLowered())).toBe(pulled);
+    });
   });
 
   it("opens and stays open on `overview show`, and closes on `overview hide`", () => {

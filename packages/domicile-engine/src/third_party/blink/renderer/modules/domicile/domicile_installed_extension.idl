@@ -1,0 +1,47 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// One extension installed in the shell's profile, switched on or off, as a
+// shell's menu of extensions draws it. Apps, themes and Chrome's own are left
+// out, as chrome://extensions leaves them out.
+//
+// An interface rather than a dictionary for DomicileExtension's reason: these
+// are read off DomicileHost.installedExtensions.
+
+[
+    Exposed=Window,
+    RuntimeEnabled=DomicileControlChannel
+] interface DomicileInstalledExtension {
+  // What setExtensionEnabled(), configureExtension() and uninstallExtension()
+  // name it by, and the id of its entry in `extensions` when it has an action.
+  readonly attribute DOMString id;
+  readonly attribute DOMString name;
+
+  // The manifest's icon as data:image/png;base64,..., drawn at this page's
+  // device pixel ratio. Chrome's placeholder until the icon loads.
+  readonly attribute USVString icon;
+
+  // Switched on. Only a switched-on extension has an action in `extensions`.
+  readonly attribute boolean enabled;
+
+  // Its chrome://extensions settings. Each is null where the extension cannot
+  // use it: local files and sites where it asks for none, user scripts where
+  // it does not ask for chrome.userScripts. Private windows are a private
+  // browser profile's, whose switches say what runs there.
+  readonly attribute boolean? fileAccess;
+  readonly attribute boolean? userScripts;
+  // "on_click", "specific_sites" or "all_sites".
+  readonly attribute DOMString? siteAccess;
+  // With "specific_sites": hosts, each also as `*.host` for its subdomains.
+  readonly attribute FrozenArray<DOMString> sites;
+
+  // The settings the desk's config sets, by the names above. Only the config
+  // changes them: configureExtension() refuses them.
+  readonly attribute FrozenArray<DOMString> configured;
+
+  // The config installed it, so only the config uninstalls it.
+  readonly attribute boolean fromConfig;
+
+  // Its options page, or null if it has none.
+  readonly attribute USVString? optionsUrl;
+};

@@ -1,9 +1,11 @@
 import { useDisplays } from "@domicile-desktop/component-library/DisplayProvider";
 import { applyFont } from "@domicile-desktop/component-library/font";
 import { createHandle } from "@domicile-desktop/component-library/Popover";
+import { PopupScene } from "@domicile-desktop/component-library/PopupScene";
 import { PortalDialogs } from "@domicile-desktop/component-library/PortalDialogs";
 import { useTheme } from "@domicile-desktop/component-library/ThemeProvider";
 import { createToastManager } from "@domicile-desktop/component-library/Toaster";
+import { useApps } from "@domicile-desktop/component-library/useApps";
 import { usePictureUrl } from "@domicile-desktop/component-library/usePictureUrl";
 import { usePortalWallpaper } from "@domicile-desktop/component-library/usePortalWallpaper";
 import type { BarLayout } from "@domicile-desktop/manganese-bar/bar-layout";
@@ -21,12 +23,15 @@ import { KeymapOptionsContext } from "@domicile-desktop/manganese-bar-module-key
 import { PortalSignIn } from "@domicile-desktop/manganese-bar-module-network/PortalSignIn";
 import { useCaptivePortal } from "@domicile-desktop/manganese-bar-module-network/useCaptivePortal";
 import { useExtensions } from "@domicile-desktop/manganese-bar-module-tray/extensions/useExtensions";
+import { useFocusedProfile } from "@domicile-desktop/manganese-bar-module-tray/extensions/useFocusedProfile";
+import { useInstalledExtensions } from "@domicile-desktop/manganese-bar-module-tray/extensions/useInstalledExtensions";
 import { useOpenedPopup } from "@domicile-desktop/manganese-bar-module-tray/extensions/useOpenedPopup";
 import type { TrayState } from "@domicile-desktop/manganese-bar-module-tray/tray-context";
 import { TrayContext } from "@domicile-desktop/manganese-bar-module-tray/tray-context";
 import { trayEntries } from "@domicile-desktop/manganese-bar-module-tray/tray-entry";
 import { useTray } from "@domicile-desktop/manganese-bar-module-tray/useTray";
 import { useTrayOrder } from "@domicile-desktop/manganese-bar-module-tray/useTrayOrder";
+import { useTrayPins } from "@domicile-desktop/manganese-bar-module-tray/useTrayPins";
 import { useVolumeKeys } from "@domicile-desktop/manganese-bar-module-volume/useVolumeKeys";
 import { Clipboard } from "@domicile-desktop/manganese-clipboard/Clipboard";
 import { useClipboard } from "@domicile-desktop/manganese-clipboard/useClipboard";
@@ -45,18 +50,23 @@ import { Lock } from "@domicile-desktop/manganese-lock/Lock";
 import { LockBar } from "@domicile-desktop/manganese-lock/LockBar";
 import { useLocked } from "@domicile-desktop/manganese-lock/useLocked";
 import type { Inbox } from "@domicile-desktop/manganese-notifications/inbox";
+import { MailPicker } from "@domicile-desktop/manganese-notifications/MailPicker";
 import { NotificationDrawer } from "@domicile-desktop/manganese-notifications/NotificationDrawer";
 import { NotificationToasts } from "@domicile-desktop/manganese-notifications/NotificationToasts";
 import type { NotificationsDrawer } from "@domicile-desktop/manganese-notifications/notifications-context";
 import { NotificationsContext } from "@domicile-desktop/manganese-notifications/notifications-context";
+import { useMailLinks } from "@domicile-desktop/manganese-notifications/useMailLinks";
 import { useNotifications } from "@domicile-desktop/manganese-notifications/useNotifications";
 import { useNow } from "@domicile-desktop/manganese-notifications/useNow";
+import type { ShellLinks } from "@domicile-desktop/manganese-page-requests/shell-links";
+import { ShellLinksContext } from "@domicile-desktop/manganese-page-requests/shell-links";
 import { useWallpapers } from "@domicile-desktop/manganese-wallpaper/useWallpapers";
 import { Wallpaper } from "@domicile-desktop/manganese-wallpaper/Wallpaper";
 import type { Wallpapers } from "@domicile-desktop/manganese-wallpaper/wallpapers";
 import { desktopClientIcons } from "@domicile-desktop/manganese-window-management/client-icons";
 import type { Direction } from "@domicile-desktop/manganese-window-management/direction";
 import type { FloatingRules } from "@domicile-desktop/manganese-window-management/floating/floating-rules";
+import { answerQuery } from "@domicile-desktop/manganese-window-management/keyboard/query";
 import { useKeybindings } from "@domicile-desktop/manganese-window-management/keyboard/useKeybindings";
 import { useModifiers } from "@domicile-desktop/manganese-window-management/keyboard/useModifiers";
 import { OverviewBackdrop } from "@domicile-desktop/manganese-window-management/overview/OverviewBackdrop";
@@ -65,6 +75,8 @@ import { screenOverviewsOf } from "@domicile-desktop/manganese-window-management
 import { sightOf } from "@domicile-desktop/manganese-window-management/overview/sight";
 import { steeredInOverview } from "@domicile-desktop/manganese-window-management/overview/steering";
 import { useOverviewPhase } from "@domicile-desktop/manganese-window-management/overview/useOverviewPhase";
+import { PictureInPictureFloats } from "@domicile-desktop/manganese-window-management/picture-in-picture/PictureInPictureFloats";
+import { pageOf } from "@domicile-desktop/manganese-window-management/picture-in-picture/page-of";
 import type { Geometry } from "@domicile-desktop/manganese-window-management/placement";
 import type {
   Focus,
@@ -72,6 +84,7 @@ import type {
 } from "@domicile-desktop/manganese-window-management/pointer-warp";
 import type { Rect } from "@domicile-desktop/manganese-window-management/rect";
 import { Stage } from "@domicile-desktop/manganese-window-management/Stage";
+import { popupSceneOf } from "@domicile-desktop/manganese-window-management/screens/popup-scene";
 import { shownWindowsOf } from "@domicile-desktop/manganese-window-management/screens/shown-windows";
 import type { StageScreen } from "@domicile-desktop/manganese-window-management/screens/stage-screens";
 import { useScreenFollowsPointer } from "@domicile-desktop/manganese-window-management/screens/useScreenFollowsPointer";
@@ -84,10 +97,15 @@ import { useClientIcons } from "@domicile-desktop/manganese-window-management/us
 import { usePointerLock } from "@domicile-desktop/manganese-window-management/usePointerLock";
 import { usePointerWarp } from "@domicile-desktop/manganese-window-management/usePointerWarp";
 import { useWindows } from "@domicile-desktop/manganese-window-management/useWindows";
-import { WindowKind } from "@domicile-desktop/manganese-window-management/window";
+import {
+  browserIdOf,
+  browserWindowId,
+  WindowKind,
+} from "@domicile-desktop/manganese-window-management/window";
 import {
   activeIsPrivate,
   closedBrowsersOf,
+  screenHolding,
   screenOfApp,
   shutIdsOf,
   WindowAction,
@@ -137,6 +155,9 @@ import { deskVirtualMonitors } from "./virtual-monitors";
 /** No photographs, while the config's folders are listed. */
 const NO_WALLPAPERS: Wallpapers = { dark: [], light: [] };
 
+/** A workspace with no screen, which never shows: see `shown` below. */
+const NOWHERE: Rect = { height: 0, width: 0, x: 0, y: 0 };
+
 type Props = {
   /** What the launcher offers beside files. */
   applications: ApplicationsConfig;
@@ -160,6 +181,12 @@ type Props = {
  * one {@link Stage} that draws every window. Workspaces are shared across
  * monitors, as in sway. See `docs/architecture/ONE-PAGE-FOR-THE-DESK.md`.
  */
+/**
+ * Where browser window `window`'s page is drawn, for a video in
+ * picture-in-picture to grow out of and shrink back into.
+ */
+const pageOfThisDocument = (window: string) => pageOf(document, window);
+
 export const Desktop = ({
   applications,
   bar,
@@ -182,8 +209,9 @@ export const Desktop = ({
   const { act } = windows;
   const clientIcons = useClientIcons(
     domicile,
-    windows.windows.flatMap((window) =>
-      window.kind === WindowKind.App ? [window.desktopId] : [],
+    // An app window draws its app's icon, when its app has one.
+    windows.windows.map((window) =>
+      window.kind === WindowKind.App ? window.desktopId : window.appId,
     ),
     desktopClientIcons,
   );
@@ -249,6 +277,8 @@ export const Desktop = ({
 
   // Subscribed once for the desk, not per bar: there is a bar per monitor.
   const extensions = useExtensions(domicile);
+  // Every installed extension, for the tray's menu.
+  const installedExtensions = useInstalledExtensions(domicile);
 
   // Tray icons, subscribed once for the desk.
   const tray = useTray(domicile);
@@ -256,6 +286,8 @@ export const Desktop = ({
   const trayOrder = useTrayOrder(
     trayEntries(tray, extensions, []).map(({ key }) => key),
   );
+  // Pins too, so unpinning on one bar unpins on every bar.
+  const trayPins = useTrayPins();
 
   // Notifications, subscribed once for the desk. One toast manager for the
   // page's life, because the toaster subscribes to it once.
@@ -308,6 +340,19 @@ export const Desktop = ({
     inboxes,
     onClose: closeNotifications,
   });
+  // Email links, from pages, apps and `domicile open`, open in an inbox.
+  const mailLinks = useMailLinks(
+    domicile,
+    inboxes,
+    inboxDrawer.drawer.readings,
+  );
+  const { open: openLink, opens: opensLink } = mailLinks;
+  const shellLinks = useMemo(
+    (): ShellLinks => ({ open: openLink, opens: opensLink }),
+    [openLink, opensLink],
+  );
+  const asker = mailLinks.asking?.appId;
+  const appOf = useApps(domicile, asker === undefined ? [] : [asker]);
   // Pressing an inbox's notification brings up its window too.
   const { invoke: invokeNotification, items: notificationItems } =
     notifications;
@@ -602,6 +647,12 @@ export const Desktop = ({
     },
     [domicile],
   );
+  const removed = useCallback(
+    (entry: number) => {
+      domicile.clipboard.remove(entry);
+    },
+    [domicile],
+  );
   const clipboardDismissed = useCallback(() => {
     act(WindowAction.ClipboardDismissed());
   }, [act]);
@@ -610,10 +661,23 @@ export const Desktop = ({
     (appId: string) => screenOfApp({ screens: deskScreens, workspaces }, appId),
     [deskScreens, workspaces],
   );
+  // A video in picture-in-picture opens on its window's screen, or on the
+  // focused one while its window is on none.
+  const pictureInPictureWorkspace = useCallback(
+    (window: string): Rect => {
+      const name =
+        screenHolding(windows, browserWindowId(window)) ?? windows.focused;
+      const screen =
+        screens.find(({ geometry }) => geometry.name === name) ?? screens[0];
+      return screen?.geometry.workspace ?? NOWHERE;
+    },
+    [screens, windows],
+  );
   // Frames with their bars; the page's own boxes leave those out and still
   // count a hidden tab.
   const shownWindows = useCallback(() => shownWindowsOf(screens), [screens]);
-  // Closed inboxes' windows, which keep running, are no one's to pick.
+  // Closed inboxes' windows and windows their apps hid, which keep running,
+  // are no one's to pick.
   const closedBrowsers = useMemo(() => closedBrowsersOf(windows), [windows]);
   // Shared, so the stage sees a change only when one is shown or hidden.
   const shutIds = useMemo(() => shutIdsOf(windows), [windows]);
@@ -641,16 +705,34 @@ export const Desktop = ({
       notificationsHandle,
     ],
   );
+  // The tray shows the extensions of the last focused page's profile.
+  const trayProfile = useFocusedProfile(
+    domicile,
+    windows.activeId === undefined ? undefined : browserIdOf(windows.activeId),
+  );
   const trayState = useMemo(
     () => ({
       clicked: clickedExtension,
       extensions,
+      installed: installedExtensions,
       items: tray,
       open: openExtension,
       opened,
       order: trayOrder,
+      pins: trayPins,
+      profile: trayProfile,
     }),
-    [clickedExtension, extensions, opened, openExtension, tray, trayOrder],
+    [
+      clickedExtension,
+      extensions,
+      installedExtensions,
+      opened,
+      openExtension,
+      tray,
+      trayOrder,
+      trayProfile,
+      trayPins,
+    ],
   );
   // Kept while each screen shows the same workspace, though `screens` changes
   // with every window.
@@ -688,6 +770,7 @@ export const Desktop = ({
 
   // The binding mode is desk-wide.
   useKeybindings({
+    answer: (query) => answerQuery(query, windows),
     domicile,
     keybindings,
     launcherOpen: windows.launcherOpen,
@@ -701,224 +784,257 @@ export const Desktop = ({
 
   useScreenFollowsPointer({ act, displays, focused: windows.focused });
 
+  // Popups close when the overview, a fullscreen window or a scratchpad
+  // window moves or covers what they point at.
+  const popupScene = popupSceneOf(windows, screens);
+
   return (
-    <BarProviders
-      clock={shellOptions.clock}
-      drawer={drawer}
-      holdKeyboard={holdKeyboard}
-      keymap={shellOptions.keymap}
-      launcher={launcherControl}
-      tray={trayState}
-      workspaces={shownWorkspaces}
-    >
-      {/*
+    <PopupScene scene={popupScene}>
+      <BarProviders
+        clock={shellOptions.clock}
+        drawer={drawer}
+        holdKeyboard={holdKeyboard}
+        keymap={shellOptions.keymap}
+        launcher={launcherControl}
+        shellLinks={shellLinks}
+        tray={trayState}
+        workspaces={shownWorkspaces}
+      >
+        {/*
         First, so it paints under everything. It does not wait for the
         desktop to connect.
       */}
-      <Wallpaper
-        files={files}
-        held={flipping}
-        photos={listedWallpapers ?? NO_WALLPAPERS}
-        picture={backgroundPicture}
-        theme={theme}
-      />
-      {/*
+        <Wallpaper
+          files={files}
+          held={flipping}
+          photos={listedWallpapers ?? NO_WALLPAPERS}
+          picture={backgroundPicture}
+          still={!shellOptions.wallpaper.rotate}
+          theme={theme}
+        />
+        {/*
         Every display the desktop has taken up. A new display appears one
         render after the host reports it, once the reducer gives it a
         workspace.
       */}
-      {screens.map(({ geometry: { name } }) => (
-        <Monitor
-          bar={bar}
-          focused={name === windows.focused}
-          key={name}
-          name={name}
-        />
-      ))}
-      {/*
+        {screens.map(({ geometry: { name } }) => (
+          <Monitor
+            bar={bar}
+            focused={name === windows.focused}
+            key={name}
+            name={name}
+          />
+        ))}
+        {/*
         Under every window and over the wallpaper: the overview's dimmed
         screens, tiles and names.
       */}
-      {overviews !== undefined && (
-        <OverviewBackdrop
-          cards={windows.overviewCards}
-          closing={overviewPhase === "closing"}
-          onClosed={overviewClosed}
-          overviews={overviews}
-        />
-      )}
-      {/*
+        {overviews !== undefined && (
+          <OverviewBackdrop
+            cards={windows.overviewCards}
+            closing={overviewPhase === "closing"}
+            onClosed={overviewClosed}
+            overviews={overviews}
+          />
+        )}
+        {/*
         Every window, once for the desk and after every bar, so a window wins a
         tie with a bar it overlaps; see `Stage`.
       */}
-      {screens.length > 0 && (
-        <Stage
-          activeId={windows.activeId}
-          behindPanel={
-            windows.launcherOpen ||
-            windows.overviewOpen ||
-            windows.clipboardOpen ||
-            opened !== undefined ||
-            portal.url !== undefined ||
-            notificationsOpen ||
-            heldPanels > 0 ||
-            lock.locked
-          }
-          // While a desktop panel is open the page keeps the keyboard; see
-          // `AppWindow`. Extension popups, a portal's sign-in page,
-          // applications' dialogs and the lock screen count.
-          clientIcons={clientIcons}
-          domicile={domicile}
-          draggingId={windows.draggingId}
-          focusedId={windows.focusedId}
-          handed={windows.handed}
-          modifiers={modifiers}
-          {...stageActions}
-          overview={sight}
-          popups={windows.popups}
-          scratchpad={windows.scratchpad}
-          screens={screens}
-          shut={shut}
-          windows={windows.windows}
+        {screens.length > 0 && (
+          <Stage
+            activeId={windows.activeId}
+            behindPanel={
+              windows.launcherOpen ||
+              windows.overviewOpen ||
+              windows.clipboardOpen ||
+              opened !== undefined ||
+              portal.url !== undefined ||
+              notificationsOpen ||
+              heldPanels > 0 ||
+              lock.locked
+            }
+            // While a desktop panel is open the page keeps the keyboard; see
+            // `AppWindow`. Extension popups, a portal's sign-in page,
+            // applications' dialogs and the lock screen count.
+            clientIcons={clientIcons}
+            domicile={domicile}
+            draggingId={windows.draggingId}
+            focusedId={windows.focusedId}
+            handed={windows.handed}
+            modifiers={modifiers}
+            {...stageActions}
+            overview={sight}
+            popups={windows.popups}
+            scratchpad={windows.scratchpad}
+            screens={screens}
+            shut={shut}
+            windows={windows.windows}
+          />
+        )}
+        {/*
+        Over every window and under the toasts and panels, on every
+        workspace. Not on the lock screen.
+      */}
+        <PictureInPictureFloats
+          pageFor={pageOfThisDocument}
+          pictureInPicture={domicile.pictureInPicture}
+          shown={screens.length > 0 && !lock.locked}
+          workspaceFor={pictureInPictureWorkspace}
         />
-      )}
-      {/* Over every window, while the overview is open. */}
-      {overviews !== undefined && overviewPhase === "open" && (
-        <OverviewPicker
-          aim={windows.overviewAim}
-          cards={windows.overviewCards}
-          focused={windows.focused}
-          onAim={overviewAimed}
-          onDismiss={overviewDismissed}
-          onMove={windowMovedTo}
-          onPick={overviewPicked}
-          onPickWindow={overviewWindowPicked}
-          overviews={overviews}
+        {/* Over every window, while the overview is open. */}
+        {overviews !== undefined && overviewPhase === "open" && (
+          <OverviewPicker
+            aim={windows.overviewAim}
+            cards={windows.overviewCards}
+            focused={windows.focused}
+            onAim={overviewAimed}
+            onDismiss={overviewDismissed}
+            onMove={windowMovedTo}
+            onPick={overviewPicked}
+            onPickWindow={overviewWindowPicked}
+            overviews={overviews}
+          />
+        )}
+        {/* Panels cover the whole desktop, not one screen. */}
+        <Launcher
+          fromPrivate={activeIsPrivate(windows)}
+          glances={glances}
+          onClosed={launcherClosed}
+          onDismiss={launcherDismissed}
+          onLaunch={launched}
+          open={windows.launcherOpen}
+          opening={opening}
+          opens={opensFile}
+          preview={preview}
+          screen={windows.focused}
+          search={search}
+          searchApps={apps.search}
         />
-      )}
-      {/* Panels cover the whole desktop, not one screen. */}
-      <Launcher
-        fromPrivate={activeIsPrivate(windows)}
-        glances={glances}
-        onClosed={launcherClosed}
-        onDismiss={launcherDismissed}
-        onLaunch={launched}
-        open={windows.launcherOpen}
-        opening={opening}
-        opens={opensFile}
-        preview={preview}
-        screen={windows.focused}
-        search={search}
-        searchApps={apps.search}
-      />
-      {openingWith !== undefined && (
-        <OpenWith
-          domicile={domicile}
-          onClose={() => {
-            setOpeningWith(undefined);
-          }}
-          onOpen={(argv) => {
-            setOpeningWith(undefined);
-            act(WindowAction.AppLaunched(argv));
-          }}
-          path={openingWith}
+        {openingWith !== undefined && (
+          <OpenWith
+            domicile={domicile}
+            onClose={() => {
+              setOpeningWith(undefined);
+            }}
+            onOpen={(argv) => {
+              setOpeningWith(undefined);
+              act(WindowAction.AppLaunched(argv));
+            }}
+            path={openingWith}
+            screen={windows.focused}
+          />
+        )}
+        {/* Over the windows, on the screen with the keyboard. */}
+        <PortalSignIn
+          onDismiss={portal.dismiss}
+          screen={windows.focused}
+          url={portal.url}
+        />
+        {/* Over the whole desktop, like the launcher. */}
+        <Clipboard
+          entries={clipboard}
+          onCopy={copied}
+          onDismiss={clipboardDismissed}
+          onRemove={removed}
+          open={windows.clipboardOpen}
           screen={windows.focused}
         />
-      )}
-      {/* Over the windows, on the screen with the keyboard. */}
-      <PortalSignIn
-        onDismiss={portal.dismiss}
-        screen={windows.focused}
-        url={portal.url}
-      />
-      {/* Over the whole desktop, like the launcher. */}
-      <Clipboard
-        entries={clipboard}
-        onCopy={copied}
-        onDismiss={clipboardDismissed}
-        open={windows.clipboardOpen}
-        screen={windows.focused}
-      />
-      {/*
+        {/*
         Over the windows and under every panel, so a toast never covers the
         launcher. On the screen with the keyboard. Hidden while locked or
         casting so notifications are not shown on the lock screen or a TV.
       */}
-      <NotificationToasts
-        manager={toasts}
-        now={now}
-        onAction={pressNotification}
-        onReply={notifications.reply}
-        screen={windows.focused}
-        shown={!(lock.locked || casting)}
-      />
-      {/* Like the toasts, on the screen with the keyboard. */}
-      <LevelNotice press={levelPress} screen={windows.focused} />
-      <KeymapNotice
-        press={
-          keymapSwitches === 0 || keymaps === undefined
-            ? undefined
-            : {
-                count: keymapSwitches,
-                description: keymaps.keymaps.find(
-                  ({ name }) => name === keymaps.active,
-                )?.description,
-                keymap: keymaps.active,
-              }
-        }
-        screen={windows.focused}
-      />
-      {/* Under the bell that opened it. */}
-      <NotificationDrawer
-        handle={notificationsHandle}
-        inboxes={inboxes.length === 0 ? undefined : inboxDrawer.drawer}
-        items={notifications.items}
-        now={now}
-        onAction={pressNotification}
-        onClose={closeNotifications}
-        onDismiss={notifications.dismiss}
-        onOpen={openNotifications}
-        onPause={notifications.pauseFor}
-        onReply={notifications.reply}
-        onResume={notifications.resume}
-        open={notificationsOpen && !lock.locked}
-        pause={notifications.pause}
-        screen={notificationsOn}
-      />
-      {/*
+        <NotificationToasts
+          manager={toasts}
+          now={now}
+          onAction={pressNotification}
+          onReply={notifications.reply}
+          screen={windows.focused}
+          shown={!(lock.locked || casting)}
+        />
+        {/* Like the toasts, on the screen with the keyboard. */}
+        <LevelNotice press={levelPress} screen={windows.focused} />
+        <KeymapNotice
+          press={
+            keymapSwitches === 0 || keymaps === undefined
+              ? undefined
+              : {
+                  count: keymapSwitches,
+                  description: keymaps.keymaps.find(
+                    ({ name }) => name === keymaps.active,
+                  )?.description,
+                  keymap: keymaps.active,
+                }
+          }
+          screen={windows.focused}
+        />
+        {/* Under the bell that opened it. */}
+        <NotificationDrawer
+          handle={notificationsHandle}
+          inboxes={inboxes.length === 0 ? undefined : inboxDrawer.drawer}
+          items={notifications.items}
+          now={now}
+          onAction={pressNotification}
+          onClose={closeNotifications}
+          onDismiss={notifications.dismiss}
+          onOpen={openNotifications}
+          onPause={notifications.pauseFor}
+          onReply={notifications.reply}
+          onResume={notifications.resume}
+          open={notificationsOpen && !lock.locked}
+          pause={notifications.pause}
+          screen={notificationsOn}
+        />
+        {/*
         Applications' dialogs, over every panel, on the screen of the window
         that asked. A dialog with no parent window goes on the focused screen.
         Screen casts show in the bar's sharing item when it has one.
       */}
-      <PortalDialogs
-        closedBrowsers={closedBrowsers}
-        domicile={domicile}
-        holdKeyboard={holdKeyboard}
-        omitScreenCasts={showsSharing(bar)}
-        screen={windows.focused}
-        screenOf={screenOf}
-        shellChords={shellChords}
-        shownWindows={shownWindows}
-      />
-      {/*
+        <PortalDialogs
+          closedBrowsers={closedBrowsers}
+          domicile={domicile}
+          holdKeyboard={holdKeyboard}
+          omitAgents={showsSharing(bar)}
+          omitScreenCasts={showsSharing(bar)}
+          screen={windows.focused}
+          screenOf={screenOf}
+          shellChords={shellChords}
+          shownWindows={shownWindows}
+        />
+        {mailLinks.asking !== undefined && (
+          <MailPicker
+            asker={asker === undefined ? undefined : appOf(asker).name}
+            lastChoice={mailLinks.lastChoice}
+            link={mailLinks.asking.link}
+            onCancel={mailLinks.cancel}
+            onChoose={({ address }) => {
+              mailLinks.choose(address);
+            }}
+            screen={windows.focused}
+            senders={mailLinks.senders}
+          />
+        )}
+        {/*
         Last, over every panel, so the modal launcher and clipboard cannot take
         input on a locked desk.
 
         Input is already blocked by the compositor; only the compositor
         unlocks. See `lock/Lock.tsx`.
       */}
-      <Lock
-        bar={lockBar}
-        checking={lock.checking}
-        locked={lock.locked}
-        onUnlock={lock.unlock}
-        picture={lockPicture}
-        refusals={lock.refusals}
-        refused={lock.refused}
-        screen={windows.focused}
-      />
-      <NoScreens />
-    </BarProviders>
+        <Lock
+          bar={lockBar}
+          checking={lock.checking}
+          locked={lock.locked}
+          onUnlock={lock.unlock}
+          picture={lockPicture}
+          refusals={lock.refusals}
+          refused={lock.refused}
+          screen={windows.focused}
+        />
+        <NoScreens />
+      </BarProviders>
+    </PopupScene>
   );
 };
 
@@ -942,7 +1058,7 @@ const lockBar = (screen: string) => (
   <LockBar layout={LOCK_BAR} screen={screen} />
 );
 
-/** Everything the bars' items read, desktop-wide. */
+/** Everything the bars' items and the windows read, desktop-wide. */
 const BarProviders = ({
   children,
   clock,
@@ -950,6 +1066,7 @@ const BarProviders = ({
   holdKeyboard,
   keymap,
   launcher,
+  shellLinks,
   tray,
   workspaces,
 }: {
@@ -959,6 +1076,7 @@ const BarProviders = ({
   holdKeyboard: HoldKeyboard;
   keymap: KeymapOptions;
   launcher: LauncherControl;
+  shellLinks: ShellLinks;
   tray: TrayState;
   workspaces: Workspaces;
 }) => (
@@ -969,7 +1087,9 @@ const BarProviders = ({
           <PanelKeyboardContext value={holdKeyboard}>
             <ClockOptionsContext value={clock}>
               <KeymapOptionsContext value={keymap}>
-                {children}
+                <ShellLinksContext value={shellLinks}>
+                  {children}
+                </ShellLinksContext>
               </KeymapOptionsContext>
             </ClockOptionsContext>
           </PanelKeyboardContext>
@@ -1046,7 +1166,13 @@ const launch = (
       break;
     }
     case LaunchKind.Browsed: {
-      act(WindowAction.BrowserOpened(picked.url, picked.isPrivate));
+      act(
+        WindowAction.BrowserOpened(
+          picked.url,
+          picked.isPrivate,
+          picked.profile,
+        ),
+      );
       break;
     }
   }
@@ -1171,5 +1297,8 @@ const stageActionsOf = (
   // is a share of that.
   onStretch: (id: string, edge: Direction, by: number, on: Geometry) => {
     act(WindowAction.WindowStretched(id, edge, by, on.workspace));
+  },
+  onTabDrop: (target: NodeRef, edge: Direction, url: string) => {
+    act(WindowAction.TabDropped(target, edge, url));
   },
 });

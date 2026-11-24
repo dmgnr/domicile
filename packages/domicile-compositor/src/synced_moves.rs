@@ -1,4 +1,4 @@
-//! Bubble moves held to the end of their commit transaction, so each names
+//! Popup moves held to the end of their commit transaction, so each names
 //! the synced frames it shows with. See
 //! `docs/architecture/WINDOW-COMPOSITING.md#synced-frames`.
 
@@ -78,7 +78,7 @@ mod tests {
 
         moves.hold(moved("app-2", vec![]));
         assert!(moves.awaited());
-        // The bubble's own content, then the parent's.
+        // The popup's own content, then the parent's.
         moves.synced("app-2", 1);
         moves.synced("app-1", 4);
 

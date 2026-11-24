@@ -39,7 +39,7 @@ use smithay::reexports::wayland_server::{
 };
 use smithay::utils::SERIAL_COUNTER;
 use smithay::wayland::input_method::InputMethodSeat as _;
-use tracing::{debug, warn};
+use tracing::debug;
 use wayland_client::protocol::{wl_compositor, wl_keyboard, wl_registry, wl_seat, wl_surface};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, WEnum};
 use wayland_protocols::wp::text_input::zv3::client::{
@@ -134,12 +134,12 @@ impl ChromeEditor {
             if let Err(err) = guard.read() {
                 if !matches!(&err, wayland_client::backend::WaylandError::Io(io) if io.kind() == io::ErrorKind::WouldBlock)
                 {
-                    warn!(%err, "the browser's stand-in editor lost its connection");
+                    tracing::error!(%err, "the browser's stand-in editor lost its connection");
                 }
             }
         }
         if let Err(err) = self.queue.dispatch_pending(&mut self.stand_in) {
-            warn!(%err, "the browser's stand-in editor could not read its events");
+            tracing::error!(%err, "the browser's stand-in editor could not read its events");
         }
         let handle = self.queue.handle();
         self.stand_in.set_up(&handle);
@@ -170,7 +170,7 @@ impl ChromeEditor {
 
     fn flush(&self) {
         if let Err(err) = self.connection.flush() {
-            warn!(%err, "the browser's stand-in editor could not send");
+            tracing::error!(%err, "the browser's stand-in editor could not send");
         }
     }
 }
@@ -244,7 +244,7 @@ impl DomicileCompositor {
             match ChromeEditor::connect(&mut display, &self.loop_handle) {
                 Ok(editor) => self.chrome_editor = Some(editor),
                 Err(err) => {
-                    warn!(%err, "the browser's stand-in editor would not connect; pages cannot compose");
+                    tracing::error!(%err, "the browser's stand-in editor would not connect; pages cannot compose");
                     return;
                 }
             }

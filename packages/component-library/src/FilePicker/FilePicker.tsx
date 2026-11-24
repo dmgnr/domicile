@@ -286,7 +286,6 @@ export const FilePicker = ({ ref, request }: Props) => {
   };
 
   return (
-    // biome-ignore lint/a11y/noNoninteractiveElementInteractions: Escape closes the dialog wherever focus is inside it
     <dialog
       aria-labelledby={titleId}
       className={scrimStyles}

@@ -7,15 +7,17 @@
 //   the one the server keeps.
 
 import type { Result } from "@cprussin/option-result";
+import { Err, Ok } from "@cprussin/option-result";
 import type { Processes } from "@domicile-desktop/sdk/desktop/processes";
 
-import type { Asked } from "./asked";
-import type { Audio, Meter } from "./audio";
-import type { AudioError } from "./audio-error";
+import { Asked } from "./asked";
+import type { Audio, AudioDevice, Meter } from "./audio";
+import { AudioError } from "./audio-error";
+import { parseId, Target } from "./ids";
 import { meters } from "./meters";
 import { Request } from "./request";
 import { requestQueue } from "./request-queue";
-import { watchAudio } from "./watch-audio";
+import { readServer, watchAudio } from "./watch-audio";
 
 /** The calls this library makes. */
 export type AudioDesktop = {
@@ -41,6 +43,10 @@ export type SoundServer = {
   watch: (onAudio: (audio: Audio) => void) => () => void;
   /** Kept between 0 and 1.5, pavucontrol's maximum. */
   setVolume: (id: string, volume: number) => Promise<Result<Asked, AudioError>>;
+  /**
+   * Unmuting a filter device also unmutes what it passes through
+   * ({@link AudioDevice.through}). Muting mutes only `id`.
+   */
   setMuted: (id: string, muted: boolean) => Promise<Result<Asked, AudioError>>;
   /** Make a device the default for new streams. */
   setDefault: (id: string) => Promise<Result<Asked, AudioError>>;
@@ -84,13 +90,58 @@ export const soundServer = (
     meters: (onLevels) => meters(domicile, onLevels, timing.tickMs, report),
     moveStream: (id, device) => ask(Request.Move(id, device)),
     setDefault: (id) => ask(Request.Default(id)),
-    setMuted: (id, muted) => ask(Request.Muted(id, muted)),
+    setMuted: (id, muted) =>
+      muted || !namesADevice(id)
+        ? ask(Request.Muted(id, muted))
+        : unmuteChain(domicile, ask, id),
     setPort: (id, port) => ask(Request.Port(id, port)),
     setProfile: (card, profile) => ask(Request.Profile(card, profile)),
     setVolume: (id, volume) => ask(Request.Volume(id, volume)),
     watch: (onAudio) => watchAudio(domicile, onAudio, timing, report),
   };
 };
+
+type Ask = (request: Request) => Promise<Result<Asked, AudioError>>;
+
+const namesADevice = (id: string): boolean =>
+  parseId(id).match({
+    Err: () => false,
+    Ok: ({ target }) => target === Target.Output || target === Target.Input,
+  });
+
+/**
+ * Unmutes a device, then whatever muted stream or device it passes through,
+ * read fresh so a mute made elsewhere is seen. The device's own unmute is
+ * queued first, so a mute asked during the read still comes after it. The
+ * first refusal is the answer.
+ */
+const unmuteChain = async (
+  domicile: AudioDesktop,
+  ask: Ask,
+  id: string,
+): Promise<Result<Asked, AudioError>> => {
+  const own = ask(Request.Muted(id, false));
+  const links = (await readServer(domicile)).andThenAsync(
+    async (audio): Promise<Result<Asked, AudioError>> => {
+      const device = [...audio.outputs, ...audio.inputs].find(
+        (candidate) => candidate.id === id,
+      );
+      if (device === undefined) {
+        return Err(AudioError.UnknownId(id));
+      } else {
+        const asked = await Promise.all(
+          mutedLinks(device).map((link) => ask(Request.Muted(link, false))),
+        );
+        return asked.find((answer) => answer.isErr()) ?? Ok(Asked.Done);
+      }
+    },
+  );
+  return (await own).and(await links);
+};
+
+/** Each muted link in a device's chain. */
+const mutedLinks = (device: AudioDevice): string[] =>
+  device.through.filter((link) => link.muted).map((link) => link.id);
 
 const warn: Report = (message, detail) => {
   // biome-ignore lint/suspicious/noConsole: background failures have no caller to return to

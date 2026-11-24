@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <optional>
+#include <vector>
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/point.h"
@@ -74,6 +75,41 @@ TEST(PointerWarpTest, APointerElsewhereMoves) {
 TEST(PointerWarpTest, APointerOffThePageMoves) {
   // The pointer is on no shell, so nothing says it is over the box.
   EXPECT_FALSE(PointerAlreadyOver(std::nullopt, kFrame));
+}
+
+void ExpectBoxes(const std::optional<std::vector<gfx::RectF>>& boxes,
+                 const std::vector<gfx::RectF>& expected) {
+  ASSERT_TRUE(boxes.has_value());
+  ASSERT_EQ(boxes->size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ((*boxes)[i].ToString(), expected[i].ToString());
+  }
+}
+
+TEST(PointerConfinementBoxesTest, APageBoxIsThatBoxInTheWindow) {
+  ExpectBoxes(PointerConfinementBoxes(kPage, {gfx::RectF(10, 20, 300, 200)}),
+              {gfx::RectF(50, 80, 300, 200)});
+}
+
+TEST(PointerConfinementBoxesTest, APageCannotHoldThePointerOutsideItsWindow) {
+  // Clipped to the page, and a box wholly off it left out.
+  ExpectBoxes(PointerConfinementBoxes(kPage, {gfx::RectF(700, 500, 300, 300),
+                                              gfx::RectF(900, 0, 10, 10)}),
+              {gfx::RectF(740, 560, 100, 100)});
+  EXPECT_FALSE(PointerConfinementBoxes(kPage, {gfx::RectF(-50, -50, 10, 10)})
+                   .has_value());
+}
+
+TEST(PointerConfinementBoxesTest, NoBoxesLetGo) {
+  ExpectBoxes(PointerConfinementBoxes(kPage, {}), {});
+}
+
+TEST(PointerConfinementBoxesTest, NothingThatIsNotABoxIsOne) {
+  EXPECT_FALSE(
+      PointerConfinementBoxes(kPage, {gfx::RectF(NAN, 0, 10, 10)}).has_value());
+  EXPECT_FALSE(PointerConfinementBoxes(kPage, {gfx::RectF(0, 0, 10, 10),
+                                               gfx::RectF(0, 0, INFINITY, 10)})
+                   .has_value());
 }
 
 }  // namespace

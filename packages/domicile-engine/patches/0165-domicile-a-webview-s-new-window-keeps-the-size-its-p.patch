@@ -20,10 +20,10 @@ job builds it on `crux`.
  1 file changed, 6 insertions(+)
 
 diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
-index 62f2ca4..9fa62ad 100644
+index 69605be..0a6167b 100644
 --- a/content/browser/web_contents/web_contents_impl.cc
 +++ b/content/browser/web_contents/web_contents_impl.cc
-@@ -6196,6 +6196,12 @@ WebContents* WebContentsImpl::ShowCreatedWindow(
+@@ -6205,6 +6205,12 @@ WebContents* WebContentsImpl::ShowCreatedWindow(
    // TODO(crbug.com/40092782): Utilize window_features.has_x and others.
    blink::mojom::WindowFeatures adjusted_features = window_features;
    int64_t display_id = AdjustWindowRect(&adjusted_features.bounds, opener);

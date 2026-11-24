@@ -1,0 +1,23 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// An identity provider a DomicileIdentityEvent offers, such as google.com.
+dictionary DomicileIdentityProvider {
+  // Its site, as Chrome names it: "google.com".
+  required DOMString name;
+
+  // Its icon as a data: URL, or "" for none.
+  required USVString icon;
+
+  // The signing-in site's privacy policy and terms of service, as the
+  // provider lists them, or "".
+  required USVString privacyPolicy;
+  required USVString termsOfService;
+
+  // The user is signed out of it, so it has no accounts to offer:
+  // `signInToProvider()` opens its sign-in page.
+  required boolean signedOut;
+
+  // It can sign in another account, with `signInToProvider()`.
+  required boolean addAccount;
+};

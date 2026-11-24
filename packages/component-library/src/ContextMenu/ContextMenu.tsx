@@ -5,10 +5,11 @@ import { CaretRightIcon } from "@phosphor-icons/react/dist/ssr/CaretRight";
 import { CheckIcon } from "@phosphor-icons/react/dist/ssr/Check";
 import { DotIcon } from "@phosphor-icons/react/dist/ssr/Dot";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { css } from "../../styled-system/css";
 import type { ExtendProps } from "../extend-props";
 import { usePopupBoundary } from "../PopupBoundary/PopupBoundary";
+import { useClosedWithScene } from "../PopupScene/PopupScene";
 import { popupStyles, positionerStyles } from "./menu-popup";
 import "../stylesheet";
 
@@ -32,7 +33,8 @@ type Props = ExtendProps<
  * The caller sets `open` and `at`, and hears it close (a choice, Escape or an
  * outside press) through `onOpenChange`. The press may not be in this
  * document, as with a click in a `<webview>`. The menu takes the keyboard while
- * open. It stays inside its `PopupBoundary`, such as its window.
+ * open. It stays inside its `PopupBoundary`, such as its window, and asks to
+ * close when its `PopupScene` changes.
  *
  * Letting go of the right button over an item chooses it, as in Chrome, so a
  * right press held from opening the menu can pick an item. Not where the menu
@@ -53,10 +55,17 @@ const ContextMenuComponent = ({ at, children, label, ...rootProps }: Props) => {
     [at.x, at.y],
   );
   const { boundary } = usePopupBoundary(false);
+  const ownActions = useRef<BaseContextMenu.Root.Actions | null>(null);
+  const actions = rootProps.actionsRef ?? ownActions;
+  const heard = useClosedWithScene(actions, rootProps);
   return (
     // The context menu's root, not `Menu.Root`: a `Menu.Root` with no trigger
     // closes when one of its submenus opens.
-    <BaseContextMenu.Root {...rootProps}>
+    <BaseContextMenu.Root
+      {...rootProps}
+      actionsRef={actions}
+      onOpenChange={heard}
+    >
       <BaseMenu.Portal>
         <BaseMenu.Positioner
           align="start"
@@ -361,7 +370,7 @@ const mnemonicKey = (
  * instead of base-ui's type-ahead. A key from a submenu bubbles here through
  * React's tree; that submenu's popup is not inside this one, so it is skipped.
  */
-const chooseByMnemonic = (
+export const chooseByMnemonic = (
   event: BaseUIEvent<KeyboardEvent<HTMLDivElement>>,
 ) => {
   const item = mnemonicItem(event);

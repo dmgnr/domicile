@@ -49,6 +49,27 @@ struct EngineDisplay {
   // Whether it scans out with a variable refresh rate: one of the
   // `DOMICILE_ADAPTIVE_SYNC_*` values in domicile_engine.h.
   int32_t adaptive_sync = 0;
+  // Whether it is driven in HDR10: one of the `DOMICILE_HDR_*` values in
+  // domicile_engine.h. Then its panel's luminances in cd/m².
+  int32_t hdr = 0;
+  float max_luminance = 0.f;
+  float max_average_luminance = 0.f;
+  float min_luminance = 0.f;
+  float sdr_white_nits = 0.f;
+};
+
+// An Electron app's view a browser window holds. Mirrors
+// DomicileBrowserWindowView in domicile_engine.h, except the string and the
+// window, which holds it.
+struct EngineBrowserView {
+  std::string id;
+  int32_t x = 0;
+  int32_t y = 0;
+  int32_t width = 0;
+  int32_t height = 0;
+
+  friend bool operator==(const EngineBrowserView&,
+                         const EngineBrowserView&) = default;
 };
 
 // One of the browser's windows.
@@ -59,6 +80,26 @@ struct EngineBrowserWindow {
   std::string id;
   std::string title;
   std::string app_id;
+  std::string url;
+  bool off_the_record = false;
+  // The views it holds and shows, bottom first.
+  std::vector<EngineBrowserView> views;
+};
+
+// An input device the browser reads.
+//
+// Mirrors DomicileInputDevice in domicile_engine.h, except the strings, as
+// for EngineDisplay.
+struct EngineInputDevice {
+  std::string name;
+  std::string sys_path;
+  int32_t id = 0;
+  uint16_t vendor_id = 0;
+  uint16_t product_id = 0;
+  // A DomicileInputDeviceKind.
+  uint8_t kind = 0;
+  // A DomicileInputDeviceConnection.
+  uint8_t connection = 0;
 };
 
 // One frame of a display capture.
@@ -129,6 +170,8 @@ struct EngineEvent {
     kCompositing,
     // The browser's windows, for capture tools to list.
     kBrowserWindows,
+    // The input devices the browser reads.
+    kInputDevices,
   };
 
   Type type = Type::kConfigure;
@@ -138,6 +181,8 @@ struct EngineEvent {
   uint32_t height = 0;
   // kConfigure: device pixels per CSS pixel of the page the box is in.
   double scale = 1.0;
+  // kConfigure: the embedding element's CSS `zoom`.
+  double zoom = 1.0;
   // kConfigure: the box's number, which a submit names to be shown at it.
   uint64_t box = 0;
   // kReleased, and kImported, where zero is a refusal.
@@ -152,6 +197,8 @@ struct EngineEvent {
   base::flat_map<std::string, std::vector<uint8_t>> copied;
   // kCaptured and kCaptureEnded: the DomicileCaptureId.
   uint32_t capture = 0;
+  // kCaptureEnded: why the capture failed, or empty when it just ended.
+  std::string why;
   // kCaptured: the frame's id, which releases it, and the frame.
   // kFrameDone and kPresented: the window's frame number; see SurfaceFrames.
   uint64_t frame = 0;
@@ -165,6 +212,8 @@ struct EngineEvent {
   bool in_memory = false;
   // kBrowserWindows: the whole list, in open order.
   std::vector<EngineBrowserWindow> browser_windows;
+  // kInputDevices: the whole list, in the order the browser found them.
+  std::vector<EngineInputDevice> input_devices;
 };
 
 // Queue of engine events with a pollable fd.

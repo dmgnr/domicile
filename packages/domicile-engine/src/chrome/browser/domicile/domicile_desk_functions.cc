@@ -20,6 +20,7 @@
 #include "chrome/browser/domicile/domicile_extension_tray.h"
 #include "chrome/browser/domicile/domicile_window_controller.h"
 #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
+#include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/common/extensions/api/side_panel.h"
 #include "chrome/common/extensions/api/tabs.h"
@@ -27,6 +28,7 @@
 #include "components/domicile/browser/desk_tabs.h"
 #include "components/domicile/browser/web_view_guest.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/zoom/zoom_controller.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -167,6 +169,23 @@ WebViewGuest& GuestOf(content::WebContents& tab) {
 double DefaultZoomFactor(content::WebContents& tab) {
   return blink::ZoomLevelToZoomFactor(
       content::HostZoomMap::GetForWebContents(&tab)->GetDefaultZoomLevel());
+}
+
+// The ZoomController mode tabs.setZoomSettings asks for, as Chrome's maps it.
+// DeskTakesZoomSettings has already refused a per-origin mode that is not
+// automatic.
+zoom::ZoomController::ZoomMode ZoomModeFor(const tabs::ZoomSettings& settings) {
+  switch (settings.mode) {
+    case tabs::ZoomSettingsMode::kNone:
+    case tabs::ZoomSettingsMode::kAutomatic:
+      return settings.scope == tabs::ZoomSettingsScope::kPerTab
+                 ? zoom::ZoomController::ZOOM_MODE_ISOLATED
+                 : zoom::ZoomController::ZOOM_MODE_DEFAULT;
+    case tabs::ZoomSettingsMode::kManual:
+      return zoom::ZoomController::ZOOM_MODE_MANUAL;
+    case tabs::ZoomSettingsMode::kDisabled:
+      return zoom::ZoomController::ZOOM_MODE_DISABLED;
+  }
 }
 
 base::Value TabValue(ExtensionFunction& function, content::WebContents& tab) {
@@ -492,8 +511,10 @@ class DeskTabsSetZoomFunction : public ExtensionFunction {
       return RespondNow(Error(extensions::ErrorUtils::FormatErrorMessage(
           kZoomOutOfRangeError, base::NumberToString(params->zoom_factor))));
     }
-    GuestOf(*tab).ZoomTo(*factor);
-    return RespondNow(NoArguments());
+    return RespondNow(GuestOf(*tab).ZoomTo(*factor)
+                          ? NoArguments()
+                          : Error(extensions::tabs_constants::
+                                      kCannotZoomDisabledTabError));
   }
 };
 
@@ -517,7 +538,7 @@ class DeskTabsGetZoomFunction : public ExtensionFunction {
   }
 };
 
-// Accepts only the mode desk tabs already use, as a no-op; refuses others.
+// Sets the guest's zoom mode, as Chrome's sets a tab's.
 class DeskTabsSetZoomSettingsFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("tabs.setZoomSettings", TABS_SETZOOMSETTINGS)
@@ -539,10 +560,13 @@ class DeskTabsSetZoomSettingsFunction : public ExtensionFunction {
       return RespondNow(Error(std::move(error)));
     }
     const tabs::ZoomSettings& settings = params->zoom_settings;
-    return RespondNow(DeskTakesZoomSettings(tabs::ToString(settings.mode),
-                                            tabs::ToString(settings.scope))
-                          ? NoArguments()
-                          : Error(kNotOnADesk));
+    if (!DeskTakesZoomSettings(tabs::ToString(settings.mode),
+                               tabs::ToString(settings.scope))) {
+      return RespondNow(Error(
+          extensions::tabs_constants::kPerOriginOnlyInAutomaticError));
+    }
+    GuestOf(*tab).SetZoomMode(ZoomModeFor(settings));
+    return RespondNow(NoArguments());
   }
 };
 
@@ -561,7 +585,7 @@ class DeskTabsGetZoomSettingsFunction : public ExtensionFunction {
     if (tab == nullptr) {
       return RespondNow(Error(TabNotFound(params->tab_id)));
     }
-    tabs::ZoomSettings settings = DeskZoomSettings();
+    tabs::ZoomSettings settings = DeskZoomSettings(*tab);
     settings.default_zoom_factor = DefaultZoomFactor(*tab);
     return RespondNow(
         ArgumentList(tabs::GetZoomSettings::Results::Create(settings)));

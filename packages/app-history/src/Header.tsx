@@ -94,15 +94,26 @@ const isSearchKey = (event: KeyboardEvent): boolean =>
     !(event.target instanceof HTMLInputElement) &&
     !(event.target instanceof HTMLTextAreaElement));
 
+// The shadow is on its own layer, which fades, so scrolling past the top
+// repaints no shadow.
 const headerStyles = css({
+  _after: {
+    boxShadow:
+      "0 {spacing.2} {spacing.6} color-mix(in oklab, {colors.backdrop} 25%, transparent)",
+    content: '""',
+    inset: 0,
+    opacity: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    transition: "opacity {durations.normal} {easings.out}",
+  },
   "&[data-scrolled]": {
+    _after: { opacity: 1 },
     backdropFilter: "blur({spacing.4}) saturate(160%)",
     backgroundColor:
       "color-mix(in oklab, {colors.background} 60%, transparent)",
     borderBlockEndColor:
       "color-mix(in oklab, {colors.foreground} 10%, transparent)",
-    boxShadow:
-      "0 {spacing.2} {spacing.6} color-mix(in oklab, {colors.backdrop} 25%, transparent)",
   },
   backgroundColor: "transparent",
   borderBlockEnd: "1px solid transparent",
@@ -112,7 +123,7 @@ const headerStyles = css({
   paddingInline: 6,
   position: "relative",
   transition:
-    "border-color {durations.normal} {easings.out}, box-shadow {durations.normal} {easings.out}, background-color {durations.normal} {easings.out}",
+    "border-color {durations.normal} {easings.out}, background-color {durations.normal} {easings.out}",
   zIndex: 2,
 });
 
@@ -143,13 +154,21 @@ const titleStyles = css({
 
 const spacerStyles = css({ flexGrow: 1 });
 
-// A glow under the field while it has focus.
+// A glow under the field while it has focus, on its own layer, which fades.
 const searchStyles = css({
-  "&:focus-within": {
+  _after: {
+    borderRadius: "full",
     boxShadow:
       "0 0 0 {spacing.1} color-mix(in oklab, {colors.accent} 18%, transparent), 0 {spacing.3} {spacing.10} color-mix(in oklab, {colors.accent} 22%, transparent)",
+    content: '""',
+    inset: 0,
+    opacity: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    transition: "opacity {durations.normal} {easings.out}",
   },
+  "&:focus-within": { _after: { opacity: 1 } },
   borderRadius: "full",
   boxShadow: "{shadows.lifted}",
-  transition: "box-shadow {durations.normal} {easings.out}",
+  position: "relative",
 });

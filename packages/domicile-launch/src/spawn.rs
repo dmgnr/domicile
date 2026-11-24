@@ -5,7 +5,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::control_socket::VARIABLE;
-use crate::shell_path::Shell;
+use crate::shell_path::{Shell, ShellFiles};
+use crate::trace::{producer_socket, PRODUCER_VARIABLE};
 
 /// The URL of the shell page the engine generates.
 ///
@@ -21,6 +22,10 @@ pub struct Spawn {
     pub env: Vec<(String, OsString)>,
 }
 
+/// The variable that names the engine's Electron socket to the apps a desktop
+/// starts.
+pub const ELECTRON_VARIABLE: &str = "DOMICILE_ELECTRON_SOCK";
+
 /// The socket and file paths for one run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Runtime {
@@ -35,6 +40,11 @@ pub struct Runtime {
     ///
     /// Lives in the run directory, since only the supervisor dials it.
     pub command: PathBuf,
+    /// The engine's Electron socket, which each `electron-host` dials for its
+    /// app's windows. Apps find it in [`ELECTRON_VARIABLE`].
+    ///
+    /// Lives in the run directory, as [`Runtime::command`] does.
+    pub electron: PathBuf,
     /// The control socket for `domicile which-shell` and
     /// `domicile load-shell`.
     ///
@@ -43,14 +53,20 @@ pub struct Runtime {
     pub control: PathBuf,
     /// The engine profile, kept between runs. See [`crate::profile_path`].
     pub profile: PathBuf,
-    /// A per-run directory put first on every app's `PATH`. Its `xdg-open` is
-    /// `domicile-xdg-open`, which runs `domicile open`; see [`crate::open`].
+    /// A per-run directory put first on every app's `PATH`. Its `xdg-open` and
+    /// `xdg-email` are `domicile-xdg-open` and `domicile-xdg-email`, which run
+    /// `domicile open`; see [`crate::open`] and [`crate::email`].
     pub shims: PathBuf,
     /// The session file the compositor writes once it is serving.
     ///
     /// Set here rather than derived in [`compositor`] because the launcher
     /// waits on it.
     pub session: PathBuf,
+    /// A data directory first on every app's `XDG_DATA_DIRS`, where the
+    /// compositor writes the desktop entries that run the config's
+    /// `electron.apps` on the engine. See
+    /// `domicile_host::electron_entries`.
+    pub electron_entries: PathBuf,
     /// The clients the compositor launched, kept across a compositor restart
     /// so the next one launches again those the crash took. See
     /// `domicile_compositor::launches`.
@@ -99,6 +115,9 @@ pub fn engine(
         // Lets `domicile load-shell` swap the shell without a restart. Passed
         // on every run, not only in development.
         format!("--domicile-command-socket={}", runtime.command.display()).into(),
+        // Lets Electron apps open their windows on the desk. See
+        // docs/architecture/ELECTRON-APPS.md.
+        format!("--domicile-electron-socket={}", runtime.electron.display()).into(),
         // Log ERROR and above to stderr. The fork reports problems at ERROR.
         // WARNING adds a dozen routine upstream lines on every nested start.
         // `--enable-logging` lets `--log-level=0` or `1`, or `--v=1`, in
@@ -109,7 +128,10 @@ pub fn engine(
         // build handles them with `EventConverterEvdevImpl`, which ignores
         // touchpad motion and the mouse wheel, and has no pointer
         // acceleration. Both features are off by default.
-        ["--enable-features=LibinputHandleTouchpad,LibinputHandleMouse"]
+        //
+        // `EnablePerfettoSystemTracing` reports trace events to
+        // `domicile trace`; see `crate::trace`.
+        ["--enable-features=LibinputHandleTouchpad,LibinputHandleMouse,EnablePerfettoSystemTracing"]
             .into_iter()
             .chain(extra.enabled)
             .collect::<Vec<_>>()
@@ -120,6 +142,11 @@ pub fn engine(
         format!("--user-data-dir={}", runtime.profile.display()).into(),
         format!("--domicile-broker-socket={}", runtime.broker.display()).into(),
     ];
+    // The root is `domicile dev`'s socket, so an engine restarted during
+    // development keeps asking the dev server.
+    if shell.files == ShellFiles::DevServer {
+        args.push("--domicile-shell-dev-server".into());
+    }
     // On drm, a window drives a CRTC only if its bounds match the CRTC's
     // exactly (`ScreenManager::FindWindowAt`). Otherwise its page flips are
     // dropped and the screen stays black. Fullscreen takes the display's own
@@ -150,15 +177,31 @@ pub fn engine(
     if platform == NESTED_PLATFORM {
         args.push("--domicile-inhibit-host-shortcuts".into());
     }
-    if !extra.disabled.is_empty() {
-        args.push(format!("{DISABLE_FEATURES}{}", extra.disabled.join(",")).into());
-    }
+    args.push(
+        format!(
+            "{DISABLE_FEATURES}{}",
+            DISABLED
+                .iter()
+                .copied()
+                .chain(extra.disabled)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .into(),
+    );
     args.extend(extra.rest.into_iter().map(OsString::from));
     Spawn {
         args,
-        // For the programs the engine starts, such as an app's
-        // `domicile-app-host`, so they reach this desktop.
-        env: vec![(VARIABLE.to_string(), runtime.control.clone().into())],
+        env: vec![
+            // For the programs the engine starts, such as an app's
+            // `domicile-app-host`, so they reach this desktop.
+            (VARIABLE.to_string(), runtime.control.clone().into()),
+            // Where the engine reports trace events; see `crate::trace`.
+            (
+                PRODUCER_VARIABLE.to_string(),
+                producer_socket(&runtime.control).into(),
+            ),
+        ],
         program: engine.join("chrome"),
     }
 }
@@ -174,6 +217,27 @@ pub fn composite_on_the_cpu(engine: &mut Spawn) {
 pub fn send_frames_in_memory(compositor: &mut Spawn) {
     compositor.args.push("--software-compositing".into());
     compositor.args.push("yes".into());
+}
+
+/// Makes an [`engine`] open links for apps, such as `slack:`, as the
+/// [`compositor`]'s apps do: its `xdg-open` is `domicile open`, which finds
+/// the entries that run the config's Electron apps on the engine. The shell
+/// names the app it asks about with `domicile open --which`, so the two agree,
+/// except on `Terminal=true` handlers: the engine has no `DOMICILE_TERMINAL`,
+/// which the compositor sets from the live config, so it skips them.
+pub fn let_the_engine_open_links(
+    engine: &mut Spawn,
+    data: &Path,
+    runtime: &Runtime,
+    inherited: &dyn Fn(&str) -> Option<String>,
+) {
+    engine
+        .env
+        .push(("PATH".to_string(), shims_first(runtime, inherited)));
+    engine.env.push((
+        "XDG_DATA_DIRS".to_string(),
+        data_dirs(data, runtime, inherited),
+    ));
 }
 
 /// Whether the engine on `platform` takes emulated input (EIS) through its
@@ -196,11 +260,15 @@ pub fn let_the_engine_take_input(compositor: &mut Spawn) {
 /// The compositor starts apps, so its environment is what apps inherit:
 ///
 /// - `DOMICILE_SOCK`: `domicile` commands in a terminal reach this desktop.
+/// - `DOMICILE_ELECTRON_SOCK`: an Electron app's `electron-host` reaches the
+///   engine.
 /// - `BROWSER`: `domicile-open-url`, a single program because many readers
 ///   don't split the value.
 /// - `PATH`: [`Runtime::shims`] first, so `xdg-open` is `domicile open`.
-/// - `XDG_DATA_DIRS`: `data` first, so GIO finds `domicile-mimeapps.list`.
-///   A user's own `mimeapps.list` still wins. The portal does not see this.
+/// - `XDG_DATA_DIRS`: [`Runtime::electron_entries`] first, so starting an
+///   app the config lists runs it on the engine; then `data`, so GIO finds
+///   `domicile-mimeapps.list`. A user's own `mimeapps.list` still wins. The
+///   portal does not see this.
 /// - `LD_LIBRARY_PATH`: the engine directory first, for the
 ///   `libdomicile_engine.so` the compositor `dlopen`s. The compositor removes
 ///   it again for its clients.
@@ -218,20 +286,6 @@ pub fn compositor(
     scope_clients: bool,
     inherited: &dyn Fn(&str) -> Option<String>,
 ) -> Spawn {
-    let mut path = OsString::from(&runtime.shims);
-    if let Some(theirs) = inherited("PATH") {
-        path.push(":");
-        path.push(theirs);
-    }
-    // Unset means `/usr/local/share:/usr/share` per the XDG spec, so keep
-    // those after ours.
-    let mut data_dirs = OsString::from(data);
-    data_dirs.push(":");
-    data_dirs.push(
-        inherited("XDG_DATA_DIRS")
-            .filter(|theirs| !theirs.is_empty())
-            .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string()),
-    );
     let mut libraries = OsString::from(engine);
     if let Some(theirs) = inherited("LD_LIBRARY_PATH") {
         libraries.push(":");
@@ -246,6 +300,8 @@ pub fn compositor(
         runtime.broker.clone().into(),
         "--launches".into(),
         runtime.launches.clone().into(),
+        "--electron-entries".into(),
+        runtime.electron_entries.clone().into(),
     ];
     // Omit `--config` when there is none. The compositor uses defaults for a
     // missing flag but fails on a path it cannot load.
@@ -261,16 +317,23 @@ pub fn compositor(
         args,
         env: vec![
             (VARIABLE.to_string(), runtime.control.clone().into()),
+            (
+                ELECTRON_VARIABLE.to_string(),
+                runtime.electron.clone().into(),
+            ),
             ("BROWSER".to_string(), browser.into()),
-            ("PATH".to_string(), path),
-            ("XDG_DATA_DIRS".to_string(), data_dirs),
+            ("PATH".to_string(), shims_first(runtime, inherited)),
+            (
+                "XDG_DATA_DIRS".to_string(),
+                data_dirs(data, runtime, inherited),
+            ),
             ("LD_LIBRARY_PATH".to_string(), libraries),
             (
                 "RUST_LOG".to_string(),
-                // Warnings plus the compositor's few `INFO` lines (latency
-                // spikes report under `domicile`). An inherited value wins.
+                // Errors alone; `domicile set-log-level` turns it up while
+                // the desktop runs. An inherited value wins.
                 inherited("RUST_LOG")
-                    .unwrap_or_else(|| "warn,domicile_compositor=info,domicile=info".to_string())
+                    .unwrap_or_else(|| "error".to_string())
                     .into(),
             ),
         ],
@@ -278,9 +341,50 @@ pub fn compositor(
     }
 }
 
+/// `PATH` with [`Runtime::shims`] first, so `xdg-open` is `domicile open`.
+fn shims_first(runtime: &Runtime, inherited: &dyn Fn(&str) -> Option<String>) -> OsString {
+    let mut path = OsString::from(&runtime.shims);
+    if let Some(theirs) = inherited("PATH") {
+        path.push(":");
+        path.push(theirs);
+    }
+    path
+}
+
+/// `XDG_DATA_DIRS` with [`Runtime::electron_entries`] first, then `data`,
+/// as [`compositor`] says.
+fn data_dirs(
+    data: &Path,
+    runtime: &Runtime,
+    inherited: &dyn Fn(&str) -> Option<String>,
+) -> OsString {
+    // Unset means `/usr/local/share:/usr/share` per the XDG spec, so keep
+    // those after ours.
+    let mut dirs = OsString::from(&runtime.electron_entries);
+    dirs.push(":");
+    dirs.push(data);
+    dirs.push(":");
+    dirs.push(
+        inherited("XDG_DATA_DIRS")
+            .filter(|theirs| !theirs.is_empty())
+            .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string()),
+    );
+    dirs
+}
+
 const ENABLE_FEATURES: &str = "--enable-features=";
 
 const DISABLE_FEATURES: &str = "--disable-features=";
+
+/// Features the engine starts with off.
+///
+/// `V8Flag_scavenger_direct_old_allocation`: Chromium's field trial testing
+/// config, which a build that isn't Chrome-branded applies, turns it on for
+/// Linux, and the feature passes `--scavenger_direct_old_allocation` to V8.
+/// The pinned V8 has no such flag, so every process that starts V8 wrote
+/// "Error: unrecognized flag" to the logs, hundreds of times a boot. Remove
+/// it once a pin's V8 has the flag (`d8 --help`).
+pub const DISABLED: [&str; 1] = ["V8Flag_scavenger_direct_old_allocation"];
 
 /// The `extra` engine switches, with the feature lists apart from the rest.
 struct Extra<'a> {

@@ -29,7 +29,7 @@ job builds it on `crux`.
  1 file changed, 64 insertions(+)
 
 diff --git a/content/common/gpu_pre_sandbox_hook_linux.cc b/content/common/gpu_pre_sandbox_hook_linux.cc
-index 2e53794..44ce77d 100644
+index 149b8dc..cb0f0a6 100644
 --- a/content/common/gpu_pre_sandbox_hook_linux.cc
 +++ b/content/common/gpu_pre_sandbox_hook_linux.cc
 @@ -451,6 +451,64 @@ void AddVulkanICDPermissions(std::vector<BrokerFilePermission>* permissions) {
@@ -97,7 +97,7 @@ index 2e53794..44ce77d 100644
  void AddStandardGpuPermissions(std::vector<BrokerFilePermission>* permissions) {
    static const char kDriCardBasePath[] = "/dev/dri/card";
    static const char kNvidiaCtlPath[] = "/dev/nvidiactl";
-@@ -616,6 +674,11 @@ sandbox::syscall_broker::BrokerCommandSet CommandSetForGPU(
+@@ -624,6 +682,11 @@ sandbox::syscall_broker::BrokerCommandSet CommandSetForGPU(
         options.use_virtio_specific_policies || IsArchitectureArm())) {
      command_set.set(sandbox::syscall_broker::COMMAND_READLINK);
    }
@@ -109,7 +109,7 @@ index 2e53794..44ce77d 100644
    return command_set;
  }
  
-@@ -669,6 +732,7 @@ std::vector<BrokerFilePermission> FilePermissionsForGpu(
+@@ -677,6 +740,7 @@ std::vector<BrokerFilePermission> FilePermissionsForGpu(
    }
  
    AddStandardGpuPermissions(&permissions);

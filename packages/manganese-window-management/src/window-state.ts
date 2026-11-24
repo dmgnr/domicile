@@ -18,6 +18,7 @@ import type { MediaKey } from "./keyboard/media-key";
 import type { Popup } from "./popup";
 import type { Rect } from "./rect";
 import { SURFACE_TUCK, TITLE_BAR } from "./rect";
+import { readingOrder } from "./screens/reading-order";
 import type { PlacedScreen } from "./screens/screen-toward";
 import { screenToward } from "./screens/screen-toward";
 import { Beside } from "./tree/drop";
@@ -173,6 +174,12 @@ export type WindowState = {
    */
   launcherOpen: boolean;
   /**
+   * Where the next browser window opens: beside the tab a page's text, link
+   * or image was dropped on (`TabDropped`). `undefined` opens it beside the
+   * focus.
+   */
+  newTabAt: { target: NodeRef; edge: Direction } | undefined;
+  /**
    * The workspace the overview's keys are on, or `undefined` for the shown
    * one. Kept here because `focus` and `move` commands step it.
    */
@@ -238,6 +245,7 @@ export const NO_WINDOWS: WindowState = {
   homes: { "1": UNDESCRIBED_SCREEN },
   launcherOpen: false,
   mode: "default",
+  newTabAt: undefined,
   overviewAim: undefined,
   overviewCards: {},
   overviewOpen: false,
@@ -331,6 +339,20 @@ export const screenOfApp = (
     : screenShowing(state, workspace.name);
 };
 
+/**
+ * The screen window `id`'s workspace belongs to: the one showing it, or else
+ * its home. `undefined` for a window on no workspace.
+ */
+export const screenHolding = (
+  state: Pick<WindowState, "homes" | "screens" | "workspaces">,
+  id: string,
+): string | undefined => {
+  const workspace = workspaceHolding(state, id);
+  return workspace === undefined
+    ? undefined
+    : (screenShowing(state, workspace.name) ?? state.homes[workspace.name]);
+};
+
 /** The focused window, or `undefined` on an empty workspace. */
 export const activeIdOf = (state: WindowState): string | undefined =>
   focusedOn(workspaceHere(state));
@@ -340,16 +362,20 @@ export const killedIdsOf = (state: WindowState): readonly string[] =>
   commandedWindowsOn(workspaceHere(state));
 
 /**
- * The background windows shown as closed: off every workspace and the
- * scratchpad, though their pages keep running. See
- * {@link WindowState.background}.
+ * The windows shown as closed, though their pages keep running: background
+ * windows off every workspace and the scratchpad (see
+ * {@link WindowState.background}), and the windows their apps hid.
  */
-export const shutIdsOf = (state: WindowState): readonly string[] =>
-  state.background.filter(
+export const shutIdsOf = (state: WindowState): readonly string[] => [
+  ...state.background.filter(
     (id) =>
       workspaceHolding(state, id) === undefined &&
       !state.scratchpad.includes(id),
-  );
+  ),
+  ...state.windows.flatMap((window) =>
+    window.kind === WindowKind.Browser && window.isHidden ? [window.id] : [],
+  ),
+];
 
 /** The engine's ids of the windows {@link shutIdsOf} names. */
 export const closedBrowsersOf = (state: WindowState): readonly string[] =>
@@ -409,7 +435,6 @@ export enum WindowActionKind {
   ClipboardDismissed,
   ClipboardSearched,
   ClipboardToggled,
-  CommandExecuted,
   ContainerSplit,
   DeskLocked,
   FileOpened,
@@ -429,6 +454,8 @@ export enum WindowActionKind {
   KeyPressed,
   LauncherDismissed,
   LauncherToggled,
+  LayerLowered,
+  LayerRaised,
   LayoutSet,
   MediaKeyPressed,
   ModeSet,
@@ -455,6 +482,7 @@ export enum WindowActionKind {
   ScreensDescribed,
   ShortcutsInhibitorSwitched,
   SplitToggled,
+  TabDropped,
   TabSubgrouped,
   TerminalOpened,
   VirtualMonitorAdded,
@@ -605,13 +633,15 @@ export const WindowAction = {
   }),
 
   /**
-   * The user opened a browser window at `src`, private or not. `useWindows`
-   * asks the engine, and the window arrives in the next
+   * The user opened a browser window at `src`, private or not, in browser
+   * profile `profile` or with none its site's. `useWindows` asks the engine,
+   * and the window arrives in the next
    * {@link WindowAction.BrowserWindowsListed}.
    */
-  BrowserOpened: (src: string, isPrivate: boolean) => ({
+  BrowserOpened: (src: string, isPrivate: boolean, profile?: string) => ({
     isPrivate,
     kind: WindowActionKind.BrowserOpened as const,
+    profile,
     src,
   }),
 
@@ -658,17 +688,6 @@ export const WindowAction = {
    */
   ClipboardToggled: () => ({
     kind: WindowActionKind.ClipboardToggled as const,
-  }),
-
-  /**
-   * `exec <argv…>`: the compositor spawns `argv`.
-   *
-   * Changes no state; the new window arrives as a host announcement. It is an
-   * action so every key command is one.
-   */
-  CommandExecuted: (argv: readonly string[]) => ({
-    argv,
-    kind: WindowActionKind.CommandExecuted as const,
   }),
 
   /** `splith` / `splitv`: moves the focus out of its tab group. */
@@ -790,7 +809,7 @@ export const WindowAction = {
 
   /**
    * The user started dragging the tiled group `group` by its tab strip. Its
-   * open tab is focused, as by a click; a selection around it stays.
+   * open tab is focused; a selection around it stays.
    */
   GroupGrabbed: (group: NodeRef) => ({
     group,
@@ -826,6 +845,12 @@ export const WindowAction = {
    * `mod+space`, which opens and closes the launcher.
    */
   LauncherToggled: () => ({ kind: WindowActionKind.LauncherToggled as const }),
+
+  /** `layer down`: close the overview, or else bring the scratchpad. */
+  LayerLowered: () => ({ kind: WindowActionKind.LayerLowered as const }),
+
+  /** `layer up`: hide the scratchpad, or else show the overview. */
+  LayerRaised: () => ({ kind: WindowActionKind.LayerRaised as const }),
 
   /** `layout tabbed` / `layout stacking`. */
   LayoutSet: (layout: Layout) => ({
@@ -990,6 +1015,17 @@ export const WindowAction = {
   /** `layout toggle split`. */
   SplitToggled: () => ({ kind: WindowActionKind.SplitToggled as const }),
 
+  /**
+   * A page's text, link or image dropped on a tab strip, beside `target`'s
+   * tab on its `edge`. Opens `url` in a browser window there.
+   */
+  TabDropped: (target: NodeRef, edge: Direction, url: string) => ({
+    edge,
+    kind: WindowActionKind.TabDropped as const,
+    target,
+    url,
+  }),
+
   /** `group`: turns the focused tab into a group of its own. */
   TabSubgrouped: () => ({ kind: WindowActionKind.TabSubgrouped as const }),
 
@@ -1018,9 +1054,9 @@ export const WindowAction = {
   }),
 
   /**
-   * The user pressed window `id`'s title bar or tab. Unlike
-   * {@link WindowAction.WindowSelected}, it ends a `focus parent` selection
-   * around the window.
+   * The user pressed window `id`'s title bar or tab. As
+   * {@link WindowAction.WindowSelected} does, it ends a `focus parent`
+   * selection around the window.
    */
   WindowBarPressed: (id: string) => ({
     id,
@@ -1151,7 +1187,7 @@ export const WindowAction = {
     kind: WindowActionKind.WindowResized as const,
   }),
 
-  /** The user clicked in a window. A selection around it stays. */
+  /** The user clicked in a window, which ends a selection around it. */
   WindowSelected: (id: string) => ({
     id,
     kind: WindowActionKind.WindowSelected as const,
@@ -1405,7 +1441,10 @@ const reduceAction = (
       return { ...state, launcherOpen: false };
     }
     case WindowActionKind.BrowserWindowsListed: {
-      return listBrowsers(state, action.windows, action.backgroundApps);
+      return placedNewTab(
+        state,
+        listBrowsers(state, action.windows, action.backgroundApps),
+      );
     }
     case WindowActionKind.ChildFocused: {
       return onCurrent(state, childFocused);
@@ -1524,11 +1563,37 @@ const reduceAction = (
     case WindowActionKind.ModeSwapped: {
       return onCurrent(state, modeToggled);
     }
+    case WindowActionKind.TabDropped: {
+      // Closes the launcher, as opening a page from it does.
+      return {
+        ...state,
+        launcherOpen: false,
+        newTabAt: { edge: action.edge, target: action.target },
+      };
+    }
     case WindowActionKind.NewTabPressed: {
       return {
         ...reachWindow(state, openTabBeside(state, action.id)),
         launcherOpen: true,
       };
+    }
+    // The scratchpad hangs above the desk and the overview sits under it, so
+    // up and down step one layer at a time.
+    case WindowActionKind.LayerLowered: {
+      return reduceAction(
+        state,
+        state.overviewOpen
+          ? WindowAction.OverviewDismissed()
+          : WindowAction.ScratchpadBrought(),
+      );
+    }
+    case WindowActionKind.LayerRaised: {
+      return reduceAction(
+        state,
+        state.overviewOpen || scratchpadShownHere(state) === undefined
+          ? WindowAction.OverviewShown()
+          : WindowAction.ScratchpadHidden(),
+      );
     }
     case WindowActionKind.OverviewAimed: {
       return { ...state, overviewAim: action.name };
@@ -1634,10 +1699,6 @@ const reduceAction = (
       // The shell switches the keymap or the inhibitor; no window changes.
       return state;
     }
-    case WindowActionKind.CommandExecuted: {
-      // The compositor spawns it and the host announces the window it opens.
-      return state;
-    }
     // A request only. A client may refuse, for example with unsaved work, and
     // the engine closes a browser window. The window is removed on the next
     // `app_closed` or `browser_windows`. `useWindows` sends the request.
@@ -1711,7 +1772,7 @@ const reduceAction = (
       return reachWindow(state, action.id, picked);
     }
     case WindowActionKind.WindowSelected: {
-      return reachWindow(state, action.id);
+      return reachWindow(state, action.id, picked);
     }
     case WindowActionKind.WindowSentToScratchpad: {
       return hideInScratchpad(state);
@@ -1903,31 +1964,106 @@ const listBrowsers = (
       (opening, { entry, window }) => {
         if (entry.isApp && backgroundApps.includes(entry.appId)) {
           return openHidden(opening, window);
+        } else if (entry.isHidden) {
+          // Its app hid it: listed, on no workspace until the app shows it.
+          return { ...opening, windows: [...opening.windows, window] };
         }
         return entry.width === 0 && entry.height === 0
           ? openWindow(opening, window)
           : openPopupWindow(opening, window, entry.width, entry.height);
       },
-      pagesShown(
+      appsHidOrShowed(
+        pagesShown(
+          kept,
+          new Map(browsers.map(({ window }) => [window.id, window])),
+        ),
         kept,
-        new Map(browsers.map(({ window }) => [window.id, window])),
       ),
     );
 };
+
+// Moves the first browser window `listed` opened since `before` to where a
+// drop aimed it (`newTabAt`). Waits for the next list when none opened.
+const placedNewTab = (
+  before: WindowState,
+  listed: WindowState,
+): WindowState => {
+  const at = listed.newTabAt;
+  const opened = listed.windows.find(
+    ({ id, kind }) =>
+      kind === WindowKind.Browser &&
+      windowOf(before, id) === undefined &&
+      workspaceHolding(listed, id) !== undefined,
+  );
+  return at === undefined || opened === undefined
+    ? listed
+    : dropNode(
+        { ...listed, newTabAt: undefined },
+        { id: opened.id, up: 0 },
+        at.target,
+        at.edge,
+        Beside.InStrip,
+      );
+};
+
+// Takes each browser window its app has just hidden off its workspace, and
+// puts each it has just shown on the current one, from `before`, the windows
+// as they were listed last.
+const appsHidOrShowed = (
+  state: WindowState,
+  before: WindowState,
+): WindowState =>
+  state.windows.reduce((changing, window) => {
+    const was = windowOf(before, window.id);
+    if (
+      window.kind !== WindowKind.Browser ||
+      was?.kind !== WindowKind.Browser ||
+      was.isHidden === window.isHidden
+    ) {
+      return changing;
+    } else if (window.isHidden) {
+      return {
+        ...changing,
+        draggingId:
+          changing.draggingId === window.id ? undefined : changing.draggingId,
+        scratchpad: changing.scratchpad.filter((held) => held !== window.id),
+        workspaces: changing.workspaces.map((workspace) =>
+          holds(workspace, window.id)
+            ? closed(workspace, window.id)
+            : workspace,
+        ),
+      };
+    } else {
+      return workspaceHolding(changing, window.id) === undefined
+        ? onCurrent(changing, (workspace) => opened(workspace, window.id))
+        : changing;
+    }
+  }, state);
 
 /** A browser window as the shell holds it. */
 type BrowserRecord = ReturnType<typeof Window.Browser>;
 
 /** A listed browser window as the shell holds it, before its view's icon. */
 const browserOf = ({
+  appId,
   id,
   isApp,
+  isHidden,
   isPrivate,
   popupWindow,
   title,
   url,
 }: ListedBrowserWindow): BrowserRecord =>
-  Window.Browser(id, url, title, popupWindow, isPrivate, isApp);
+  Window.Browser(
+    id,
+    url,
+    title,
+    popupWindow,
+    isPrivate,
+    isApp,
+    appId,
+    isHidden,
+  );
 
 // Updates each browser window the shell has to its listed address and title,
 // keeping the icon and description its view reported.
@@ -2134,20 +2270,27 @@ const openTabBeside = (state: WindowState, id: string): string => {
   }
 };
 
-// Focuses `id`, shown on `screen`, when the pointer enters it.
+// Focuses `id`, shown on `screen`, when the pointer enters it. Coming from
+// another screen ends a selection around it, as coming from another window
+// does.
 const pointAtShown = (
   state: WindowState,
   workspace: Workspace,
   screen: string,
   id: string,
-): WindowState =>
-  // Same object when already focused: each element in a window (such as a
-  // browser's address bar and page) reports the hover again.
-  focusedOn(workspace) === id && state.focused === screen
-    ? state
-    : onWorkspace({ ...state, focused: screen }, workspace.name, (found) =>
-        reached(found, id),
-      );
+): WindowState => {
+  if (state.focused !== screen) {
+    return onWorkspace({ ...state, focused: screen }, workspace.name, (found) =>
+      picked(found, id),
+    );
+  } else if (focusedOn(workspace) === id) {
+    // Same object when already focused: each element in a window (such as a
+    // browser's address bar and page) reports the hover again.
+    return state;
+  } else {
+    return onWorkspace(state, workspace.name, (found) => reached(found, id));
+  }
+};
 
 // Focuses the screen under the pointer. Same object when it is already
 // focused (this fires on every move) or not yet described by the host.
@@ -2236,8 +2379,9 @@ const sameFields = <Fields extends object>(
  *
  * Runs on every hotplug, so workspaces must stay put. An existing screen
  * keeps its workspace. A new display takes over a removed screen's workspace
- * (a different dock renames every monitor), else the lowest unused one. No
- * two screens show one workspace.
+ * (a different dock renames every monitor), else the lowest unused one.
+ * New displays are numbered in reading order (see `readingOrder`), whatever
+ * order the host lists them in. No two screens show one workspace.
  *
  * With no displays, keeps one {@link UNDESCRIBED_SCREEN} so open windows
  * still have a workspace.
@@ -2255,16 +2399,19 @@ const describeScreens = (
   const replaced = state.screens
     .filter((screen) => !names.includes(screen.name))
     .map(({ current }) => current);
-  const screens = kept.reduce<readonly DeskScreen[]>(
+  const numbered = readingOrder(kept).reduce<readonly DeskScreen[]>(
     (placed, { box, name }) => [
       ...placed,
       { box, current: showing(state, placed, replaced, name), name },
     ],
     [],
   );
+  const screens = kept.map(({ name }) =>
+    screenNamed({ ...state, screens: numbered }, name),
+  );
   return {
     ...state,
-    focused: focusedAmong(screens, state.focused),
+    focused: focusedAmong(numbered, state.focused),
     screens,
   };
 };

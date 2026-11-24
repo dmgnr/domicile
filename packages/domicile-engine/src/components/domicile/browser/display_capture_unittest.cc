@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -112,11 +113,18 @@ class FakeFrameCallbacks
       this};
 };
 
-// The producer's observer, keeping each frame and its hold.
+// The producer's observer, keeping each frame and its hold, and why the
+// browser closed it.
 class FakeObserver : public mojom::DisplayCaptureObserver {
  public:
   mojo::PendingRemote<mojom::DisplayCaptureObserver> BindRemote() {
-    return receiver_.BindNewPipeAndPassRemote();
+    mojo::PendingRemote<mojom::DisplayCaptureObserver> remote =
+        receiver_.BindNewPipeAndPassRemote();
+    receiver_.set_disconnect_with_reason_handler(base::BindOnce(
+        [](std::optional<std::string>* why, uint32_t,
+           const std::string& description) { *why = description; },
+        &why_));
+    return remote;
   }
 
   // mojom::DisplayCaptureObserver implementation.
@@ -129,6 +137,7 @@ class FakeObserver : public mojom::DisplayCaptureObserver {
 
   std::vector<mojom::CapturedFramePtr> frames_;
   std::vector<mojo::Remote<mojom::CapturedFrameHold>> holds_;
+  std::optional<std::string> why_;
 
  private:
   mojo::Receiver<mojom::DisplayCaptureObserver> receiver_{this};
@@ -145,6 +154,10 @@ class DisplayCaptureTest : public testing::Test {
         kDisplayRoot, kSize, kMaxFps, gpu,
         control_.BindNewPipeAndPassReceiver(), observer_.BindRemote(),
         base::BindOnce([](bool* ended) { *ended = true; }, &ended_));
+    control_.set_disconnect_with_reason_handler(base::BindOnce(
+        [](std::optional<std::string>* why, uint32_t,
+           const std::string& description) { *why = description; },
+        &control_why_));
     base::RunLoop().RunUntilIdle();
   }
 
@@ -175,6 +188,7 @@ class DisplayCaptureTest : public testing::Test {
   FakeFrameCallbacks callbacks_;
   FakeObserver observer_;
   mojo::Remote<mojom::DisplayCapture> control_;
+  std::optional<std::string> control_why_;
   bool ended_ = false;
   std::unique_ptr<DisplayCapture> capture_;
 };
@@ -255,6 +269,31 @@ TEST_F(DisplayCaptureTest, ClosingTheControlEndsTheCapture) {
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(ended_);
+}
+
+TEST_F(DisplayCaptureTest, VizStoppingBeforeAFrameSaysItCouldNotAllocateOne) {
+  Start(/*gpu=*/true);
+
+  capturer_.consumer_->OnStopped();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(ended_);
+  const std::string why =
+      "viz stopped the capture before its first frame: it could not "
+      "allocate a dmabuf to capture into";
+  EXPECT_EQ(observer_.why_, why);
+  EXPECT_EQ(control_why_, why);
+}
+
+TEST_F(DisplayCaptureTest, VizStoppingAfterAFrameSaysSo) {
+  Start(/*gpu=*/false);
+  SendShmFrame(media::PIXEL_FORMAT_ARGB, std::nullopt);
+
+  capturer_.consumer_->OnStopped();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(ended_);
+  EXPECT_EQ(observer_.why_, "viz stopped the capture");
 }
 
 TEST(CapturedFourccTest, NamesTheFourByteFormatsViz) {

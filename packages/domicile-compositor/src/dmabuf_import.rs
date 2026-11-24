@@ -53,8 +53,8 @@ pub enum ImportError {
 /// Creates an offscreen GLES renderer on the best EGL device, for a
 /// compositor that is not presenting.
 ///
-/// Fails without a working EGL; the compositor then advertises no dmabuf
-/// global and `wl_shm` clients keep working.
+/// Fails without a working EGL; the compositor then reports it and advertises
+/// no dmabuf global.
 pub fn headless_renderer() -> Result<(GlesRenderer, DmabufImporter), ImportError> {
     // Smithay panics if EGL is missing, so try loading it first.
     // SAFETY: this opens the same library Smithay opens next, running the
@@ -102,7 +102,7 @@ fn gbm_or_surfaceless_display(
             Ok((display, Some(node), main_device))
         }
         Err(err) => {
-            tracing::debug!(%err, "no render node has GBM; using surfaceless EGL");
+            tracing::error!(%err, "no render node has GBM; using surfaceless EGL");
             // SAFETY: a surfaceless display wraps no native handle.
             let display = unsafe { EGLDisplay::new(EGLSurfacelessDisplay) }?;
             Ok((display, None, None))
@@ -117,7 +117,7 @@ fn gbm_display(dir: &Path) -> Result<(EGLDisplay, PathBuf), ImportError> {
         let gbm = match Gbm::open(crate::gbm::LIBRARY, &node) {
             Ok(gbm) => gbm,
             Err(err) => {
-                tracing::debug!(?node, %err, "no GBM device on this render node");
+                tracing::warn!(?node, %err, "no GBM device on this render node");
                 continue;
             }
         };
@@ -125,7 +125,7 @@ fn gbm_display(dir: &Path) -> Result<(EGLDisplay, PathBuf), ImportError> {
         // whole life.
         match unsafe { EGLDisplay::new(GbmDisplay(gbm)) } {
             Ok(display) => return Ok((display, node)),
-            Err(err) => tracing::debug!(?node, %err, "EGL refuses this GBM device"),
+            Err(err) => tracing::warn!(?node, ?err, "EGL refuses this GBM device"),
         }
     }
     Err(ImportError::NoDevice)
@@ -281,7 +281,7 @@ mod tests {
     }
 
     // A format the renderer imports but the engine refuses must not be
-    // advertised: imv picked XR30 and none of its frames were drawn.
+    // advertised: the client would pick it and none of its frames would draw.
     #[test]
     fn only_what_the_engine_imports_is_advertised() {
         let renderer_imports = [
@@ -289,7 +289,9 @@ mod tests {
             format(Fourcc::Xrgb8888),
             format(Fourcc::Abgr8888),
             format(Fourcc::Xbgr8888),
+            format(Fourcc::Argb2101010),
             format(Fourcc::Xrgb2101010),
+            format(Fourcc::Rgb565),
             format(Fourcc::Nv12),
         ];
 
@@ -304,6 +306,7 @@ mod tests {
             Fourcc::Xrgb8888,
             Fourcc::Abgr8888,
             Fourcc::Xbgr8888,
+            Fourcc::Argb2101010,
         ];
         expected.sort_by_key(|code| *code as u32);
         assert_eq!(advertised, expected);

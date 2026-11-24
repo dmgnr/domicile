@@ -13,6 +13,9 @@
 export type Config = {
   /** Where editors find this file's JSON Schema. Domicile ignores it. */
   $schema?: string | null;
+  agents?: AgentsConfig;
+  browser?: BrowserConfig;
+  electron?: ElectronConfig;
   extensions?: ExtensionsConfig;
   files?: FilesConfig;
   idle?: IdleConfig;
@@ -31,6 +34,7 @@ export type Config = {
    * `docs/WRITING-A-SHELL.md#options`.
    */
   shell_options?: Record<string, unknown>;
+  spellcheck?: SpellcheckConfig;
   startup?: StartupConfig;
   /**
    * The terminal applications such as htop and vim run in
@@ -48,6 +52,67 @@ export type AccelProfile = "adaptive" | "flat";
 
 /** An sRGB color, written `"#rrggbb"`. */
 export type AccentColor = string;
+
+/**
+ * Agents that drive the desktop, such as Claude Code. See
+ * `docs/AGENTS.md`.
+ */
+export type AgentsConfig = {
+  /**
+   * Whether agents on the web, such as claude.ai, can reach the desktop
+   * through Domicile's relay: while it is set, the compositor runs
+   * `domicile mcp --relay`. Each agent still signs in only once the user
+   * allows it on the desktop, and asks before it uses anything. Off by
+   * default. See
+   * `docs/AGENTS.md#agents-on-the-web`.
+   */
+  web?: boolean;
+};
+
+/**
+ * Browser profiles: sets of sign-ins, site data and extensions, and the
+ * sites each opens. See `docs/architecture/BROWSER-PROFILES.md`.
+ */
+export type BrowserConfig = {
+  /** The profile a new private window opens in. Private. */
+  default_private_profile?: string;
+  /** The profile a site opens in when `sites` names none. Not private. */
+  default_profile?: string;
+  /**
+   * The order the shell lists the profiles in, by id. Profiles it leaves
+   * out follow, by id.
+   */
+  order?: string[];
+  /**
+   * The profiles, by id. An id is a directory name: lowercase letters,
+   * digits and `-`.
+   */
+  profiles?: Record<string, BrowserProfile>;
+  /**
+   * The profile each site opens in, by site: a host, `*.host` for it and
+   * its subdomains, or a host and path such as `github.com/acme` for the
+   * addresses under it. The most specific match wins. A site is never in
+   * `default_profile`, which opens every unlisted site.
+   */
+  sites?: Record<string, string>;
+};
+
+/** One browser profile. See [`BrowserConfig::profiles`]. */
+export type BrowserProfile = {
+  /** The color the shell marks the profile's pages with. */
+  color: AccentColor;
+  /**
+   * The ids of the extensions it turns on, from those `extensions`
+   * installs; the rest are off, and the shell cannot switch them. Unset
+   * leaves the switches to the user: each starts on, or off in a private
+   * profile, whose pages stay away from extensions unless allowed.
+   */
+  extensions?: string[] | null;
+  /** The name the shell shows. */
+  name: string;
+  /** Keeps no history, sign-ins or site data after its last page closes. */
+  private?: boolean;
+};
 
 /** Buttons assigned to one-, two- and three-finger taps. */
 export type ButtonMap = "lrm" | "lmr";
@@ -125,7 +190,7 @@ export type DisplayPlacement = {
    *
    * On a tty the output name is `drm-<id>`, or the connector (`HDMI-A-1`)
    * for a monitor with no EDID name. Ozone derives the id from the EDID, so
-   * it survives a replug. A panel name also matches.
+   * it survives a replug. A panel name or connector (`DP-1`) also matches.
    */
   display: string;
   /**
@@ -136,6 +201,15 @@ export type DisplayPlacement = {
    * closed lid.
    */
   enabled?: boolean;
+  /**
+   * Whether to drive the monitor in HDR (HDR10: BT.2020 primaries with the
+   * PQ curve), so HDR video and images reach its full brightness and
+   * color.
+   *
+   * Off by default. Asked for only where the monitor's EDID says it takes
+   * PQ and the connector scans out in 10 bits; elsewhere it stays SDR.
+   */
+  hdr?: boolean;
   /**
    * The mode to scan out, in physical pixels. Absent means the monitor's
    * native mode.
@@ -173,16 +247,35 @@ export type DisplayPlacement = {
    * logical size.
    */
   scale?: number;
+  /**
+   * In HDR, how bright ordinary (SDR) content's white is, in cd/m² (nits).
+   * Raise it if SDR windows look dim beside the monitor in SDR.
+   *
+   * Absent is 203, the reference white of ITU-R BT.2408. Ignored in SDR.
+   */
+  sdr_white?: number | null;
   /** Which way up the monitor is. */
   transform?: Transform;
+};
+
+/**
+ * Installed Electron apps that run on the desktop's engine instead of the
+ * Electron they ship. See `docs/architecture/ELECTRON-APPS.md`.
+ */
+export type ElectronConfig = {
+  /**
+   * Desktop file ids, as `slack.desktop`. Whatever starts one of these
+   * entries (the launcher, a link, a notification) runs it with
+   * `domicile open --electron`. An app the engine can't run yet runs on
+   * its own Electron, with a notification saying so.
+   */
+  apps?: string[];
 };
 
 /** One extension's settings. See [`ExtensionsConfig::settings`]. */
 export type ExtensionSettings = {
   /** Runs on local files (`file://` pages). Chrome's default is no. */
   file_access?: boolean | null;
-  /** Runs in private windows. Chrome's default is no. */
-  private?: boolean | null;
   /** Which of the sites it asks for it runs on. Chrome's default is all. */
   site_access?: SiteAccess | null;
   /**
@@ -444,6 +537,17 @@ export type SiteAccess = SiteAccessMode | string[];
 
 /** [`SiteAccess`] other than a list of hosts. */
 export type SiteAccessMode = "on_click" | "all_sites";
+
+/** Spell checking in pages: in browser windows, web apps and Electron apps. */
+export type SpellcheckConfig = {
+  /** Underlines misspelled words in text fields and suggests corrections. */
+  enabled?: boolean;
+  /**
+   * The languages words are checked in, as language tags such as `en-US`.
+   * A word spelled right in any of them passes.
+   */
+  languages?: string[];
+};
 
 /**
  * The commands a desk starts with.

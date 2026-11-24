@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::Path;
 
-use domicile_launch::open::{app_opening, opener, opening, AppOpening, OpenError, Opening, Places};
+use domicile_launch::open::{
+    app_opening, claimable, opener, opening, AppOpening, OpenError, Opening, Places,
+};
 
 /// A directory holding `files`, as relative paths and text.
 fn written(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -220,6 +222,23 @@ fn a_handler_that_would_open_it_again_is_an_error() {
 }
 
 #[test]
+fn a_mail_handler_that_runs_xdg_email_is_an_error() {
+    // The desktop's `xdg-email` is `domicile open` too.
+    let desk = desk();
+    fs::write(
+        desk.path().join("applications/mailer.desktop"),
+        app("xdg-email %u", "x-scheme-handler/mailto;"),
+    )
+    .unwrap();
+    let places = places(desk.path(), "x-scheme-handler/mailto=mailer.desktop\n");
+
+    assert!(matches!(
+        opening("mailto:a@example.com", Path::new("/"), &places),
+        Err(OpenError::Loop { .. })
+    ));
+}
+
+#[test]
 fn a_handler_that_opens_an_app_window_is_no_loop() {
     let desk = desk();
     fs::write(
@@ -236,6 +255,35 @@ fn a_handler_that_opens_an_app_window_is_no_loop() {
         opening("slack://open", Path::new("/"), &places),
         Ok(Opening::Run(_))
     ));
+}
+
+#[test]
+fn a_handler_that_runs_an_electron_app_on_the_engine_is_no_loop() {
+    // The entry `electron.apps` writes for Slack.
+    let desk = desk();
+    fs::write(
+        desk.path().join("applications/slack.desktop"),
+        app(
+            "domicile open --electron slack.desktop -- /opt/slack/slack -s %U",
+            "x-scheme-handler/slack;",
+        ),
+    )
+    .unwrap();
+    let places = places(desk.path(), "");
+
+    assert_eq!(
+        opening("slack://open", Path::new("/"), &places),
+        Ok(Opening::Run(vec![
+            "domicile".into(),
+            "open".into(),
+            "--electron".into(),
+            "slack.desktop".into(),
+            "--".into(),
+            "/opt/slack/slack".into(),
+            "-s".into(),
+            "slack://open".into(),
+        ]))
+    );
 }
 
 #[test]
@@ -365,4 +413,15 @@ fn without_a_terminal_a_terminal_application_opens_nothing() {
         opening("a.md", home.path(), &places),
         Err(OpenError::NoApplication { .. })
     ));
+}
+
+#[test]
+fn a_shell_may_claim_a_link_but_not_a_web_address_or_a_file() {
+    assert!(claimable("mailto:a@example.com"));
+    assert!(claimable("MAILTO:a@example.com"));
+    assert!(claimable("zoommtg://zoom.us/join"));
+    assert!(!claimable("https://example.com/"));
+    assert!(!claimable("HTTP://example.com/"));
+    assert!(!claimable("file:///etc/hosts"));
+    assert!(!claimable("notes.md"));
 }

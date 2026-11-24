@@ -95,6 +95,32 @@ source_set("surface_alpha_unit_tests") {
   ]
 }
 
+# Turns a client's image description into the color space and HDR metadata viz
+# draws its buffers with.
+source_set("buffer_color") {
+  sources = [
+    "buffer_color.cc",
+    "buffer_color.h",
+  ]
+
+  public_deps = [ "//ui/gfx:color_space" ]
+
+  deps = [ "//skia" ]
+}
+
+source_set("buffer_color_unit_tests") {
+  testonly = true
+
+  sources = [ "buffer_color_unittest.cc" ]
+
+  deps = [
+    ":buffer_color",
+    "//skia",
+    "//testing/gtest",
+    "//ui/gfx:color_space",
+  ]
+}
+
 # Numbers a window's frames and matches viz's acks and presentation feedback to
 # them.
 source_set("surface_frames") {
@@ -128,7 +154,10 @@ source_set("surface_holds") {
     "surface_holds.h",
   ]
 
-  public_deps = [ "//base" ]
+  public_deps = [
+    "//base",
+    "//gpu/command_buffer/common",
+  ]
 }
 
 source_set("surface_holds_unit_tests") {
@@ -138,6 +167,7 @@ source_set("surface_holds_unit_tests") {
 
   deps = [
     ":surface_holds",
+    "//gpu/command_buffer/common",
     "//testing/gtest",
   ]
 }
@@ -253,6 +283,7 @@ shared_library("domicile_engine") {
   ]
 
   deps = [
+    ":buffer_color",
     ":event_queue",
     ":probe_wait",
     ":process_allocator",

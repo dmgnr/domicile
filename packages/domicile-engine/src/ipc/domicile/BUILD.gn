@@ -1,0 +1,19 @@
+# Copyright 2026 Connor Prussin
+# SPDX-License-Identifier: MIT
+
+# Tests of the fork's change to //ipc's channel-associated endpoints, beside
+# //ipc because //components/domicile:unit_tests runs them.
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [ "channel_disconnect_order_unittest.cc" ]
+
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//ipc",
+    "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/system",
+    "//testing/gtest",
+  ]
+}

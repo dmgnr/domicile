@@ -123,6 +123,23 @@
         type = lib.types.bool;
         default = false;
       };
+      hdr = lib.mkOption {
+        description = ''
+          Whether to drive this monitor in HDR (HDR10). Used only where the
+          monitor's EDID takes PQ and the connector scans out in 10 bits;
+          elsewhere it stays SDR.
+        '';
+        type = lib.types.bool;
+        default = false;
+      };
+      sdr_white = lib.mkOption {
+        description = ''
+          In HDR, how bright ordinary (SDR) content's white is, in cd/m².
+          `null` is 203, the ITU-R BT.2408 reference white.
+        '';
+        type = lib.types.nullOr (lib.types.ints.between 1 10000);
+        default = null;
+      };
       position =
         (pair lib.types.int "The top-left corner, in the desktop's logical units.")
         // {default = [0 0];};
@@ -286,6 +303,16 @@
     "idle.warn_before_seconds" = ''
       The shell chooses when to dim before blanking, with
       `session.idleBeforeBlanking`. See docs/SHELL-IDLE-AND-LOCK.md.
+    '';
+    "extensions.settings.*.private" = ''
+      A private browser profile's extension switches say what runs in
+      private windows: `browser.profiles.<id>.extensions`. See
+      docs/architecture/BROWSER-PROFILES.md.
+    '';
+    "electron.profiles" = ''
+      An Electron app's own `setWindowOpenHandler` decides on its pages' new
+      windows, and the links it hands to `shell.openExternal` open in the
+      browser. See docs/architecture/ELECTRON-APPS.md.
     '';
   };
 
@@ -452,12 +479,7 @@ in {
                 that cannot use a setting refuses it.
               '';
               type = lib.types.attrsOf (lib.types.submodule {
-                options = {
-                  private = lib.mkOption {
-                    description = "Runs in private windows. Chrome's default is no.";
-                    type = lib.types.nullOr lib.types.bool;
-                    default = null;
-                  };
+                options = lib.recursiveUpdate (removed.optionsUnder "extensions.settings.*") {
                   file_access = lib.mkOption {
                     description = "Runs on local files (`file://` pages). Chrome's default is no.";
                     type = lib.types.nullOr lib.types.bool;
@@ -482,7 +504,7 @@ in {
               default = {};
               example = {
                 eimadpbcbfnmbkopoojfekhnkhdbieeh = {
-                  private = true;
+                  file_access = true;
                   site_access = ["github.com"];
                 };
               };
@@ -563,6 +585,20 @@ in {
               default = null;
               example = "login";
             };
+          };
+
+          # Agents on the web, such as claude.ai, reach the desk through
+          # Domicile's relay while this is set: the compositor runs
+          # `domicile mcp --relay`. Applied on reload.
+          agents.web = lib.mkOption {
+            description = ''
+              Whether agents on the web, such as claude.ai, can reach the
+              desktop through Domicile's relay. Each still signs in only once
+              you allow it on the desktop, and asks before it uses anything. Settings ›
+              Agents › Connect from the web sets it.
+            '';
+            type = lib.types.bool;
+            default = false;
           };
 
           # Applications enforce these themselves; the compositor reports them
@@ -725,6 +761,26 @@ in {
             type = lib.types.listOf lib.types.str;
             default = [];
             example = ["mail.google.com"];
+          };
+
+          spellcheck = {
+            enabled = lib.mkOption {
+              description = ''
+                Whether text fields in browser tabs, web apps and Electron apps
+                underline misspelled words and offer fixes in their menu.
+              '';
+              type = lib.types.bool;
+              default = true;
+            };
+            languages = lib.mkOption {
+              description = ''
+                The languages words are checked in, as language tags. The
+                dictionaries ship with the engine; none is downloaded.
+              '';
+              type = lib.types.nonEmptyListOf lib.types.str;
+              default = ["en-US"];
+              example = ["en-US" "de-DE"];
+            };
           };
 
           input.keyboard = {

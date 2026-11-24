@@ -11,7 +11,8 @@ not in the Extensions page or any extension list.
   as it is made, and the desktop reloads it.
 - **Extensions:** switch an extension on or off and open its options through
   the engine. While one is on, change the settings it can use: site access,
-  private windows, local files and user scripts. A setting the config sets
+  local files and user scripts. What runs in private windows is a private
+  profile's extension switches, on the Profiles page. A setting the config sets
   changes in the config, and is locked when the config is read-only; the rest
   change through the engine
   ([EXTENSIONS.md](architecture/EXTENSIONS.md#settings)). Load an unpacked folder, picked in the desktop's file
@@ -19,6 +20,21 @@ not in the Extensions page or any extension list.
   engine; this works with a read-only config. The config's own uninstall by
   editing its `extensions` lists
   ([EXTENSIONS.md](architecture/EXTENSIONS.md#from-the-settings-app)).
+- **Profiles:** a card per browser profile with its color, whether it is
+  private, and its extension switches, and one list of the sites that open
+  outside the default profile, each with its profile
+  ([BROWSER-PROFILES.md](architecture/BROWSER-PROFILES.md)). **Add profile**,
+  **Make default**, a color, Private and removing a profile change the config.
+  An extension switch and a site added here are saved by the desktop, as the
+  address bar's profile menu saves them; one the config sets changes in the
+  config, and is locked when the config is read-only. Adding a site that is
+  already listed is refused, pointing at its row.
+- **Agents:** **Connect from the web** (`agents.web`), which shows the
+  desktop's address for agents on the web such as claude.ai, with Copy, and
+  each one signed in, with **Sign out**. Then each agent connected now or
+  remembered, with what it reaches and when it was last used. **Stop** ends
+  its sessions; **Forget** makes a remembered agent ask again
+  ([AGENTS.md](AGENTS.md)).
 - **Site permissions:** each permission with the sites that have a setting of
   their own for it, or each site with all its permissions. **Remove site**
   clears all of a site's own settings. Changes take effect at once in open
@@ -32,6 +48,12 @@ not in the Extensions page or any extension list.
   site gets when it does not ask for a particular one. A site that names a
   device still gets that device. Manganese's address bar site permissions panel picks
   the same device.
+- **Troubleshooting:** **Detailed logging**, which is
+  `domicile set-log-level debug` until it is turned off or the desktop
+  restarts, and **Save logs**, which is `domicile export-logs` into the
+  Downloads folder (`xdg-user-dir DOWNLOAD`), with **Open Downloads**. Web
+  addresses and window titles are hidden unless that switch is off
+  ([LOGGING.md](LOGGING.md#reading-them)).
 - **Code:** the config file and the shell's source in a plain text editor
   (line numbers, Tab indents, Enter keeps indentation, Ctrl+S saves).
 - Source and design: [`packages/app-settings`](/packages/app-settings/README.md).
@@ -65,14 +87,20 @@ Settings page ─ spawn, stdio ─▶ domicile-app-host ─ DOMICILE_SOCK ─▶
                                                                      site_permissions,              set_site_permission,
                                                                      extensions,                    load_unpacked,
                                                                      media_devices,                 uninstall_extension,
-                                                                     site_data                      config_extensions,
+                                                                     site_data,                     config_extensions,
+                                                                     monitors
                                                                                                     extensions,
                                                                                                     set_extension_enabled,
+                                                                                                    browser_profiles,
+                                                                                                    pin_browser_site,
                                                                                                     configure_extension,
                                                                                                     media_devices,
                                                                                                     set_media_device,
                                                                                                     site_data,
                                                                                                     clear_site_data
+
+                                                    domicile ─ chrome socket ─▶ compositor
+                                                                                which_monitors
 ```
 
 | Part | Where |
@@ -84,10 +112,13 @@ Settings page ─ spawn, stdio ─▶ domicile-app-host ─ DOMICILE_SOCK ─▶
 | Writable | `access(W_OK)` on the file, following links. |
 | Shell options | `settings_files` names the shell's `options.json`, beside its module. The host reads it with the config and checks `shell_options` writes against it. |
 | Extensions | The engine's `extensions`, `set_extension_enabled`, `configure_extension`, `load_unpacked`, `uninstall_extension` and `config_extensions` commands. |
+| Profiles | The engine's `browser_profiles`, `pin_browser_site` and `set_extension_enabled` with a `profile`, on the desk's `BrowserProfileRegistry` ([BROWSER-PROFILES.md](architecture/BROWSER-PROFILES.md)). The profiles themselves are the config's `browser`. |
+| Agents | The control socket's `agents`, `stop_agent` and `forget_agent`, which the compositor answers from its agent registry and `agents.json` ([AGENTS.md](AGENTS.md#design)). Agents on the web: the host reads `domicile mcp --relay`'s status from `$XDG_RUNTIME_DIR/domicile/web-agents.json` and signed-in agents from `$XDG_STATE_HOME/domicile/signed-in-agents.json`, and signs one out by dropping its refresh tokens there; a running `domicile mcp` sees the file change and drops its access tokens too. |
 | Picking a folder | The host calls the `FileChooser` portal's `OpenFile` with `directory`, which the shell draws ([PORTALS.md](PORTALS.md)). A page cannot learn the path of a folder from `<input type="file">`. |
 | Site permissions | The engine's `site_permissions` and `set_site_permission` commands ([CONTROL-CHANNEL.md](/packages/domicile-engine/docs/CONTROL-CHANNEL.md#command-socket)). They read and write the shell profile's content settings as the address bar's panel does. |
 | Site data | The engine's `site_data` and `clear_site_data` commands. They read and remove the shell profile's data through Chrome's `BrowsingDataModel`, as `chrome://settings/content/all` does. |
 | Camera and microphone | The engine's `media_devices` and `set_media_device` commands. They read and write Chrome's device ranking in the shell profile's prefs, which Chrome uses for a site that names no device. |
+| HDR per monitor | The host's `monitors` asks the compositor `which_monitors`: each lit monitor's names (output name, connector, and its EDID name with either maker spelling) and HDR state. A profile monitor whose `display` names a plugged-in monitor that can't show HDR says "Not supported" in place of its switch. A monitor that isn't plugged in keeps its switch. |
 | Opening it | `domicile-settings` runs `domicile open --app` on `settings.js`. |
 
 ## Key decisions

@@ -16,7 +16,9 @@
 #include "base/functional/function_ref.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
+#include "base/values.h"
 #include "components/domicile/browser/extension_settings.h"
+#include "components/domicile/browser/shell_source.h"
 #include "components/domicile/mojom/browser_windows.mojom-shared.h"
 #include "components/domicile/mojom/web_view_guest.mojom-shared.h"
 #include "url/gurl.h"
@@ -28,6 +30,11 @@ namespace domicile {
 // serves. Each connection carries one JSON request line and one reply line.
 //
 //   {"type":"load_shell","version":1,"root":"/x/dist","module":"shell.js"}
+//   {"type":"load_shell","version":1,"root":"/run/user/1000/dev.sock",
+//    "module":"@domicile/shell.js","dev_server":true}
+//                                      (`domicile dev`: the root is a dev
+//                                       server's socket; see
+//                                       shell_dev_server.h)
 //   -> {"type":"loaded"}
 //   -> {"type":"refused","why":"..."}
 //
@@ -39,6 +46,10 @@ namespace domicile {
 //   {"type":"open_url","version":1,"url":"https://example.com/","app":true}
 //   {"type":"open_url","version":1,"url":"https://example.com/","app":true,
 //    "app_id":"mail","reuse":"focus"}
+//   {"type":"open_url","version":1,"url":"https://example.com/",
+//    "profile":"work"}
+//   {"type":"open_url","version":1,"url":"https://example.com/","app":true,
+//    "app_id":"mail","reuse":"focus","profile":"work"}
 //   -> {"type":"opened"}
 //   -> {"type":"refused","why":"..."}
 //
@@ -69,10 +80,28 @@ namespace domicile {
 //   -> {"type":"extensions","extensions":[{"id":"...","name":"...",
 //       "description":"...","version":"1.0","enabled":true,
 //       "settings":{"private":false,"site_access":"all_sites"},
-//       "options_url":"chrome-extension://.../options.html"}]}
+//       "options_url":"chrome-extension://.../options.html",
+//       "icon_path":"/home/.../icons/128.png"}]}
 //   -> {"type":"refused","why":"..."}
 //
 //   {"type":"set_extension_enabled","version":1,"id":"...","enabled":false}
+//   {"type":"set_extension_enabled","version":1,"id":"...","enabled":false,
+//    "profile":"work"}
+//   -> {"type":"set"}
+//   -> {"type":"refused","why":"..."}
+//
+//   {"type":"browser_profiles","version":1}
+//   -> {"type":"browser_profiles","default_profile":"personal",
+//       "default_private_profile":"private",
+//       "profiles":[{"id":"work","name":"Work","color":"#d97706",
+//                    "private":false,"extensions":[{"id":"...",
+//                    "enabled":true,"locked":false}]}],
+//       "sites":[{"site":"github.com/acme","profile":"work",
+//                 "pinned":true}]}
+//   -> {"type":"refused","why":"..."}
+//
+//   {"type":"pin_browser_site","version":1,"site":"github.com/acme",
+//    "profile":"work"}
 //   -> {"type":"set"}
 //   -> {"type":"refused","why":"..."}
 //
@@ -124,6 +153,25 @@ namespace domicile {
 //   -> {"type":"disable_while_typing","enabled":false}
 //   -> {"type":"refused","why":"..."}
 //
+//   {"type":"set_log_levels","version":1,"min_level":0,
+//    "vmodule":"*/domicile/*=2"}
+//   -> {"type":"set"}
+//   -> {"type":"refused","why":"..."}
+//
+//   {"type":"devtools","version":1,"window":"<browser window id>",
+//    "method":"Accessibility.getFullAXTree","params":{"depth":4}}
+//   -> {"type":"devtools","result":{"nodes":[...]}}
+//   -> {"type":"refused","why":"..."}
+//
+// `devtools` is how `domicile mcp` drives a browser window for an agent: one
+// Chrome DevTools Protocol method sent to the window's page, answered with
+// the method's result. Only the methods kDevToolsMethods names go through:
+// enough to read the page's accessibility tree, click, type, scroll and
+// navigate, and nothing that reads cookies or storage or runs script. A
+// private window is never driven. `params` defaults to {}.
+// `set_log_levels` is `domicile set-log-level`: `min_level` is Chromium's
+// minimum severity (0 INFO to 3 FATAL) and `vmodule` its `--vmodule`, in every
+// engine process until the engine exits.
 // `disable_while_typing` is `domicile disable-while-typing`: whether the
 // touchpads rest while a keyboard types, set when the request says.
 // The site permissions, extensions and media devices are the Settings app's,
@@ -161,6 +209,7 @@ using ShellLoaded =
 // be loading and the new shell has yet to run.
 using LoadShell = base::FunctionRef<void(const base::FilePath& root,
                                          const std::string& module,
+                                         ShellFiles files,
                                          ShellLoaded loaded)>;
 
 // Runs once with whether `run_app` or `open_url` opened its window: false if
@@ -186,10 +235,18 @@ struct AppLaunch {
 };
 
 // Carries out `open_url`: opens a browser window at `url`, or with `app` an app
-// window, which the shell draws without an address bar. Runs `opened` once,
-// possibly after returning, as for `run_app`.
-using OpenUrl = base::FunctionRef<
-    void(const GURL& url, std::optional<AppLaunch> app, WindowOpened opened)>;
+// window, which the shell draws without an address bar. A new window is in
+// browser profile `profile`, one the desk has, or for an empty one the
+// profile `url`'s site opens in. Runs `opened` once, possibly after
+// returning, as for `run_app`.
+using OpenUrl = base::FunctionRef<void(const GURL& url,
+                                       std::optional<AppLaunch> app,
+                                       const std::string& profile,
+                                       WindowOpened opened)>;
+
+// Whether the desk has browser profile `id`, so `open_url` can refuse one it
+// does not instead of opening the window elsewhere.
+using HasBrowserProfile = base::FunctionRef<bool(const std::string& id)>;
 
 // One site's stored setting for one permission.
 struct StoredSitePermission {
@@ -264,6 +321,10 @@ struct InstalledExtension {
   ExtensionSettings settings;
   // Empty when the extension has no options page.
   GURL options_url;
+  // The absolute path of its manifest icon closest to 128px, for a list to
+  // draw; empty when its manifest names none. A path rather than the image,
+  // so listing reads no files.
+  std::string icon_path;
 };
 
 // Carries out `extensions`: every extension in the shell's profile, apps,
@@ -272,10 +333,72 @@ struct InstalledExtension {
 using ListExtensions =
     base::FunctionRef<std::optional<std::vector<InstalledExtension>>()>;
 
-// Carries out `set_extension_enabled`, or says why it did not.
+// Carries out `set_extension_enabled` in browser profile `profile`, the
+// shell's own when empty, or says why it did not.
 using SetExtensionEnabled =
-    base::FunctionRef<base::expected<void, std::string>(const std::string& id,
-                                                       bool enabled)>;
+    base::FunctionRef<base::expected<void, std::string>(
+        const std::string& id,
+        bool enabled,
+        const std::string& profile)>;
+
+// One extension's switch in a browser profile, as `browser_profiles` lists
+// it. `locked` when the config switches it, so the user cannot.
+struct ListedProfileExtension {
+  std::string id;
+  bool enabled = false;
+  bool locked = false;
+};
+
+// A browser profile, as `browser_profiles` lists it.
+struct ListedBrowserProfile {
+  ListedBrowserProfile();
+  ListedBrowserProfile(const ListedBrowserProfile&);
+  ListedBrowserProfile& operator=(const ListedBrowserProfile&);
+  ~ListedBrowserProfile();
+
+  std::string id;
+  std::string name;
+  std::string color;
+  bool is_private = false;
+  std::vector<ListedProfileExtension> extensions;
+};
+
+// A site the desk opens in a profile other than the default: the config's
+// (`pinned` false), or one the user pinned.
+struct ListedBrowserSite {
+  std::string site;
+  std::string profile;
+  bool pinned = false;
+};
+
+// Everything `browser_profiles` lists.
+struct BrowserProfileList {
+  BrowserProfileList();
+  BrowserProfileList(const BrowserProfileList&);
+  BrowserProfileList& operator=(const BrowserProfileList&);
+  ~BrowserProfileList();
+
+  std::vector<ListedBrowserProfile> profiles;
+  std::string default_profile;
+  std::string default_private_profile;
+  std::vector<ListedBrowserSite> sites;
+};
+
+// Runs once with what `browser_profiles` lists, or nothing if there is no
+// shell, and so no profiles to read.
+using BrowserProfilesFound =
+    base::OnceCallback<void(std::optional<BrowserProfileList>)>;
+
+// Carries out `browser_profiles`: runs `found` once every profile has
+// loaded, so each lists its extensions, possibly after returning.
+using ListBrowserProfiles = base::FunctionRef<void(BrowserProfilesFound found)>;
+
+// Carries out `pin_browser_site`: opens `site` in `profile` from now on (the
+// default profile unpins it), or says why not.
+using PinBrowserSite =
+    base::FunctionRef<base::expected<void, std::string>(
+        const std::string& site,
+        const std::string& profile)>;
 
 // Carries out `configure_extension`: sets each of `settings` that is set, or
 // says why it did not.
@@ -305,18 +428,23 @@ struct MediaDeviceList {
 
 enum class MediaDeviceKind { kCamera, kMicrophone };
 
-// Carries out `media_devices`. Returns nothing if there is no shell, and so
-// no profile whose preference ranks them.
-using ListMediaDevices = base::FunctionRef<std::optional<MediaDeviceList>()>;
-
-// Carries out `set_media_device`: sites that ask for a `kind` without naming a
-// device get `id`. Says why not when there is no such device.
-using SetMediaDevice =
-    base::FunctionRef<base::expected<void, std::string>(MediaDeviceKind kind,
-                                                        const std::string& id)>;
-
 // Runs once when a command that answers later is done, or with why it is not.
 using CommandDone = base::OnceCallback<void(base::expected<void, std::string>)>;
+
+// Runs once with what `media_devices` lists, or nothing if there is no shell,
+// and so no profile whose preference ranks them.
+using MediaDevicesFound =
+    base::OnceCallback<void(std::optional<MediaDeviceList>)>;
+
+// Carries out `media_devices`: runs `found` once the devices are listed,
+// possibly after returning, as nothing lists them before the first ask.
+using ListMediaDevices = base::FunctionRef<void(MediaDevicesFound found)>;
+
+// Carries out `set_media_device`: sites that ask for a `kind` without naming a
+// device get `id`. Runs `done` once the devices are listed, with why not when
+// there is no such device.
+using SetMediaDevice = base::FunctionRef<
+    void(MediaDeviceKind kind, const std::string& id, CommandDone done)>;
 
 // What `history` looks for: like `chrome.history.search` from the start of
 // time.
@@ -431,11 +559,50 @@ using DisableWhileTyping =
     base::FunctionRef<base::expected<bool, std::string>(
         std::optional<bool> enabled)>;
 
+// The Chrome DevTools Protocol methods `devtools` sends. Page.navigate goes
+// only to http and https addresses.
+inline constexpr std::string_view kDevToolsMethods[] = {
+    "Accessibility.getFullAXTree",
+    "Accessibility.getPartialAXTree",
+    "Accessibility.queryAXTree",
+    "DOM.focus",
+    "DOM.getBoxModel",
+    "DOM.getContentQuads",
+    "DOM.scrollIntoViewIfNeeded",
+    "Input.dispatchKeyEvent",
+    "Input.dispatchMouseEvent",
+    "Input.insertText",
+    "Page.captureScreenshot",
+    "Page.getLayoutMetrics",
+    "Page.getNavigationHistory",
+    "Page.navigate",
+    "Page.navigateToHistoryEntry",
+    "Page.reload",
+};
+
+// Runs once with a `devtools` method's result, or why there is none: no such
+// window, a private one, or the method's own error.
+using DevToolsAnswered =
+    base::OnceCallback<void(base::expected<base::DictValue, std::string>)>;
+
+// Carries out `devtools`: sends `method` with `params` to browser window
+// `window`'s page. Runs `answered` once, possibly after returning.
+using SendDevTools = base::FunctionRef<void(const std::string& window,
+                                            const std::string& method,
+                                            base::DictValue params,
+                                            DevToolsAnswered answered)>;
+
+// Carries out `set_log_levels`: logs at `min_level` and VLOGs at `vmodule` in
+// every engine process, and in those started later.
+using SetLogLevels =
+    base::FunctionRef<void(int min_level, const std::string& vmodule)>;
+
 // What each command does, injected so this file can be tested with strings.
 struct CommandActions {
   LoadShell load_shell;
   RunApp run_app;
   OpenUrl open_url;
+  HasBrowserProfile has_browser_profile;
   ListSitePermissions list_site_permissions;
   SetSitePermission set_site_permission;
   LoadUnpacked load_unpacked;
@@ -444,6 +611,8 @@ struct CommandActions {
   ListExtensions list_extensions;
   SetExtensionEnabled set_extension_enabled;
   ConfigureExtension configure_extension;
+  ListBrowserProfiles list_browser_profiles;
+  PinBrowserSite pin_browser_site;
   ListMediaDevices list_media_devices;
   SetMediaDevice set_media_device;
   SearchHistory search_history;
@@ -453,6 +622,8 @@ struct CommandActions {
   ListSiteData list_site_data;
   ClearSiteData clear_site_data;
   DisableWhileTyping disable_while_typing;
+  SendDevTools send_devtools;
+  SetLogLevels set_log_levels;
 };
 
 // Receives the reply line, including its trailing newline.
@@ -460,9 +631,9 @@ using CommandReply = base::OnceCallback<void(std::string)>;
 
 // Answers one request line (without its newline). `reply` runs once: before
 // this returns, except for `load_shell`, `run_app`, `open_url`,
-// `load_unpacked`, `history`, `visits`, `delete_history`,
-// `clear_browsing_data`, `site_data` and `clear_site_data`, which answer once
-// their action is done.
+// `load_unpacked`, `browser_profiles`, `history`, `visits`, `delete_history`,
+// `clear_browsing_data`, `site_data`, `clear_site_data` and `devtools`, which
+// answer once their action is done.
 void AnswerCommand(std::string_view line,
                    const CommandActions& actions,
                    CommandReply reply);

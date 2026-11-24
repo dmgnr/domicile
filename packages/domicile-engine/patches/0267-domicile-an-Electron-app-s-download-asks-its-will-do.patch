@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Mon, 19 Oct 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an Electron app's download asks its will-download
+
+An Electron app decides where its pages' downloads go in its session's
+`will-download`, and Slack downloads only that way: it opens a hidden
+window at the file, waits for will-download to set the DownloadItem's
+save path, and closes the window. The engine asked the shell's picker
+instead, for a page already gone, so the download sat as a temporary
+file and Slack logged "Missing item for download".
+
+RequestConfirmation asks the app first, for a download marked as one of
+its pages' (components/domicile/browser/electron_downloads.h): a path
+saves it there, a cancel cancels it, and neither shows the picker, as
+Electron's save dialog. It asks before the picker queue, so a download
+the app places never waits behind another's picker.
+
+Not built here; the engine job builds it on crux.
+---
+ chrome/browser/download/BUILD.gn              |  1 +
+ .../chrome_download_manager_delegate.cc       | 42 +++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/chrome/browser/download/BUILD.gn b/chrome/browser/download/BUILD.gn
+index fea3651..442c890 100644
+--- a/chrome/browser/download/BUILD.gn
++++ b/chrome/browser/download/BUILD.gn
+@@ -214,6 +214,7 @@ source_set("impl") {
+     "//chrome/browser/ui/select_file_policy",
+     "//chrome/common:non_code_constants",
+     "//components/background_fetch",
++    "//components/domicile:electron_downloads",
+     "//components/domicile:web_view_guest",
+     "//components/download/content/factory",
+     "//components/enterprise/common/proto:connectors_proto_gen",
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+index 7e918f4..7c76a5d 100644
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/download/chrome_download_manager_delegate.h"
+ 
++#include "components/domicile/browser/electron_downloads.h"
+ #include "components/domicile/browser/web_view_guest.h"
+ 
+ #include <algorithm>
+@@ -1667,6 +1668,47 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
+   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+   CHECK(!download->IsTransient(), base::NotFatalUntil::M161);
+ 
++  // Domicile's engine fork: an Electron app's download goes where its
++  // session's will-download says, as in Electron, and asks the user only when
++  // it says nowhere. Asked here, before the picker queue: a download from a
++  // page that already closed still reaches its app. See
++  // components/domicile/browser/electron_downloads.h.
++  if (domicile::IsElectronAppDownload(*download)) {
++    domicile::AskElectronAppWhereDownloadGoes(
++        *download, suggested_path,
++        base::BindOnce(
++            [](base::WeakPtr<ChromeDownloadManagerDelegate> delegate,
++               const std::string& guid, const base::FilePath& suggested_path,
++               DownloadTargetDeterminerDelegate::ConfirmationCallback callback,
++               domicile::ElectronDownloadAnswer answer) {
++              if (!delegate) {
++                return;
++              }
++              if (answer.cancel) {
++                std::move(callback).Run(DownloadConfirmationResult::CANCELED,
++                                        ui::SelectedFileInfo());
++                return;
++              }
++              if (answer.path.has_value()) {
++                std::move(callback).Run(DownloadConfirmationResult::CONFIRMED,
++                                        ui::SelectedFileInfo(*answer.path));
++                return;
++              }
++              DownloadItem* item =
++                  delegate->download_manager_->GetDownloadByGuid(guid);
++              if (!item) {
++                std::move(callback).Run(DownloadConfirmationResult::CANCELED,
++                                        ui::SelectedFileInfo());
++                return;
++              }
++              delegate->ShowFilePickerWithUserTakeover(item, suggested_path,
++                                                       std::move(callback));
++            },
++            weak_ptr_factory_.GetWeakPtr(), download->GetGuid(), suggested_path,
++            std::move(callback)));
++    return;
++  }
++
+ // TODO(xingliu): We should abstract a DownloadFilePicker interface and make all
+ // platform use it.
+ #if BUILDFLAG(IS_ANDROID)

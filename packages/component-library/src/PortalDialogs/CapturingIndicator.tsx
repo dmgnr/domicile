@@ -11,15 +11,24 @@ import { sourceName } from "./source-name";
 type Props = {
   apps: (appId: string) => App;
   sessions: readonly Capturing[];
+  /** Asks the user again what an agent reaches. */
+  change: (id: number) => void;
   stop: (id: number) => void;
   screen: string | undefined;
 };
 
 /**
  * A row per session that records the screen or controls or captures input,
- * naming its application and what it holds, with a button that ends it.
+ * naming its application and what it holds, with a button that ends it. An
+ * agent's row also has one that changes what it reaches.
  */
-export const CapturingIndicator = ({ apps, screen, sessions, stop }: Props) => {
+export const CapturingIndicator = ({
+  apps,
+  change,
+  screen,
+  sessions,
+  stop,
+}: Props) => {
   const region = useScreenRegion(screen);
   return sessions.length === 0 ? undefined : (
     <div className={regionStyles} style={region}>
@@ -27,6 +36,17 @@ export const CapturingIndicator = ({ apps, screen, sessions, stop }: Props) => {
         {sessions.map((session) => (
           <li className={itemStyles} key={session.id}>
             <AppRow app={apps(session.appId)} session={session} />
+            {session.kind === CapturingKind.Agent && (
+              <Button
+                onClick={() => {
+                  change(session.id);
+                }}
+                size="sm"
+                variant="outline"
+              >
+                Change
+              </Button>
+            )}
             <Button
               onClick={() => {
                 stop(session.id);
@@ -105,6 +125,13 @@ const summary = (session: Capturing, name: string): string => {
     // `<PortalDialogs />` gives the shell's recording its own toolbar.
     case CapturingKind.Recording:
       return `Recording: ${session.sources.map((source) => sourceName(source)).join(", ")}`;
+    // An agent names itself; it is not an application the desk knows.
+    case CapturingKind.Agent:
+      return `In control: ${session.agent} — ${
+        session.reach.kind === "desk"
+          ? "your desktop"
+          : session.reach.windows.map((window) => window.title).join(", ")
+      }`;
     case CapturingKind.Unknown:
       return `${session.wireKind}: ${name}`;
   }

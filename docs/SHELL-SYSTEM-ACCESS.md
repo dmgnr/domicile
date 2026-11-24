@@ -73,8 +73,10 @@ export const Shell = async (root, domicile) => {
 - `keyboard.keymaps()` streams the config's keymaps and the active one;
   `keyboard.selectKeymap()` switches to another
   ([SHELL-CONFIG.md](SHELL-CONFIG.md#keyboard)).
-- `shell.commands()` streams each command `domicile send-shell` sends.
-  `bindKeys` listens for you and passes them to `onCommand`; see
+- `shell.commands(help, bindings)` streams each command `domicile
+  send-shell` sends, numbered, and describes the commands the page runs and
+  the keys that run them; `shell.answer(sent, ran)` says whether it ran one,
+  with any output `send-shell` prints. `bindKeys` does both for you; see
   [KEYBINDINGS.md](architecture/KEYBINDINGS.md#commands-from-a-terminal).
 - `session.unlockRefusals()` streams why each passphrase did not unlock the desktop
   ([SHELL-IDLE-AND-LOCK.md](SHELL-IDLE-AND-LOCK.md#drawing-the-lock-screen)).
@@ -154,7 +156,7 @@ recorded output.
 | Notifications, tray, portals | D-Bus servers that own a bus name |
 | The home file index and `searchFiles` | speed: only the matches cross to the page |
 | Launching apps (`spawn`) | a client outlives a shell reload and runs on the compositor's Wayland display |
-| Clipboard history (`copyClipboardEntry`) | the compositor serves the paste, so it outlives the client that copied; full text stays out of the page ([CLIPBOARD.md](../packages/manganese-clipboard/docs/CLIPBOARD.md)) |
+| Clipboard history (`copyClipboardEntry`, `removeClipboardEntry`) | the compositor serves the paste, so it outlives the client that copied; full text stays out of the page ([CLIPBOARD.md](../packages/manganese-clipboard/docs/CLIPBOARD.md)) |
 | The screen's color temperature (`set_color_temperature`) | only the engine reaches the display's gamma ramp ([Night light](DISPLAYS.md#night-light-and-gamma-control)) |
 | Theme (`theme`, `windowsTheme`) | clients read it from the portal's `Settings`; the compositor switches them only after every chrome captures its old frame |
 
@@ -162,12 +164,12 @@ recorded output.
 
 - Page to compositor: `system_request { id, request }`. `request` starts a
   call (`read_file`, `write_file`, `create_dir`, `read_dir`, `stat`, `watch`, `spawn`,
-  `dbus_call`, `dbus_match`, `screenshot`, `screen_record`, `preview_window`, `shell_commands`, `send_shell`,
+  `dbus_call`, `dbus_match`, `screenshot`, `screen_record`, `preview_window`, `shell_commands`, `answer_shell_command`, `send_shell`,
   `idle_after`, `idle_before_blanking`, `idle_holds`, `unlock_refusals`, `set_window_states`, `window_requests`,
-  `virtual_monitor`, `keymaps`, `select_keymap`, `set_color_temperature`)
+  `virtual_monitor`, `agent`, `agents`, `stop_agent`, `forget_agent`, `keymaps`, `select_keymap`, `set_color_temperature`)
   or
   drives one running under the same `id` (`unwatch`, `stdin`, `close_stdin`,
-  `kill`). `read_file` takes an
+  `kill`, `agent_did`). `agent` is `domicile agent`'s, and its session gets an `agent_reach` event when the user changes it; see [AGENTS.md](AGENTS.md). `read_file` takes an
   optional byte range, `offset` and `length`.
 - Compositor to page: one `system_reply` per call that starts something
   (`failed` included), then for a watch or process any number of
@@ -207,7 +209,7 @@ that trust from reaching anything else.
       and `system-bluetooth`'s watch, matched field by field, so a lock screen
       shows the battery and Bluetooth and sets the brightness and volume
       ([LOCK.md](LOCK.md#lock-screen-readouts))
-    - `shell_commands` and `window_requests`, so a page reloaded while
+    - `shell_commands`, `answer_shell_command` and `window_requests`, so a page reloaded while
       locked hears them after unlock
     - `idle_after` and `idle_before_blanking`, so a lock screen can dim
     - `idle_holds`, like `idle_after`

@@ -7,12 +7,14 @@ import { DONE, fakeBus, reports, SERVICE_UNKNOWN } from "./fake-bus";
 import {
   connectWifi,
   disconnectWifi,
+  forgetWifi,
   scanWifi,
+  setWifiAutoJoin,
   setWifiEnabled,
   watchWifi,
 } from "./wifi";
 import type { Wifi } from "./wifi-state";
-import { WifiBackend } from "./wifi-state";
+import { WifiBackend, WifiSecurity } from "./wifi-state";
 
 const NETWORK_MANAGER = "org.freedesktop.NetworkManager";
 const IWD = "net.connman.iwd";
@@ -93,6 +95,7 @@ describe("Wi-Fi requests", () => {
     hardwareAddress: "a4:c3:f0:85:ac:2d",
     interface: "wlan0",
     networks: [],
+    saved: [],
     scanning: false,
   });
 
@@ -103,6 +106,14 @@ describe("Wi-Fi requests", () => {
     secured: true,
     ssid: "Home",
     strength: 0.5,
+  };
+
+  const saved = {
+    autoJoin: true,
+    lastUsed: undefined,
+    profile: "/profile",
+    security: WifiSecurity.Password,
+    ssid: "Home",
   };
 
   it.each([
@@ -124,23 +135,39 @@ describe("Wi-Fi requests", () => {
       NETWORK_MANAGER,
     ],
     ["disconnectWifi", WifiBackend.Iwd, "Disconnect", IWD],
+    ["forgetWifi", WifiBackend.NetworkManager, "Delete", NETWORK_MANAGER],
+    ["forgetWifi", WifiBackend.Iwd, "Forget", IWD],
+    ["setWifiAutoJoin", WifiBackend.NetworkManager, "Update", NETWORK_MANAGER],
+    ["setWifiAutoJoin", WifiBackend.Iwd, "Set", IWD],
   ] as const)(
-    "%s on backend %d calls %s on %s",
+    "%s on backend %d ends with %s on %s",
     async (name, backend, member, destination) => {
-      const bus = fakeBus(() => Ok(DONE));
+      // NetworkManager reads a profile before it writes one back.
+      const bus = fakeBus((call) =>
+        Ok(
+          call.member === "GetSettings"
+            ? { body: [{ connection: {} }], signature: "a{sa{sv}}" }
+            : DONE,
+        ),
+      );
       const system = { ...bus.domicile, processes: { run: NO_RUN } };
       const asks = {
         connectWifi: () =>
           connectWifi(system, wifi(backend), network, undefined),
         disconnectWifi: () => disconnectWifi(system, wifi(backend)),
+        forgetWifi: () => forgetWifi(system, wifi(backend), saved),
         scanWifi: () => scanWifi(system, wifi(backend)),
+        setWifiAutoJoin: () =>
+          setWifiAutoJoin(system, wifi(backend), saved, false),
         setWifiEnabled: () => setWifiEnabled(system, wifi(backend), false),
       };
 
       expect(await asks[name]()).toStrictEqual(Ok("done"));
-      expect(
-        bus.calls.map((call) => [call.member, call.destination]),
-      ).toStrictEqual([[member, destination]]);
+      const last = bus.calls.at(-1);
+      expect([last?.member, last?.destination]).toStrictEqual([
+        member,
+        destination,
+      ]);
     },
   );
 });

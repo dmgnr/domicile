@@ -129,6 +129,23 @@ describe("FakeDomicileHost", () => {
     expect(changed).toBe(4);
   });
 
+  it("moves a browser window to another profile in place", () => {
+    const fake = new FakeDomicileHost();
+    fake.host.openBrowserWindow("https://example.com");
+    fake.host.openBrowserWindow("https://docs.example.com");
+    fake.host.reopenBrowserWindow("1", "work");
+
+    expect(fake.host.browserWindows).toMatchObject([
+      { id: "1", profile: "work", url: "https://example.com" },
+      { id: "2", profile: "default" },
+    ]);
+    expect(fake.calls.at(-1)).toStrictEqual([
+      "reopenBrowserWindow",
+      "1",
+      "work",
+    ]);
+  });
+
   it("lists a browser window as captured while its capture runs", () => {
     const fake = new FakeDomicileHost();
     fake.host.openBrowserWindow("https://example.com");

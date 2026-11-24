@@ -18,6 +18,9 @@ TEST(ScreenCaptureTest, OnlyGetDisplayMediaIsScreenCapture) {
   EXPECT_TRUE(IsScreenCapture(MediaStreamType::DISPLAY_VIDEO_CAPTURE));
   // `preferCurrentTab`.
   EXPECT_TRUE(IsScreenCapture(MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB));
+  // `getUserMedia()` with `chromeMediaSource: "desktop"`, as Electron apps
+  // ask with a `desktopCapturer` source.
+  EXPECT_TRUE(IsScreenCapture(MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE));
   EXPECT_FALSE(IsScreenCapture(MediaStreamType::DEVICE_VIDEO_CAPTURE));
   EXPECT_FALSE(IsScreenCapture(MediaStreamType::GUM_TAB_VIDEO_CAPTURE));
   EXPECT_FALSE(IsScreenCapture(MediaStreamType::NO_SERVICE));
@@ -26,6 +29,7 @@ TEST(ScreenCaptureTest, OnlyGetDisplayMediaIsScreenCapture) {
 TEST(ScreenCaptureTest, APreferCurrentTabPickIsOfItsRequestsType) {
   const blink::mojom::StreamDevicesSetPtr answer = AsRequested(
       MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB,
+      MediaStreamType::DISPLAY_AUDIO_CAPTURE,
       PortalScreenCapture(7, PortalPick{.sound = "domicile-sound-desk"},
                           /*audio=*/true));
 
@@ -33,6 +37,27 @@ TEST(ScreenCaptureTest, APreferCurrentTabPickIsOfItsRequestsType) {
             MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB);
   EXPECT_EQ(answer->stream_devices[0]->audio_device->type,
             MediaStreamType::DISPLAY_AUDIO_CAPTURE);
+}
+
+TEST(ScreenCaptureTest, ADesktopGetUserMediaPickIsOfItsRequestsTypes) {
+  const blink::mojom::StreamDevicesSetPtr answer = AsRequested(
+      MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE,
+      MediaStreamType::GUM_DESKTOP_AUDIO_CAPTURE,
+      PortalScreenCapture(7, PortalPick{.sound = "domicile-sound-desk"},
+                          /*audio=*/true));
+
+  EXPECT_EQ(answer->stream_devices[0]->video_device->type,
+            MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE);
+  EXPECT_EQ(answer->stream_devices[0]->audio_device->type,
+            MediaStreamType::GUM_DESKTOP_AUDIO_CAPTURE);
+  EXPECT_EQ(answer->stream_devices[0]->audio_device->id, "domicile-sound-desk");
+}
+
+TEST(ScreenCaptureTest, ScreenSoundIsAskedEitherWay) {
+  EXPECT_TRUE(WantsScreenSound(MediaStreamType::DISPLAY_AUDIO_CAPTURE));
+  EXPECT_TRUE(WantsScreenSound(MediaStreamType::GUM_DESKTOP_AUDIO_CAPTURE));
+  EXPECT_FALSE(WantsScreenSound(MediaStreamType::NO_SERVICE));
+  EXPECT_FALSE(WantsScreenSound(MediaStreamType::DEVICE_AUDIO_CAPTURE));
 }
 
 TEST(ScreenCaptureTest, TheAnswerIsOneScreenThePortalPicked) {

@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 use domicile_protocol::Devices;
 use serde_json::{json, Map, Value};
-use tracing::warn;
 
 /// What a token restores.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +85,7 @@ impl Tokens {
     fn save(&self) {
         if let Some(path) = &self.path {
             if let Err(why) = write(path, &self.saved) {
-                warn!(%why, path = %path.display(), "could not save remote desktop grants");
+                tracing::error!(%why, path = %path.display(), "could not save remote desktop grants");
             }
         }
     }
@@ -105,7 +104,7 @@ fn read(path: &PathBuf) -> HashMap<String, Grant> {
             .collect(),
         Err(why) => {
             if path.exists() {
-                warn!(%why, path = %path.display(), "remote desktop grants unreadable; asking again");
+                tracing::error!(%why, path = %path.display(), "remote desktop grants unreadable; asking again");
             }
             HashMap::new()
         }

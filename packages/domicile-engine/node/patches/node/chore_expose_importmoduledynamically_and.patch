@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Samuel Attard <marshallofsound@electronjs.org>
+Date: Wed, 8 Mar 2023 13:02:17 -0800
+Subject: chore: expose ImportModuleDynamically and
+ HostInitializeImportMetaObjectCallback to embedders
+
+This also subtly changes the behavior of shouldNotRegisterESMLoader to ensure that node sets up the handlers
+internally but simply avoids setting its own handlers on the Isolate.  This is so that Electron can set it to
+its own blended handler between Node and Blink.
+
+Not upstreamable.
+
+diff --git a/lib/internal/modules/esm/utils.js b/lib/internal/modules/esm/utils.js
+index 9e27a2db1ebce8fa94005d69bb783a43a5539930..e2fab9633213e40acf9390ac2ee9a3fd9dcd529b 100644
+--- a/lib/internal/modules/esm/utils.js
++++ b/lib/internal/modules/esm/utils.js
+@@ -37,7 +37,7 @@ const {
+   ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING,
+   ERR_INVALID_ARG_VALUE,
+ } = require('internal/errors').codes;
+-const { getOptionValue } = require('internal/options');
++const { getOptionValue, getEmbedderOptions } = require('internal/options');
+ const {
+   emitExperimentalWarning,
+   kEmptyObject,
+@@ -302,12 +302,13 @@ let _shouldSpawnLoaderHookWorker = true;
+  *   should be spawned later.
+  */
+ function initializeESM(shouldSpawnLoaderHookWorker = true) {
++  const shouldSetOnIsolate = !getEmbedderOptions().shouldNotRegisterESMLoader;
+   _shouldSpawnLoaderHookWorker = shouldSpawnLoaderHookWorker;
+   initializeDefaultConditions();
+   // Setup per-realm callbacks that locate data or callbacks that we keep
+   // track of for different ESM modules.
+-  setInitializeImportMetaObjectCallback(initializeImportMetaObject);
+-  setImportModuleDynamicallyCallback(importModuleDynamicallyCallback);
++  setInitializeImportMetaObjectCallback(initializeImportMetaObject, shouldSetOnIsolate);
++  setImportModuleDynamicallyCallback(importModuleDynamicallyCallback, shouldSetOnIsolate);
+ }
+ 
+ /**
+diff --git a/src/module_wrap.cc b/src/module_wrap.cc
+index aa6b3bc303f7c056dc2e768e42f339dba771b0cf..3a78877716291eff26d3d2e1d6e3e1a32b8181ed 100644
+--- a/src/module_wrap.cc
++++ b/src/module_wrap.cc
+@@ -1123,7 +1123,7 @@ Maybe<ModuleWrap*> ModuleWrap::ResolveModule(Local<Context> context,
+   return Just(dependent->linked_module_wraps_[module_request_index]);
+ }
+ 
+-static MaybeLocal<Promise> ImportModuleDynamicallyWithPhase(
++MaybeLocal<Promise> ImportModuleDynamicallyWithPhase(
+     Local<Context> context,
+     Local<Data> host_defined_options,
+     Local<Value> resource_name,
+@@ -1211,14 +1211,16 @@ void ModuleWrap::SetImportModuleDynamicallyCallback(
+   Realm* realm = Realm::GetCurrent(args);
+   HandleScope handle_scope(isolate);
+ 
+-  CHECK_EQ(args.Length(), 1);
++  CHECK_EQ(args.Length(), 2);
+   CHECK(args[0]->IsFunction());
+   Local<Function> import_callback = args[0].As<Function>();
+   realm->set_host_import_module_dynamically_callback(import_callback);
+ 
+-  isolate->SetHostImportModuleDynamicallyCallback(ImportModuleDynamically);
+-  isolate->SetHostImportModuleWithPhaseDynamicallyCallback(
++  if (args[1]->IsBoolean() && args[1]->BooleanValue(isolate)) {
++    isolate->SetHostImportModuleDynamicallyCallback(ImportModuleDynamically);
++    isolate->SetHostImportModuleWithPhaseDynamicallyCallback(
+       ImportModuleDynamicallyWithPhase);
++  }
+ }
+ 
+ void ModuleWrap::SetImportMetaResolveInitializer(
+@@ -1433,13 +1435,14 @@ void ModuleWrap::SetInitializeImportMetaObjectCallback(
+   Realm* realm = Realm::GetCurrent(args);
+   Isolate* isolate = realm->isolate();
+ 
+-  CHECK_EQ(args.Length(), 1);
++  CHECK_EQ(args.Length(), 2);
+   CHECK(args[0]->IsFunction());
+   Local<Function> import_meta_callback = args[0].As<Function>();
+   realm->set_host_initialize_import_meta_object_callback(import_meta_callback);
+ 
+-  isolate->SetHostInitializeImportMetaObjectCallback(
+-      HostInitializeImportMetaObjectCallback);
++  if (args[1]->IsBoolean() && args[1]->BooleanValue(isolate))
++    isolate->SetHostInitializeImportMetaObjectCallback(
++        HostInitializeImportMetaObjectCallback);
+ }
+ 
+ MaybeLocal<Value> ModuleWrap::SyntheticModuleEvaluationStepsCallback(
+diff --git a/src/module_wrap.h b/src/module_wrap.h
+index 14a8f1a4f2d611e0112f20bf749d1186acc02361..ea58cbe08aef9cf8952d5fa7a0c58c1318a2d853 100644
+--- a/src/module_wrap.h
++++ b/src/module_wrap.h
+@@ -8,6 +8,7 @@
+ #include <unordered_map>
+ #include <vector>
+ #include "base_object.h"
++#include "node.h"
+ #include "v8-script.h"
+ 
+ namespace node {
+@@ -91,7 +92,15 @@ struct ModuleCacheKey : public MemoryRetainer {
+         hash(hash) {}
+ };
+ 
+-class ModuleWrap : public BaseObject {
++NODE_EXTERN v8::MaybeLocal<v8::Promise> ImportModuleDynamicallyWithPhase(
++    v8::Local<v8::Context> context,
++    v8::Local<v8::Data> host_defined_options,
++    v8::Local<v8::Value> resource_name,
++    v8::Local<v8::String> specifier,
++    v8::ModuleImportPhase phase,
++    v8::Local<v8::FixedArray> import_attributes);
++
++class NODE_EXTERN ModuleWrap : public BaseObject {
+  public:
+   enum InternalFields {
+     kModuleSlot = BaseObject::kInternalFieldCount,
+@@ -151,6 +160,8 @@ class ModuleWrap : public BaseObject {
+   static void CreateRequiredModuleFacade(
+       const v8::FunctionCallbackInfo<v8::Value>& args);
+ 
++  static ModuleWrap* GetFromModule(node::Environment*, v8::Local<v8::Module>);
++
+  private:
+   ModuleWrap(Realm* realm,
+              v8::Local<v8::Object> object,
+@@ -199,7 +210,6 @@ class ModuleWrap : public BaseObject {
+       v8::Local<v8::Context> context,
+       size_t module_request_index,
+       v8::Local<v8::Module> referrer);
+-  static ModuleWrap* GetFromModule(node::Environment*, v8::Local<v8::Module>);
+ 
+   // This method may throw a JavaScript exception, so the return type is
+   // wrapped in a Maybe.

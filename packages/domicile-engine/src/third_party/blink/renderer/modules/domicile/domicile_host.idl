@@ -56,6 +56,13 @@
   // dropped sets nothing.
   [CallWith=ScriptState, RaisesException] undefined copyClipboardEntry(unsigned long entry);
 
+  // Drop a row of the clipboard's history and the copy it holds.
+  //
+  // Removing the current row also empties the clipboard, so nothing pastes it
+  // again. No answer: the next `clipboard` leaves the row out. An id the
+  // history has since dropped removes nothing.
+  [CallWith=ScriptState, RaisesException] undefined removeClipboardEntry(unsigned long entry);
+
   // Click an icon in the system tray, with the button `action` names.
   //
   // It names an icon `tray` lists and a button. What the click does is the
@@ -124,6 +131,20 @@
   [CallWith=ScriptState, RaisesException] undefined pointerConstrained(
       DOMString appId, boolean active);
 
+  // Hold the pointer inside `boxes`, in this page's CSS pixels, for a window
+  // whose `pointerConstraint` is "confine": the pointer stops at their edges,
+  // even where a box reaches onto another monitor. An empty list lets go; so
+  // does this page going away. A later call replaces the boxes. Clipped to
+  // this page's own box.
+  //
+  // Resolves true once the pointer is held, and false where this engine does
+  // not move the pointer itself -- nested in another compositor, or headless
+  // -- or none of the boxes is on this page. The shell still answers
+  // `pointerConstrained` either way; the client's own motion stays its own.
+  // A box with a NaN or infinite edge throws.
+  [CallWith=ScriptState, RaisesException] Promise<boolean> confinePointer(
+      sequence<DOMRectReadOnly> boxes);
+
   // Where the page put an <app>, in the page's CSS pixels. The client draws at
   // the scale of the monitor holding most of that box. Layout still places the
   // window; this only tells the compositor where it ended up.
@@ -186,12 +207,16 @@
   // `Shift`, in any spelling a chord takes), is a tap of it: either side's key
   // pressed and let go with nothing else in between. Another key, a click, a
   // scroll, a pinch, a touch or a touchpad gesture the shell takes makes it no
-  // tap, so `Meta+Return` and Super-dragging a window still work. A tap comes
-  // back as a `shortcut` and then a `shortcutrelease` with `keyCode` 0, once
-  // the key is up. The engine hears it before any page or window does, and
-  // the key still reaches the focused client as it always did.
+  // tap, so `Meta+Return` and Super-dragging a window still work. Nor does a
+  // hold longer than `longestTap` milliseconds, 300 unless given, as on
+  // GNOME: Super held and let go does nothing. A tap comes back as a
+  // `shortcut` and then a `shortcutrelease` with `keyCode` 0, once the key is
+  // up. The engine hears it before any page or window does, and the key still
+  // reaches the focused client as it always did. `longestTap` means nothing
+  // to a chord.
   [CallWith=ScriptState, RaisesException] undefined grabShortcut(
-      DOMString chord, optional boolean whileInhibited = false);
+      DOMString chord, optional boolean whileInhibited = false,
+      optional unsigned long longestTap = 300);
 
   // Answer one grabShortcut() of that name. Once every grab of it is
   // answered, its key reaches the focused client or site again, so two parts
@@ -236,6 +261,37 @@
   // uninstall, and does nothing; an empty one throws.
   [CallWith=ScriptState, RaisesException] undefined activateExtension(
       DOMString id);
+
+  // Show the actions of browser profile `profile`'s extensions in
+  // `extensions`, and have activateExtension() click them there, on the
+  // active tab of its pages: as Chrome's toolbar shows its window's
+  // profile's. A shell names the profile of the page it last focused. The
+  // default profile's until called, and while `profile` loads; one the desk
+  // does not have shows the default's. Each entry's `profile` says which it
+  // is. Over the tray's pipe, as activateExtension(). An empty id throws.
+  [CallWith=ScriptState, RaisesException] undefined setExtensionsProfile(
+      DOMString profile);
+
+  // Switch installed extension `id` on or off, as chrome://extensions does.
+  // Resolves once switched; `installedExtensions` and `extensions` follow.
+  // Rejects with an OperationError saying why, in words to show, when it is
+  // not. Over the tray's pipe, as activateExtension().
+  [CallWith=ScriptState, RaisesException] Promise<undefined>
+      setExtensionEnabled(DOMString id, boolean enabled);
+
+  // Set each of `settings` present on installed extension `id`, or none.
+  // Rejects with an OperationError saying why, in words to show: a setting
+  // the extension cannot use, one the desk's config sets (its `configured`),
+  // or a site that is not a host. Throws a TypeError for a `siteAccess` that
+  // is not one of its three, or `sites` without "specific_sites".
+  [CallWith=ScriptState, RaisesException] Promise<undefined>
+      configureExtension(DOMString id, DomicileExtensionSettings settings);
+
+  // Uninstall extension `id`, as its user would. Rejects with an
+  // OperationError saying why, in words to show: one the config installed
+  // (its `fromConfig`) is only the config's to remove.
+  [CallWith=ScriptState, RaisesException] Promise<undefined>
+      uninstallExtension(DOMString id);
 
   // No input forwarding: an <app> sends its client what lands on it, and the
   // page's keys go to the window with the keyboard. See HTMLAppElement.
@@ -311,6 +367,14 @@
   // opens a clicked action's. Not held for a late listener: a popup the user
   // did not see asked for is not one to open later.
   attribute EventHandler onextensionpopuprequested;
+  // Every extension installed in the shell's profile, switched on or off,
+  // with its settings, for a menu that manages them. Null until the browser
+  // lists them, which it does as soon as this page listens. No [SameObject],
+  // for `displays`' reason.
+  readonly attribute FrozenArray<DomicileInstalledExtension>? installedExtensions;
+  // Fires when one is installed, uninstalled, switched on or off, or
+  // reconfigured, or its icon loads.
+  attribute EventHandler oninstalledextensionschanged;
   readonly attribute boolean? idle;
   attribute EventHandler onidlechanged;
   readonly attribute boolean? locked;
@@ -357,18 +421,36 @@
   // `browserWindows` for the current list.
   attribute EventHandler onbrowserwindowschanged;
 
+  // The desk's browser profiles, in the config's order: sets of sign-ins,
+  // site data and extensions, as the config's `browser.profiles` names them.
+  // Null until the browser lists them. No [SameObject], for `displays`'
+  // reason. See docs/architecture/BROWSER-PROFILES.md.
+  readonly attribute FrozenArray<DomicileBrowserProfile>? browserProfiles;
+
+  // Fires when a profile is added, removed, renamed or recolored, the
+  // defaults move, a site is pinned, or an extension is installed,
+  // uninstalled or switched in one. Read `browserProfiles` for the current
+  // list.
+  attribute EventHandler onbrowserprofileschanged;
+
   // Opens a browser window at `url`, for the shell's own UI such as a `+`
   // button or a launcher. It appears in the next `browserwindowschanged`. A
   // domicile:// address shows blocked, as in a <webview>.
   //
   // `partition` gives its page storage of its own, as a <webview>'s
   // `partition` attribute does. Throws TypeError for "persist:" with no name.
+  //
+  // `profile` opens it in that browser profile, one of `browserProfiles`;
+  // empty for the one `url`'s site opens in (browserProfileFor). A profile
+  // the desk no longer has opens in the default one.
   [CallWith=ScriptState, RaisesException] undefined openBrowserWindow(
-      USVString url, optional DOMString partition = "");
+      USVString url,
+      optional DOMString partition = "",
+      optional DOMString profile = "");
 
-  // Opens a private browser window at `url`, as openBrowserWindow does. Its
-  // page is in the off-the-record profile; see DomicileBrowserWindow's
-  // `isPrivate`.
+  // Opens a private browser window at `url`, as openBrowserWindow does, in
+  // the default private profile; see DomicileBrowserWindow's `isPrivate`. To
+  // open one in another private profile, name it to openBrowserWindow.
   [CallWith=ScriptState, RaisesException] undefined openPrivateBrowserWindow(
       USVString url);
 
@@ -383,9 +465,13 @@
   // The browser matches the window, so two quick calls never open two.
   // Throws TypeError for another `reuse`, and for "focus" or "navigate" with
   // no `appId`.
+  //
+  // `profile` opens a new window in that browser profile, one of
+  // `browserProfiles`; empty for the one `url`'s site opens in
+  // (browserProfileFor), as for openBrowserWindow.
   [CallWith=ScriptState, RaisesException] undefined openAppWindow(
       USVString url, optional DOMString appId = "",
-      optional DOMString reuse = "new");
+      optional DOMString reuse = "new", optional DOMString profile = "");
 
   // How many elements in browser window `id`'s main document match the CSS
   // `selector`, as a <webview>'s countMatches() counts them. A hidden window
@@ -395,11 +481,96 @@
   [CallWith=ScriptState, RaisesException] Promise<long>
       countBrowserWindowMatches(DOMString id, DOMString selector);
 
+  // Clicks the first shown element in browser window `id`'s main document that
+  // matches the CSS `selector`, as a <webview>'s clickMatch() clicks it. A
+  // hidden window is clicked too. Resolves whether an element matched. Throws
+  // SyntaxError for a selector that does not parse. Rejects with
+  // InvalidStateError for an unknown window, and when the page gave no answer,
+  // as when it navigated first.
+  [CallWith=ScriptState, RaisesException] Promise<boolean>
+      clickBrowserWindowMatch(DOMString id, DOMString selector);
+
   // Closes window `id`; it leaves the next `browserwindowschanged`. A page
   // with a `beforeunload` handler may first ask to stay, as a `domicile-dialog`
   // on its <webview>; Cancel keeps the window. An unknown id does nothing.
   [CallWith=ScriptState, RaisesException] undefined closeBrowserWindow(
       DOMString id);
+
+  // Moves window `id`'s page to browser profile `profile`, one of
+  // `browserProfiles`, as a new page under the same id: the window keeps its
+  // place, its <webview> shows the new page, and its back and forward list
+  // comes along as addresses. The page reloads; what was typed into it is
+  // not kept. Throws TypeError for an empty id or profile. An unknown window
+  // or profile, or an app window, does nothing: the shell's lists may be a
+  // change behind.
+  [CallWith=ScriptState, RaisesException] undefined reopenBrowserWindow(
+      DOMString id, DOMString profile);
+
+  // The browser profile `url` opens in: the most specific of the config's
+  // `browser.sites` that matches it, else the default profile. The engine
+  // routes every new window and every page the user takes to another site
+  // by this. Throws TypeError for a `url` that is no address.
+  [CallWith=ScriptState, RaisesException] Promise<DOMString>
+      browserProfileFor(USVString url);
+
+  // The site that routes `url` to its profile: the entry of the config's
+  // `browser.sites`, or of the sites the user pinned, that browserProfileFor
+  // matched. Empty when none did, so it opens in the default profile.
+  // Throws TypeError for a `url` that is no address.
+  [CallWith=ScriptState, RaisesException] Promise<DOMString>
+      browserSiteFor(USVString url);
+
+  // Opens `site` in browser profile `profile` from now on, kept across
+  // restarts; the default profile unpins it. `site` is a host, `*.host`, or
+  // a host and path, as the config's `browser.sites` keys are; it shows in
+  // the profile's `pinnedSites` from the next `browserprofileschanged`.
+  // Pages already open stay where they are. Throws TypeError for an empty
+  // site or profile. Rejects with an OperationError saying why for a site
+  // the config's sites name, which only the config changes, for one that is
+  // no such key, and for a profile the desk does not have.
+  [CallWith=ScriptState, RaisesException] Promise<undefined> pinBrowserSite(
+      DOMString site, DOMString profile);
+
+  // Switches extension `id` on or off in browser profile `profile`, kept
+  // across restarts: it runs in that profile's pages, or nowhere in them, and
+  // keeps its data while off. The profile's `enabledExtensions` shows it from
+  // the next `browserprofileschanged`. Throws TypeError for an empty profile
+  // or id. Rejects with an OperationError saying why for a profile the desk
+  // does not have or has not loaded, an extension it does not have, and one
+  // in its `lockedExtensions`, which only the config switches.
+  [CallWith=ScriptState, RaisesException] Promise<undefined>
+      setBrowserProfileExtensionEnabled(
+          DOMString profile, DOMString id, boolean enabled);
+
+  // The user clicked entry `command` of window `id`'s menu bar
+  // (DomicileBrowserWindow.menu); its Electron app runs the entry. Throws a
+  // TypeError for a `command` below 1. A window that closed meanwhile, or has
+  // no menu, does nothing.
+  [CallWith=ScriptState, RaisesException] undefined clickBrowserWindowMenu(
+      DOMString id, long command);
+
+  // The user chose entry `command` (its `id`) of the popup menu window `id`
+  // shows (DomicileBrowserWindow.popupMenu), or put it away with nothing
+  // chosen for 0. Throws a TypeError for a negative `command`. A window that
+  // closed meanwhile, or shows no popup menu, does nothing.
+  [CallWith=ScriptState, RaisesException] undefined answerBrowserWindowPopupMenu(
+      DOMString id, long command);
+
+  // The shell made browser window `id` maximized, minimized and fullscreen as
+  // these say, whether or not its app asked (DomicileBrowserWindow.
+  // wantsMaximized and the rest). An Electron app's window tells its app of
+  // each change; any other window, or one that closed meanwhile, does
+  // nothing.
+  [CallWith=ScriptState, RaisesException] undefined setBrowserWindowState(
+      DOMString id, boolean maximized, boolean minimized, boolean fullscreen);
+
+  // The user answered the message box window `id` shows
+  // (DomicileBrowserWindow.messageBox) with button `response`, an index into
+  // its `buttons`, leaving its checkbox `checkboxChecked`. Throws a TypeError
+  // for a negative `response`. A window that closed meanwhile, or shows no
+  // box, does nothing.
+  [CallWith=ScriptState, RaisesException] undefined answerBrowserWindowMessageBox(
+      DOMString id, long response, boolean checkboxChecked);
 
   // The TVs the desktop can cast to: the Google Cast receivers the browser
   // finds, by name. Null until the browser lists them, which it does as soon
@@ -449,9 +620,43 @@
   // Removes every download not in progress from `downloads`. The files stay.
   [CallWith=ScriptState, RaisesException] undefined clearDownloads();
 
+  // The videos in picture-in-picture, oldest first: each one a page's
+  // `requestPictureInPicture()` or its video controls' button, until it
+  // leaves picture-in-picture. Null until the browser lists them, which it
+  // does as soon as this page listens. Show one with
+  // `<app picture-in-picture="id">`. No [SameObject], for `displays`'
+  // reason. See components/domicile/mojom/picture_in_picture.mojom.
+  readonly attribute FrozenArray<DomicilePictureInPictureVideo>? pictureInPictureVideos;
+
+  // Fires when a video enters or leaves picture-in-picture, plays, pauses,
+  // or changes shape or controls. Read `pictureInPictureVideos` for the
+  // current list.
+  attribute EventHandler onpictureinpicturevideoschanged;
+
+  // Acts on video `id`, as its controls do. "back-to-page" and "close" end
+  // picture-in-picture; it leaves the next `pictureinpicturevideoschanged`.
+  // An unknown id does nothing.
+  [CallWith=ScriptState, RaisesException] undefined
+      actOnPictureInPictureVideo(DOMString id,
+                                 DomicilePictureInPictureAction action);
+
+  // Moves video `id` to `seconds` in, as its progress bar does. Throws
+  // RangeError for a negative time. An unknown id does nothing.
+  [CallWith=ScriptState, RaisesException] undefined
+      seekPictureInPictureVideo(DOMString id, double seconds);
+
+  // Says video `id` is shown `width` by `height` CSS pixels big; its page
+  // hears it as its PictureInPictureWindow's size. An unknown id does
+  // nothing.
+  [CallWith=ScriptState, RaisesException] undefined
+      resizePictureInPictureVideo(DOMString id,
+                                  unsigned long width,
+                                  unsigned long height);
+
   // Sends `method`, "GET" or "POST", to `url` from the browser process with
-  // the cookies of the profile the ordinary browser windows use, so a bar
-  // item can read a site the user is signed in to. A POST sends `body`, as a
+  // the cookies of browser profile `profile`, one of `browserProfiles`, or
+  // for an empty one the default profile's, so a bar item can read a site
+  // the user is signed in to. A POST sends `body`, as a
   // same-origin CORS request from `url`'s own origin.
   // Resolves with the response, whatever its status. Rejects with a
   // NetworkError for a network failure or a refusal: an address that is not
@@ -465,6 +670,9 @@
   // SAPISIDHASH` header Google's first-party APIs take, computed from the
   // SAPISID cookie, and follows no redirect. The page never sees the cookie.
   //
+  // Also rejects with a NetworkError for a profile the desk does not have,
+  // or a private one, which keeps no sign-ins to fetch with.
+  //
   // Handled by the browser process, over its own pipe: see
   // components/domicile/mojom/shell_fetch.mojom.
   [CallWith=ScriptState, RaisesException] Promise<DomicileFetchResponse>
@@ -472,7 +680,8 @@
                        DOMString method,
                        sequence<DomicileFetchHeader> headers,
                        USVString? body,
-                       DOMString? sapisidHashOrigin);
+                       DOMString? sapisidHashOrigin,
+                       optional DOMString profile = "");
 
   // An answer to callSystem(), as a MessageEvent whose `data` is the
   // compositor's `system_reply`, `system_event` or `system_end` line.

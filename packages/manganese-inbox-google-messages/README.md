@@ -20,6 +20,8 @@ export const Shell = runManganese({
 ```
 
 - `launcherName`: its name in the launcher. `Messages` if not given.
+- `profile`: the browser profile its window opens in. Without one, Messages'
+  site decides.
 
 The window opens hidden when the shell starts, so its notifications come from
 the start. A press, or a press of one of its notifications, brings it up;

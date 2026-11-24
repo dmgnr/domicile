@@ -3,15 +3,16 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use domicile_launch::cli::MonitorMode;
 use domicile_launch::control::{Request, Response};
 use domicile_launch::control_socket::{
-    address, advertised, answer_one, ask, hold, serve_one, take, AskError, NotInADesktop, TakeError,
+    address, advertised, answer_one, ask, hold, listen, serve_one, take, AskError, Lenders,
+    NotInADesktop, TakeError,
 };
-use domicile_protocol::Scale;
+use domicile_protocol::{HostMessage, Scale, Theme, WatchTopic};
 
 /// Read timeout: long enough not to flake under load, short enough to keep the
 /// suite fast.
@@ -150,15 +151,59 @@ fn a_command_reaches_the_desktop_and_the_answer_comes_back() {
                     capture: &|_| panic!("a question about this desktop reaches no engine"),
                     record: &|| panic!("a question about this desktop records nothing"),
                     files: &domicile_launch::control::SettingsFiles::default(),
-                    load: &|_, _| panic!("a question about this desktop reaches no engine"),
-                    module: Path::new("/desktops/mine/shell.js"),
-                    open: &|_| panic!("a question about this desktop reaches no engine"),
-                    open_app: &|_, _, _| panic!("a question about this desktop reaches no engine"),
+                    load: &|_| panic!("a question about this desktop reaches no engine"),
+                    shell: &domicile_launch::shell_path::Shell {
+                        files: domicile_launch::shell_path::ShellFiles::Directory,
+                        module: PathBuf::from("shell.js"),
+                        root: PathBuf::from("/desktops/mine"),
+                    },
+                    open: &|_, _| panic!("a question about this desktop reaches no engine"),
+                    open_app: &|_, _, _, _| {
+                        panic!("a question about this desktop reaches no engine")
+                    },
                     run_app: &|_, _| panic!("a question about this desktop reaches no engine"),
+                    launch: &|_| panic!("a question about this desktop reaches no compositor"),
+                    open_link: &|_| panic!("a question about this desktop reaches no compositor"),
                     send: &|_| panic!("a question about this desktop reaches no compositor"),
                     power_displays: &|_, _| {
                         panic!("a question about this desktop reaches no compositor")
                     },
+                    monitors: &|| panic!("a question about this desktop reaches no compositor"),
+                    displays: &|| panic!("a question about this desktop reaches no compositor"),
+                    windows: &|| panic!("a question about this desktop reaches no compositor"),
+                    status: &|| panic!("a question about this desktop reaches no compositor"),
+                    shell_commands: &|| {
+                        panic!("a question about this desktop reaches no compositor")
+                    },
+                    shell_bindings: &|| {
+                        panic!("a question about this desktop reaches no compositor")
+                    },
+                    inputs: &|| panic!("a question about this desktop reaches no compositor"),
+                    idle_time: &|| panic!("a question about this desktop reaches no compositor"),
+                    agents: &|| panic!("a question about this desktop reaches no compositor"),
+                    stop_agent: &|_| panic!("a question about this desktop reaches no compositor"),
+                    forget_agent: &|_| {
+                        panic!("a question about this desktop reaches no compositor")
+                    },
+                    lock: &|| panic!("a question about this desktop reaches no compositor"),
+                    act_on_window: &|_, _| {
+                        panic!("a question about this desktop reaches no compositor")
+                    },
+                    shoot_desk: &|_, _, _| {
+                        panic!("a question about this desktop reaches no compositor")
+                    },
+                    emulate: &|_| panic!("a question about this desktop reaches no compositor"),
+                    devtools: &|_, _, _| panic!("a question about this desktop reaches no engine"),
+                    configure_display: &|_, _| {
+                        panic!("a question about this desktop reaches no compositor")
+                    },
+                    log_levels: &|| panic!("a question about this desktop reads no log levels"),
+                    set_log_levels: &|_| {
+                        panic!("a question about this desktop reaches no compositor")
+                    },
+                    up: "domicile is up.",
+                    logs_in_the_journal: false,
+                    logs: &|| panic!("a question about this desktop reads no logs"),
                     permissions: &|| panic!("a question about this desktop reaches no engine"),
                     set_permission: &|_| panic!("a question about this desktop reaches no engine"),
                     load_unpacked: &|_| panic!("a question about this desktop reaches no engine"),
@@ -173,7 +218,11 @@ fn a_command_reaches_the_desktop_and_the_answer_comes_back() {
                         panic!("a question about this desktop reaches no engine")
                     },
                     extensions: &|| panic!("a question about this desktop reaches no engine"),
-                    set_extension_enabled: &|_, _| {
+                    set_extension_enabled: &|_, _, _| {
+                        panic!("a question about this desktop reaches no engine")
+                    },
+                    browser_profiles: &|| panic!("a question about this desktop reaches no engine"),
+                    pin_browser_site: &|_, _| {
                         panic!("a question about this desktop reaches no engine")
                     },
                     configure_extension: &|_, _| {
@@ -200,7 +249,9 @@ fn a_command_reaches_the_desktop_and_the_answer_comes_back() {
     assert_eq!(
         ask(&path, &Request::WhichShell, Some(BRIEFLY)).expect("a desktop is running"),
         Response::Shell {
-            module: PathBuf::from("/desktops/mine/shell.js")
+            module: PathBuf::from("/desktops/mine/shell.js"),
+            root: PathBuf::from("/desktops/mine"),
+            dev_server: false,
         }
     );
     serving.join().expect("the desktop answered");
@@ -364,20 +415,69 @@ fn a_virtual_monitor_is_lent_the_connection_it_came_on() {
         stream,
         BRIEFLY,
         &|_| unreachable!("a monitor is lent, not answered"),
-        &|mut lent| {
-            assert_eq!(lent.name, "Pane");
-            assert_eq!(
-                lent.mode,
-                MonitorMode {
-                    size: (1280, 720),
-                    refresh_mhz: 60_000,
-                    scale: Scale::try_from(2.0).expect("a scale"),
-                }
-            );
-            let mut next = String::new();
-            lent.lines.read_line(&mut next).expect("the client went on");
-            assert!(next.contains("resize_virtual_monitor"), "{next}");
-            lent.client.write_all(b"lent\n").expect("the client hears");
+        Lenders {
+            monitor: &|mut lent| {
+                assert_eq!(lent.name, "Pane");
+                assert_eq!(
+                    lent.mode,
+                    MonitorMode {
+                        size: (1280, 720),
+                        refresh_mhz: 60_000,
+                        scale: Scale::try_from(2.0).expect("a scale"),
+                    }
+                );
+                let mut next = String::new();
+                lent.lines.read_line(&mut next).expect("the client went on");
+                assert!(next.contains("resize_virtual_monitor"), "{next}");
+                lent.client.write_all(b"lent\n").expect("the client hears");
+            },
+            subscribe: &|_| unreachable!("a monitor is not a subscription"),
+            agent: &|_| unreachable!("a monitor is not an agent"),
+        },
+    )
+    .expect("the desktop lent it");
+
+    let mut heard = String::new();
+    BufReader::new(client)
+        .read_line(&mut heard)
+        .expect("the client heard back");
+    assert_eq!(heard, "lent\n");
+}
+
+#[test]
+fn an_agent_is_lent_the_connection_it_came_on() {
+    let (_scratch, path) = scratch();
+    let control = take(&path).expect("nothing was there");
+    let listener = control.listener().expect("the run's own listener");
+    let mut client = UnixStream::connect(&path).expect("a client");
+    client
+        .write_all(
+            b"{\"type\":\"agent\",\"agent\":\"Claude Code\"}\n\
+              {\"type\":\"agent_did\",\"said\":\"Clicked\"}\n",
+        )
+        .expect("it asked, then said what it did");
+    let (stream, _) = listener.accept().expect("the desktop took the connection");
+
+    serve_one(
+        stream,
+        BRIEFLY,
+        &|_| unreachable!("an agent is lent, not answered"),
+        Lenders {
+            monitor: &|_| unreachable!("an agent is not a monitor"),
+            subscribe: &|_| unreachable!("an agent is not a subscription"),
+            agent: &|mut admission| {
+                assert_eq!(admission.agent, "Claude Code");
+                let mut next = String::new();
+                admission
+                    .lines
+                    .read_line(&mut next)
+                    .expect("the client went on");
+                assert!(next.contains("agent_did"), "{next}");
+                admission
+                    .client
+                    .write_all(b"lent\n")
+                    .expect("the client hears");
+            },
         },
     )
     .expect("the desktop lent it");
@@ -426,4 +526,95 @@ fn a_held_request_keeps_its_connection_after_the_answer() {
         }
     );
     assert_eq!(desktop.join().expect("the desktop read on"), "more");
+}
+
+#[test]
+fn a_subscription_is_lent_the_connection_it_came_on() {
+    let (_scratch, path) = scratch();
+    let control = take(&path).expect("nothing was there");
+    let listener = control.listener().expect("the run's own listener");
+    let mut client = UnixStream::connect(&path).expect("a client");
+    client
+        .write_all(b"{\"type\":\"subscribe\",\"topics\":[\"windows\",\"status\"]}\n")
+        .expect("it asked");
+    let (stream, _) = listener.accept().expect("the desktop took the connection");
+
+    serve_one(
+        stream,
+        BRIEFLY,
+        &|_| unreachable!("a subscription is lent, not answered"),
+        Lenders {
+            monitor: &|_| unreachable!("a subscription is not a monitor"),
+            subscribe: &|mut subscription| {
+                assert_eq!(
+                    subscription.topics,
+                    vec![WatchTopic::Windows, WatchTopic::Status]
+                );
+                subscription
+                    .client
+                    .write_all(b"lent\n")
+                    .expect("the client hears");
+            },
+            agent: &|_| unreachable!("a subscription is not an agent"),
+        },
+    )
+    .expect("the desktop lent it");
+
+    let mut heard = String::new();
+    BufReader::new(client)
+        .read_line(&mut heard)
+        .expect("the client heard back");
+    assert_eq!(heard, "lent\n");
+}
+
+#[test]
+fn a_listener_hears_each_response_until_it_stops() {
+    let (_scratch, path) = scratch();
+    let control = take(&path).expect("nothing was there");
+    let listener = control.listener().expect("the run's own listener");
+    let desktop = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("the client connected");
+        let mut lines = BufReader::new(stream.try_clone().expect("readable")).lines();
+        let asked = lines.next().expect("a request").expect("a line");
+        let mut answering = stream;
+        answering
+            .write_all(
+                b"{\"type\":\"heard\",\"message\":{\"type\":\"theme\",\"theme\":\"dark\"}}\n\
+                  {\"type\":\"heard\",\"message\":{\"type\":\"theme\",\"theme\":\"light\"}}\n\
+                  {\"type\":\"heard\",\"message\":{\"type\":\"theme\",\"theme\":\"dark\"}}\n",
+            )
+            .expect("the desktop answered");
+        asked
+    });
+
+    let mut heard = Vec::new();
+    listen(
+        &path,
+        &Request::Subscribe {
+            topics: vec![WatchTopic::Status],
+        },
+        |response| {
+            heard.push(response);
+            heard.len() < 2
+        },
+    )
+    .expect("the desktop answered");
+
+    assert!(desktop
+        .join()
+        .expect("the desktop ran")
+        .contains("subscribe"));
+    assert_eq!(
+        heard,
+        vec![
+            Response::Heard {
+                message: HostMessage::Theme { theme: Theme::Dark }
+            },
+            Response::Heard {
+                message: HostMessage::Theme {
+                    theme: Theme::Light
+                }
+            },
+        ]
+    );
 }

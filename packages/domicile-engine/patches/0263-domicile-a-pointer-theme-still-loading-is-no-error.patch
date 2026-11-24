@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a pointer theme still loading is no error
+
+On every start the desk's pointer theme loads off the UI thread, so the
+first cursors are Chromium's art and this line fired at ERROR each time.
+The DRM cursor factory already says at ERROR when a theme is missing or
+lacks a type, so this one is VERBOSE.
+---
+ ui/wm/core/cursor_loader.cc | 13 ++++++-------
+ 1 file changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/ui/wm/core/cursor_loader.cc b/ui/wm/core/cursor_loader.cc
+index 2237553..ef93304 100644
+--- a/ui/wm/core/cursor_loader.cc
++++ b/ui/wm/core/cursor_loader.cc
+@@ -216,13 +216,12 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
+     // The cursor may fail to load if the cursor theme has just been reset.
+     // We will be notified when the theme is loaded, but at this time we have to
+     // fall back to the assets.
+-    // Domicile: at ERROR, the level the engine logs at, so a pointer that is
+-    // Chromium's art says so. Once per type until the cursors unload. kNull,
+-    // "no cursor set", has no name in a cursor theme and is always Chromium's
+-    // pointer, so it is no error.
+-    LOG_IF(ERROR, type != CursorType::kNull)
+-        << "domicile: the pointer's " << type << " cursor at scale " << scale_
+-        << " is Chromium's: the platform has none";
++    // Domicile: why the pointer is Chromium's art, once per type until the
++    // cursors unload. A theme still loading, as on every start, lands here
++    // too, so it is no error: the platform's cursor factory says at ERROR
++    // when a theme is missing or lacks a type.
++    VLOG(1) << "domicile: the pointer's " << type << " cursor at scale "
++            << scale_ << " is Chromium's: the platform has none";
+   }
+ 
+   // Loads the default Aura cursor bitmap for the cursor type. Falls back on

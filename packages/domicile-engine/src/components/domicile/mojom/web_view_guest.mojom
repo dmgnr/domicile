@@ -108,6 +108,9 @@ struct WebViewContextMenu {
   WebViewMediaType media_type;
   // Whether an image has pixels to copy. A broken image has none.
   bool has_image_contents;
+  // Whether a video can go into picture-in-picture, and whether it is in it.
+  bool can_picture_in_picture;
+  bool in_picture_in_picture;
 
   // The selected text, empty for none.
   string selection_text;
@@ -121,6 +124,11 @@ struct WebViewContextMenu {
   bool can_paste;
   bool can_delete;
   bool can_select_all;
+
+  // The misspelled word under the click, empty for none, and the dictionary's
+  // suggestions for it, best first. See ReplaceMisspelling.
+  string misspelled_word;
+  array<string> spelling_suggestions;
 };
 
 // What a shell's context menu can ask the browser to do.
@@ -142,8 +150,13 @@ enum WebViewContextMenuAction {
   // Copy the image, video or audio address, or save the file.
   kCopyMediaAddress,
   kSaveMediaAs,
+  // Put the video into picture-in-picture, or take it out when it is in.
+  kPictureInPicture,
   // Open DevTools on the element under the click. See WebViewGuest.Inspect.
   kInspect,
+  // Add the misspelled word to the profile's own dictionary, so it is no
+  // longer underlined anywhere.
+  kAddToDictionary,
 };
 
 // A permission a site asks for, and the shell shows in its site permissions.
@@ -306,6 +319,116 @@ struct WebViewPicker {
   gfx.mojom.Rect anchor;
 };
 
+// What an IdentityRequested shows: a step of a site's "Sign in with" (FedCM)
+// request. Chrome draws each as a dialog of its own; the engine draws none.
+// See //components/domicile/browser/identity_dialog.h.
+enum WebViewIdentityStep {
+  // Waiting for the providers' accounts after the page's sign-in button.
+  // kDismiss cancels.
+  kLoading,
+  // The accounts to pick from. kChoose with an index into `accounts` signs in
+  // with it. kSignInToProvider with an index into `providers` opens that
+  // provider's sign-in page, for a provider the user is signed out of or for
+  // another account. kDismiss cancels.
+  kAccounts,
+  // The user is signed out of `providers[0]`. kSignInToProvider (index 0)
+  // opens its sign-in page. kDismiss cancels.
+  kSignedOut,
+  // Signing in with `accounts[0]`. Nothing to answer: withdrawn or replaced
+  // when it ends.
+  kVerifying,
+  // The provider refused the sign-in. kMoreDetails opens its page about the
+  // error, when there is one. kDismiss closes it.
+  kError,
+};
+
+// What the site says signing in is for, which the title words. FedCM's
+// `context`.
+enum WebViewIdentityPurpose {
+  kSignIn,
+  kSignUp,
+  kUse,
+  kContinue,
+};
+
+// What signing up with an account shares with the site.
+enum WebViewIdentityField {
+  kName,
+  kEmail,
+  kUsername,
+  kPhoneNumber,
+  kPicture,
+};
+
+// An identity provider an IdentityRequested offers, such as google.com.
+struct WebViewIdentityProvider {
+  // Its site, as Chrome names it: "google.com".
+  string name;
+  // Its icon as a data: URL, or empty for none.
+  string icon;
+  // The signing-in site's privacy policy and terms of service, as the
+  // provider lists them, or empty URLs.
+  url.mojom.Url privacy_policy;
+  url.mojom.Url terms_of_service;
+  // The user is signed out of it, so it has no accounts to offer: offer to
+  // sign in to it instead.
+  bool signed_out;
+  // It can sign in another account.
+  bool add_account;
+};
+
+// An account an IdentityRequested offers.
+struct WebViewIdentityAccount {
+  // Its provider: an index into the request's `providers`.
+  int32 provider;
+  // The name the provider shows, and its email or other identifier.
+  string name;
+  string identifier;
+  // Its picture as a data: URL, or empty for none.
+  string picture;
+  // The user signed in to the site with it before.
+  bool returning;
+  // What signing in with it shares with the site, to say so; empty when
+  // there is nothing to say, as for a returning account.
+  array<WebViewIdentityField> shared;
+};
+
+// A step of a site's "Sign in with" request, for the shell to show over the
+// page.
+struct WebViewIdentityRequest {
+  WebViewIdentityStep step;
+  // The page asked from its own sign-in button (FedCM's active mode): show
+  // it over the page. Otherwise the site offers it unasked: leave the page
+  // usable.
+  bool button;
+  // The site signing in, as Chrome names it: "medium.com". `frame_site` is
+  // the frame asking when it is another site's, or empty.
+  string site;
+  string frame_site;
+  WebViewIdentityPurpose purpose;
+  array<WebViewIdentityProvider> providers;
+  // kAccounts: those to pick from. kVerifying: the one signing in.
+  array<WebViewIdentityAccount> accounts;
+  // kVerifying: signing in without the user picking, to a site they signed
+  // in to before (FedCM's auto re-authentication).
+  bool automatic;
+  // kError: the provider's error code, such as "access_denied", or empty;
+  // and its page about the error, or an empty URL.
+  string error;
+  url.mojom.Url error_url;
+};
+
+// The shell's answer to an IdentityRequested. See WebViewIdentityStep.
+enum WebViewIdentityAction {
+  // Not answered: no listener, withdrawn or replaced.
+  kNone,
+  // The user closed it.
+  kDismiss,
+  kChoose,
+  kSignInToProvider,
+  kMoreDetails,
+};
+
 enum WebViewPageFailureKind {
   // The page could not be reached: no network, no such host, refused, timed
   // out, or blocked. `error` says which.
@@ -342,6 +465,26 @@ struct WebViewDevice {
   int32 id;
   // The name Chrome's chooser shows, such as "Nano X".
   string name;
+};
+
+// A page in a guest's history, as WebViewGuest.ListHistory lists it.
+struct WebViewHistoryEntry {
+  // The entry's NavigationEntry unique id, which GoToHistoryEntry takes. Never
+  // reused within a guest's history.
+  int32 id;
+  // The address, as the address bar would show it (the virtual URL).
+  url.mojom.Url url;
+  // The title, or the address when the page has none.
+  string title;
+  // The page's favicon as a `data:image/png` URL, or empty when it has none.
+  string favicon;
+};
+
+// A guest's history either side of its current page, nearest first, as
+// Chrome's back and forward menus list it.
+struct WebViewHistory {
+  array<WebViewHistoryEntry> back;
+  array<WebViewHistoryEntry> forward;
 };
 
 // A camera or microphone, as WebViewGuest.ListMediaDevices lists it.
@@ -393,9 +536,13 @@ interface WebViewGuestHost {
   // Ignored with `window`.
   //
   // `private_browsing` is the element's `private` attribute. The guest's page
-  // is then in the profile's off-the-record profile: nothing it stores
-  // outlives the browser, and it shares nothing with the user's pages.
+  // is then in a private profile, off the record: nothing it stores outlives
+  // its last page, and it shares nothing with the user's other pages.
   // Ignored with `window`, whose page already has its profile.
+  //
+  // `profile` is the element's `profile` attribute, empty for none: the
+  // browser profile the guest's page is in, as BrowserWindows.Open takes it.
+  // Ignored with `window`.
   //
   // `partition` is the element's `partition` attribute, empty for none. The
   // guest's page then has storage of its own: "persist:<name>" kept on disk,
@@ -408,6 +555,7 @@ interface WebViewGuestHost {
               string? window,
               bool extension_popup,
               bool private_browsing,
+              string profile,
               string partition);
 };
 
@@ -462,6 +610,13 @@ interface WebViewGuestClient {
   // `key` and `code` are KeyboardEvent values.
   UnhandledKeyDown(string key, string code, bool alt_key, bool ctrl_key,
                    bool shift_key, bool meta_key, bool repeat);
+
+  // A key press reached the page: not a modifier, not a repeat, and not a
+  // chord the shell grabbed. So the shell can tell typing in a window from
+  // keys it handled, such as to end a selection around the window.
+  //
+  // Carries no key, so typed text, passwords included, stays in the guest.
+  KeyDelivered();
 
   // The page's zoom factor; 1 is 100%.
   //
@@ -670,6 +825,22 @@ interface WebViewGuestClient {
   // went away. Its answer, if one is sent, is ignored.
   PickerWithdrawn();
 
+  // A site in the page asked to sign in with an identity provider (FedCM's
+  // `navigator.credentials.get({identity})`), so the shell must show
+  // `request`, a step of it. See WebViewIdentityStep for what each answer
+  // means; `index` is read only for the actions that say so.
+  //
+  // An unhandled event or a closed pipe is kNone. A newer step replaces an
+  // older, unanswered one, which is answered kNone. The engine draws no
+  // dialog of its own. See //components/domicile/browser/identity_dialog.h.
+  IdentityRequested(WebViewIdentityRequest request)
+      => (WebViewIdentityAction action, int32 index);
+
+  // The browser dropped the unanswered IdentityRequested, because the
+  // request ended or the page navigated. Its answer, if one is sent, is
+  // ignored.
+  IdentityWithdrawn();
+
   // The page entered or left fullscreen, as a video's fullscreen button does.
   // The page fills the element's box; the shell decides whether the element
   // fills the screen. Sent only when it changes; a fresh guest sends nothing.
@@ -715,6 +886,23 @@ interface WebViewGuestClient {
   // The navigation waits for the answer. `proceed` false cancels it and the
   // page stays. An unhandled event or a closed pipe proceeds.
   WillNavigate(url.mojom.Url url) => (bool proceed);
+
+  // A modifier key (Alt, Control, Meta or Shift) let go of in the page, which
+  // the page did not handle, for what a lone modifier does: Alt showing an
+  // app's menu bar. Unhandled key releases stop at the guest's
+  // WebContentsDelegate as presses do (see UnhandledKeyDown), and come from
+  // HandleKeyboardEvent, so not when the page called preventDefault.
+  //
+  // Modifiers only, so typed text stays in the guest. `key` and `code` are
+  // KeyboardEvent values.
+  UnhandledModifierUp(string key, string code);
+
+  // The browser window this element shows was given a new page in its
+  // place, in another browser profile (BrowserWindows.Reopen, or a link to
+  // another profile's site), and this pipe is closed. The element asks for
+  // the window again, in a new placeholder frame, and shows the new page.
+  // Whatever the old page asked the shell is withdrawn.
+  Replaced();
 };
 
 // One guest, for the life of the element that requested it.
@@ -745,6 +933,19 @@ interface WebViewGuest {
   // is private. With no entry to go to, nothing opens.
   GoBackInNewWindow();
   GoForwardInNewWindow();
+
+  // The pages either side of the current one, for a back or forward menu.
+  ListHistory() => (WebViewHistory history);
+
+  // Goes to the history entry with unique id `id`, as picking it from
+  // Chrome's back or forward menu does. An id no longer in the history, or the
+  // current page's, is a no-op, not an error: the history can change between
+  // listing and picking.
+  GoToHistoryEntry(int32 id);
+
+  // As GoToHistoryEntry, in a new browser window with a copy of the history,
+  // as GoBackInNewWindow does. The guest stays on its page.
+  GoToHistoryEntryInNewWindow(int32 id);
 
   // Stops loading, via `WebContents::Stop`; NavigationController has no Stop.
   Stop();
@@ -790,6 +991,12 @@ interface WebViewGuest {
   // - An unknown id, or an action the menu does not offer (e.g. a link action
   //   with no link), is a bad message. The element rejects both first.
   RunContextMenuAction(int32 menu, WebViewContextMenuAction action);
+
+  // Replaces the misspelled word under context menu `menu` with `word`,
+  // usually one of its suggestions. Ids as RunContextMenuAction's; a menu
+  // with no misspelled word is a bad message, which the element rejects
+  // first.
+  ReplaceMisspelling(int32 menu, string word);
 
   // Opens DevTools for the page in a new browser window. If DevTools is
   // already open, its window's element gets FocusRequested instead. See
@@ -837,6 +1044,16 @@ interface WebViewGuest {
   // gave no number: it navigated before the read ran, or the selector is not
   // valid there. The element rejects a selector it cannot parse first.
   CountMatches(string selector) => (int32? count);
+
+  // Clicks the first shown element in the page's main document that matches the
+  // CSS `selector`, as a press of the mouse's main button on its middle does:
+  // scrolled into view, it gets pointerdown, mousedown, pointerup, mouseup and
+  // click. Run in Chrome's internal isolated world, as CountMatches is; the
+  // events are the page's to hear, but not trusted ones. Works while the page
+  // is hidden. Whether an element matched; null when the page gave no answer:
+  // it navigated before the click ran, or the selector is not valid there. The
+  // element rejects a selector it cannot parse first.
+  ClickMatch(string selector) => (bool? clicked);
 };
 
 // A page's channel to its <webview>'s shell for the pickers Chrome draws for

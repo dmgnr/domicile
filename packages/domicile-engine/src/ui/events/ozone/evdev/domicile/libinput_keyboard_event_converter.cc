@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -92,7 +93,7 @@ void LibInputKeyboardEventConverter::HandleEvent(libinput_event* event) {
         base::TimeTicks() +
             base::Microseconds(
                 libinput_event_keyboard_get_time_usec(keyboard)));
-    ProcessEvents(&key, 1);
+    ProcessEvents(base::span_from_ref(key));
   }
 }
 

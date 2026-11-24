@@ -2,18 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "timezone": "UTC",
+  "commitBody": "Release-notes: none",
   "schedule": ["before 6am on monday"],
   "automerge": false,
-  "separateMajorMinor": false,
   "minimumReleaseAge": "7 days",
   "nix": {
     "enabled": true
   },
   "packageRules": [
     {
-      "description": "One weekly PR with every update; a Claude routine fixes it up (lockfiles, flake hashes, breaking changes) and merges it.",
+      "description": "One weekly PR with every non-major update. renovate-fixup.yml regenerates bun.lock with the pinned bun, the SDK's generated files and the flake's node-modules hashes, and adds a changeset; Renovate merges it once every check passes, which waits out a Chromium pin roll. It rebases when main moves, so the checks rerun.",
       "matchUpdateTypes": [
-        "major",
         "minor",
         "patch",
         "pin",
@@ -23,8 +22,21 @@
         "rollback",
         "replacement"
       ],
-      "groupName": "all dependencies",
-      "groupSlug": "all"
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all",
+      "automerge": true,
+      "rebaseWhen": "behind-base-branch"
+    },
+    {
+      "description": "One weekly PR with every major update. Majors can break the build, so a person lands it.",
+      "matchUpdateTypes": ["major"],
+      "groupName": "all major dependencies",
+      "groupSlug": "all-major"
+    },
+    {
+      "description": "Move a catalog range to the new version, as bun's own updates do.",
+      "matchDepTypes": ["catalog"],
+      "rangeStrategy": "bump"
     },
     {
       "description": "Hold the distro binaries' build container on Debian 12. Its glibc (2.36) is the newest the packaged binaries may need; Debian 13 builds need 2.39+ and fail the debian-12 and ubuntu-22.04 installs. Lift when those targets are dropped.",
@@ -36,6 +48,26 @@
       "description": "Temporary: hold zbus on 5.x. zbus 6 removes the blocking API and the async-io feature this workspace is built on, so the move needs its own migration PR. Remove this rule in that PR.",
       "matchPackageNames": ["zbus"],
       "allowedVersions": "<6"
+    }
+  ],
+  "platformAutomerge": false,
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "gitIgnoredAuthors": ["ci@domicile.invalid"],
+  "customManagers": [
+    {
+      "description": "Bun workspace catalog in the root package.json. Renovate's bun manager does not read catalogs yet (renovatebot/renovate#42909); drop this once it does.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^package\\.json$/"],
+      "matchStringsStrategy": "recursive",
+      "matchStrings": [
+        "\"catalog\":\\s*\\{[^}]*\\}",
+        "\"(?<depName>[^\"]+)\":\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "npm",
+      "depTypeTemplate": "catalog"
     }
   ]
 }

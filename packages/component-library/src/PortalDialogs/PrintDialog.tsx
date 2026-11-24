@@ -26,6 +26,8 @@ import { ModalDialog } from "../ModalDialog/ModalDialog";
 import { Select } from "../Select/Select";
 import { ModalFilePicker } from "./ModalFilePicker";
 import { pageRanges } from "./page-ranges";
+import { usePicking } from "./picking";
+import type { Presence } from "./presence";
 
 const SIDES = {
   [Sides.OneSided]: "Off",
@@ -69,6 +71,8 @@ type Props = {
   body: PrintBody;
   /** The folders the PDF's file picker browses. */
   folders: Folders;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -82,95 +86,102 @@ export const PrintDialog = ({
   asker,
   body,
   folders,
+  presence,
   screen,
 }: Props) => {
   const [chosen, setChosen] = useState(() => startingChoice(body));
-  const [picking, setPicking] = useState(false);
+  const { dialog, picker, setPicking } = usePicking(presence);
   const options = readOptions(chosen);
   const pdf = chosen.printer === body.pdf;
-  return picking && options !== undefined ? (
-    <PdfPicker
-      answer={answer}
-      back={() => {
-        setPicking(false);
-      }}
-      body={body}
-      folders={folders}
-      options={options}
-      screen={screen}
-    />
-  ) : (
-    <ModalDialog
-      closeButton={false}
-      footer={
-        <>
-          <Button
-            onClick={() => {
-              answer(Answer.Canceled());
-            }}
-            variant="outline"
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={options === undefined}
-            onClick={() => {
-              if (options !== undefined) {
-                if (pdf) {
-                  setPicking(true);
-                } else {
-                  answer(Answer.Print(chosen.printer.name, options));
-                }
-              }
-            }}
-            variant="accent"
-          >
-            {pdf ? "Save…" : (body.acceptLabel ?? "Print")}
-          </Button>
-        </>
-      }
-      onOpenChange={(open) => {
-        if (!open) {
-          answer(Answer.Canceled());
-        }
-      }}
-      open
-      screen={screen}
-      title="Print"
-    >
-      <p className={askerStyles}>{`${asker} prints “${body.title}”`}</p>
-      <div className={formStyles}>
-        <div className={wideStyles}>
-          <Field
-            hint={
-              body.printers.length === 0 ? "No printers are set up." : undefined
-            }
-            label="Destination"
-          >
-            <Select
-              onValueChange={(picked) => {
-                if (picked !== null) {
-                  setChosen(startOf(picked));
+  return (
+    <>
+      {picker !== undefined && options !== undefined && (
+        <PdfPicker
+          answer={answer}
+          back={() => {
+            setPicking(false);
+          }}
+          body={body}
+          folders={folders}
+          options={options}
+          presence={picker}
+          screen={screen}
+        />
+      )}
+      <ModalDialog
+        closeButton={false}
+        footer={
+          <>
+            <Button
+              onClick={() => {
+                answer(Answer.Canceled());
+              }}
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={options === undefined}
+              onClick={() => {
+                if (options !== undefined) {
+                  if (pdf) {
+                    setPicking(true);
+                  } else {
+                    answer(Answer.Print(chosen.printer.name, options));
+                  }
                 }
               }}
-              options={[...body.printers, body.pdf].map((listed) => ({
-                label: (
-                  <span className={destinationStyles}>
-                    <DestinationIcon pdf={listed === body.pdf} />
-                    {nameOf(listed)}
-                  </span>
-                ),
-                textLabel: nameOf(listed),
-                value: listed,
-              }))}
-              prefixIcon={<DestinationIcon pdf={pdf} />}
-              value={chosen.printer}
-            />
-          </Field>
+              variant="accent"
+            >
+              {pdf ? "Save…" : (body.acceptLabel ?? "Print")}
+            </Button>
+          </>
+        }
+        onOpenChange={(open) => {
+          if (!open) {
+            answer(Answer.Canceled());
+          }
+        }}
+        {...dialog}
+        screen={screen}
+        title="Print"
+      >
+        <p className={askerStyles}>{`${asker} prints “${body.title}”`}</p>
+        <div className={formStyles}>
+          <div className={wideStyles}>
+            <Field
+              hint={
+                body.printers.length === 0
+                  ? "No printers are set up."
+                  : undefined
+              }
+              label="Destination"
+            >
+              <Select
+                onValueChange={(picked) => {
+                  if (picked !== null) {
+                    setChosen(startOf(picked));
+                  }
+                }}
+                options={[...body.printers, body.pdf].map((listed) => ({
+                  label: (
+                    <span className={destinationStyles}>
+                      <DestinationIcon pdf={listed === body.pdf} />
+                      {nameOf(listed)}
+                    </span>
+                  ),
+                  textLabel: nameOf(listed),
+                  value: listed,
+                }))}
+                prefixIcon={<DestinationIcon pdf={pdf} />}
+                value={chosen.printer}
+              />
+            </Field>
+          </div>
+          <Options chosen={chosen} onChange={setChosen} />
         </div>
-        <Options chosen={chosen} onChange={setChosen} />
-      </div>
-    </ModalDialog>
+      </ModalDialog>
+    </>
   );
 };
 
@@ -341,6 +352,7 @@ const PdfPicker = ({
   body,
   folders,
   options,
+  presence,
   screen,
 }: {
   answer: (answer: PortalAnswer) => void;
@@ -348,9 +360,11 @@ const PdfPicker = ({
   body: PrintBody;
   folders: Folders;
   options: PrintOptions;
+  presence: Presence;
   screen: string | undefined;
 }) => (
   <ModalFilePicker
+    presence={presence}
     request={{
       accept: ["pdf"],
       acceptLabel: "Save",

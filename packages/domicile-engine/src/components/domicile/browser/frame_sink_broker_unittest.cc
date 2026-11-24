@@ -4,6 +4,7 @@
 #include "components/domicile/browser/frame_sink_broker.h"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,12 +21,14 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/unguessable_token.h"
 #include "components/domicile/browser/browser_window_capture_target.h"
 #include "components/domicile/browser/external_surface_provider.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/common/surfaces/frame_sink_id_allocator.h"
 #include "components/viz/common/surfaces/local_surface_id.h"
@@ -33,6 +36,8 @@
 #include "components/viz/host/host_frame_sink_manager.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
+#include "components/viz/service/surfaces/surface.h"
+#include "components/viz/service/surfaces/surface_manager.h"
 #include "components/viz/test/compositor_frame_helpers.h"
 #include "components/viz/test/fake_external_begin_frame_source.h"
 #include "components/viz/test/fake_host_frame_sink_client.h"
@@ -49,6 +54,8 @@
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/color_space.h"
+#include "third_party/skia/include/core/SkAlphaType.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -74,6 +81,8 @@ constexpr char kTestApp[] = "test-app";
 constexpr gfx::Size kEmbeddedSize(320, 240);
 // The page's device scale factor.
 constexpr double kEmbeddedScale = 1.5;
+// The <app> element's CSS `zoom`.
+constexpr double kEmbeddedZoom = 1.25;
 
 // The DRM fourcc of the buffers tests import, and its viz format.
 constexpr uint32_t kArgb8888 = 0x34325241;
@@ -184,10 +193,11 @@ class FakeSurfaceObserver : public mojom::SurfaceObserver {
   // mojom::SurfaceObserver implementation.
   void OnSurfaceEmbedded(const viz::LocalSurfaceId& local_surface_id,
                          const gfx::Size& size,
-                         double scale) override {
+                         double scale,
+                         double zoom) override {
     told_.push_back(local_surface_id);
     if (!embedded_.IsReady()) {
-      embedded_.SetValue(local_surface_id, size, scale);
+      embedded_.SetValue(local_surface_id, size, scale, zoom);
     }
   }
 
@@ -197,7 +207,8 @@ class FakeSurfaceObserver : public mojom::SurfaceObserver {
   }
 
   // The first embed.
-  base::test::TestFuture<viz::LocalSurfaceId, gfx::Size, double> embedded_;
+  base::test::TestFuture<viz::LocalSurfaceId, gfx::Size, double, double>
+      embedded_;
   // Every LocalSurfaceId sent, in order. The producer submits to the last.
   std::vector<viz::LocalSurfaceId> told_;
   std::vector<uint64_t> released_;
@@ -283,7 +294,8 @@ class FakeBrowserWindowListObserver : public mojom::BrowserWindowListObserver {
       std::vector<mojom::ListedBrowserWindowPtr> windows) override {
     std::vector<std::string> titles;
     for (const mojom::ListedBrowserWindowPtr& window : windows) {
-      titles.push_back(window->id + " " + window->title);
+      titles.push_back(window->id + " " + window->title + " " + window->url +
+                       (window->off_the_record ? " private" : ""));
     }
     lists_.push_back(std::move(titles));
   }
@@ -293,6 +305,30 @@ class FakeBrowserWindowListObserver : public mojom::BrowserWindowListObserver {
 
  private:
   mojo::Receiver<mojom::BrowserWindowListObserver> receiver_{this};
+};
+
+// Fake producer input device list observer.
+class FakeInputDeviceListObserver : public mojom::InputDeviceListObserver {
+ public:
+  mojo::PendingRemote<mojom::InputDeviceListObserver> BindRemote() {
+    return receiver_.BindNewPipeAndPassRemote();
+  }
+
+  // mojom::InputDeviceListObserver implementation.
+  void OnInputDevicesChanged(
+      std::vector<mojom::ListedInputDevicePtr> devices) override {
+    std::vector<std::string> names;
+    for (const mojom::ListedInputDevicePtr& device : devices) {
+      names.push_back(base::NumberToString(device->id) + " " + device->name);
+    }
+    lists_.push_back(std::move(names));
+  }
+
+  // Every list sent, in order, each as "<id> <name>".
+  std::vector<std::vector<std::string>> lists_;
+
+ private:
+  mojo::Receiver<mojom::InputDeviceListObserver> receiver_{this};
 };
 
 // Fake producer display capture observer. These tests send no frames.
@@ -322,8 +358,62 @@ std::vector<mojom::DisplayPtr> OneDisplay(int64_t id, const gfx::Size& size) {
                                          gfx::Size(597, 336),
                                          "DEL DELL U3219Q 2ZLS413", 59997,
                                          "eDP-1", 4096, std::move(modes),
-                                         mojom::AdaptiveSync::kOn));
+                                         mojom::AdaptiveSync::kOn,
+                                         mojom::Hdr::kOn, 600.f, 350.f, 0.05f,
+                                         240.f));
   return displays;
+}
+
+TEST(ForCaptureToolsTest, ListsShownWindowsWithTheViewsTheyHoldBottomFirst) {
+  std::vector<mojom::ListedBrowserWindowPtr> listed = ForCaptureTools({
+      ListedBrowserWindow{.id = "1",
+                          .title = "Claude",
+                          .app_title = "Claude",
+                          .app_id = "claude-desktop"},
+      ListedBrowserWindow{.id = "2",
+                          .title = "Chat",
+                          .view = true,
+                          .parent = "1",
+                          .x = 0,
+                          .y = 40,
+                          .width = 800,
+                          .height = 560,
+                          .stack = 1},
+      ListedBrowserWindow{.id = "3",
+                          .title = "Sidebar",
+                          .view = true,
+                          .parent = "1",
+                          .width = 200,
+                          .height = 600},
+      // Neither a view no window shows, a view with no area nor a hidden
+      // window is listed.
+      ListedBrowserWindow{.id = "4", .view = true},
+      ListedBrowserWindow{
+          .id = "7", .view = true, .parent = "1", .width = 800, .height = 0},
+      ListedBrowserWindow{.id = "5", .title = "Tray", .hidden = true},
+      ListedBrowserWindow{.id = "6", .title = "Mail", .off_the_record = true},
+  });
+
+  ASSERT_EQ(listed.size(), 2u);
+  EXPECT_EQ(listed[0]->id, "1");
+  EXPECT_EQ(listed[0]->title, "Claude");
+  ASSERT_EQ(listed[0]->views.size(), 2u);
+  EXPECT_EQ(listed[0]->views[0],
+            mojom::ListedBrowserView::New("3", 0, 0, 200, 600));
+  EXPECT_EQ(listed[0]->views[1],
+            mojom::ListedBrowserView::New("2", 0, 40, 800, 560));
+  EXPECT_EQ(listed[1]->id, "6");
+  EXPECT_TRUE(listed[1]->off_the_record);
+  EXPECT_TRUE(listed[1]->views.empty());
+}
+
+TEST(ForCaptureToolsTest, AWindowIsTitledByItsAppOverItsPage) {
+  std::vector<mojom::ListedBrowserWindowPtr> listed =
+      ForCaptureTools({ListedBrowserWindow{
+          .id = "1", .title = "claude.ai", .app_title = "Claude"}});
+
+  ASSERT_EQ(listed.size(), 1u);
+  EXPECT_EQ(listed[0]->title, "Claude");
 }
 
 }  // namespace
@@ -374,13 +464,32 @@ class FrameSinkBrokerTest : public testing::Test {
     base::test::TestFuture<uint64_t, std::optional<gpu::ExportedSharedImage>>
         future;
     remote->ImportBuffer(frame_sink_id, ADmabuf(kBufferSize), kBufferSize,
-                         kArgb8888, future.GetCallback());
+                         kArgb8888, gfx::ColorSpace::CreateSRGB(),
+                         future.GetCallback());
     auto [buffer_id, exported] = future.Take();
     CHECK_NE(buffer_id, 0u);
     CHECK(exported.has_value());
     return {buffer_id,
             gpu::ClientSharedImage::ImportUnowned(std::move(exported).value())
                 ->mailbox()};
+  }
+
+  // Imports a dmabuf of `fourcc` into `frame_sink_id` and returns its
+  // SharedImage, or nullptr if the import was refused.
+  scoped_refptr<gpu::ClientSharedImage> ImportAs(
+      mojo::Remote<mojom::FrameSinkBroker>& remote,
+      const viz::FrameSinkId& frame_sink_id,
+      uint32_t fourcc,
+      const gfx::ColorSpace& color_space = gfx::ColorSpace::CreateSRGB()) {
+    base::test::TestFuture<uint64_t, std::optional<gpu::ExportedSharedImage>>
+        future;
+    remote->ImportBuffer(frame_sink_id, ADmabuf(kBufferSize), kBufferSize,
+                         fourcc, color_space, future.GetCallback());
+    auto [buffer_id, exported] = future.Take();
+    if (!exported.has_value()) {
+      return nullptr;
+    }
+    return gpu::ClientSharedImage::ImportUnowned(std::move(exported).value());
   }
 
   // Imports `region` into `frame_sink_id` as an ARGB8888 window of
@@ -395,7 +504,8 @@ class FrameSinkBrokerTest : public testing::Test {
     base::test::TestFuture<uint64_t, std::optional<gpu::ExportedSharedImage>>
         future;
     remote->ImportBuffer(frame_sink_id, std::move(handle), kBufferSize,
-                         kArgb8888, future.GetCallback());
+                         kArgb8888, gfx::ColorSpace::CreateSRGB(),
+                         future.GetCallback());
     return future.Take();
   }
 
@@ -466,6 +576,11 @@ class FrameSinkBrokerTest : public testing::Test {
         base::BindRepeating(&FrameSinkBrokerTest::RecordInputConfig,
                             base::Unretained(this)),
         base::BindRepeating(&FrameSinkBrokerTest::RecordRedraw,
+                            base::Unretained(this)),
+        base::BindRepeating(&FrameSinkBrokerTest::RecordColorMatrix,
+                            base::Unretained(this)),
+        FrameSinkBroker::DmabufCaptureChecker(),
+        base::BindRepeating(&FrameSinkBrokerTest::SignalSyncToken,
                             base::Unretained(this)));
     page_ = broker_->NewEmbedRequester();
   }
@@ -498,6 +613,20 @@ class FrameSinkBrokerTest : public testing::Test {
 
   // Gives the broker a GPU.
   void UseTheGpu() { gpu_ = sii_.get(); }
+
+  // Fake for the browser's GPU channel: passes each token at once, unless a
+  // test holds them.
+  void SignalSyncToken(const gpu::SyncToken& sync_token,
+                       base::OnceClosure done) {
+    if (!hold_signals_) {
+      std::move(done).Run();
+      return;
+    }
+    held_signals_.emplace_back(sync_token, std::move(done));
+  }
+
+  // Makes the fake GPU channel hold each token until the test passes it.
+  void HoldSignals() { hold_signals_ = true; }
 
   // Fake for the browser's software compositing: off, unless a test turns it
   // on.
@@ -535,6 +664,12 @@ class FrameSinkBrokerTest : public testing::Test {
     redraws_.emplace_back(display_id, gamma_.size());
   }
 
+  // Fake for the browser's windows' compositors.
+  void RecordColorMatrix(int64_t display_id,
+                         const FrameSinkBroker::ColorMatrix& matrix) {
+    color_matrices_.emplace_back(display_id, matrix);
+  }
+
   // Fake for the ozone platform that owns the clipboard.
   void RecordClipboard(mojom::Clipboard clipboard,
                        const FrameSinkBroker::ClipboardContents& contents) {
@@ -564,6 +699,9 @@ class FrameSinkBrokerTest : public testing::Test {
   std::vector<std::pair<int64_t, mojom::GammaRampPtr>> gamma_;
   // Every display redrawn, in order, with the count of ramps set before it.
   std::vector<std::pair<int64_t, size_t>> redraws_;
+  // Every color matrix the producer set, in order.
+  std::vector<std::pair<int64_t, FrameSinkBroker::ColorMatrix>>
+      color_matrices_;
   std::vector<mojom::DeskInputPtr> inputs_;
   std::vector<std::string> input_configs_;
 
@@ -573,6 +711,11 @@ class FrameSinkBrokerTest : public testing::Test {
 
   // How many browser window captures keep their page drawing.
   int drawing_holds_ = 0;
+
+  // Set by HoldSignals. The tokens the broker waits on, in order, with what
+  // runs once each passes.
+  bool hold_signals_ = false;
+  std::vector<std::pair<gpu::SyncToken, base::OnceClosure>> held_signals_;
 
   // Fake for the browser's frame sink id allocator.
   viz::FrameSinkIdAllocator allocator_{kBrowserClientId};
@@ -731,7 +874,8 @@ TEST_F(FrameSinkBrokerTest, EmbedAnswersWithTheBrokeredFrameSinkId) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
 
   EXPECT_EQ(frame_sink_id, embedded.Get());
 }
@@ -743,7 +887,8 @@ TEST_F(FrameSinkBrokerTest, EmbedWaitsForAProducer) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
   RunUntilIdle();
   EXPECT_FALSE(embedded.IsReady());
 
@@ -771,7 +916,8 @@ TEST_F(FrameSinkBrokerTest, ARendererEmbedsUnderItsOwnFrameSink) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   page->Embed(kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-              kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+              kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+              embedded.GetCallback());
 
   EXPECT_EQ(frame_sink_id, embedded.Get());
 }
@@ -786,11 +932,27 @@ TEST_F(FrameSinkBrokerTest, ARendererNamingAnotherRenderersFrameSinkIsBad) {
 
   mojo::test::BadMessageObserver bad_message;
   page->Embed(kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-              kEmbeddedSize, kEmbeddedScale, base::DoNothing());
+              kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom, base::DoNothing());
 
   // A substring: mojo prefixes the error when the message crossed processes.
   EXPECT_THAT(bad_message.WaitForBadMessage(),
               testing::HasSubstr("parent frame sink is not the renderer's"));
+}
+
+// A zoom that is not a positive number is reported: the compositor configures
+// the client at the box over it.
+TEST_F(FrameSinkBrokerTest, ARendererSendingANonsenseZoomIsBad) {
+  ExternalSurfaceProvider provider(broker());
+  mojo::Remote<mojom::ExternalSurfaceProvider> page;
+  provider.Bind(page.BindNewPipeAndPassReceiver(),
+                kPageFrameSinkId.client_id());
+
+  mojo::test::BadMessageObserver bad_message;
+  page->Embed(kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
+              kEmbeddedSize, kEmbeddedScale, /*zoom=*/0, base::DoNothing());
+
+  EXPECT_THAT(bad_message.WaitForBadMessage(),
+              testing::HasSubstr("zoom is not a positive number"));
 }
 
 // A renderer hears when the producer of a surface it embeds disconnects, and
@@ -889,7 +1051,8 @@ TEST_F(FrameSinkBrokerTest, AnEmbedWithATokenFromADisconnectedSinkIsRefused) {
   BrokerASink(*old_producer, old_client, old_sink, mojo::NullRemote());
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> first;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, first.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  first.GetCallback());
   ASSERT_TRUE(first.Get().has_value());
   old_producer.reset();
   RunUntilIdle();
@@ -904,7 +1067,8 @@ TEST_F(FrameSinkBrokerTest, AnEmbedWithATokenFromADisconnectedSinkIsRefused) {
   // The same allocator, so the same embed token.
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> stale;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, stale.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  stale.GetCallback());
 
   ASSERT_TRUE(stale.IsReady());
   EXPECT_EQ(std::nullopt, stale.Get());
@@ -935,10 +1099,12 @@ TEST_F(FrameSinkBrokerTest, EachAppEmbedsItsOwnSurface) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> for_terminal;
   broker()->Embed(page_, "terminal", kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, for_terminal.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  for_terminal.GetCallback());
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> for_editor;
   broker()->Embed(page_, "editor", kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, for_editor.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  for_editor.GetCallback());
 
   EXPECT_EQ(terminal.Get(), for_terminal.Get());
   EXPECT_EQ(editor.Get(), for_editor.Get());
@@ -954,7 +1120,8 @@ TEST_F(FrameSinkBrokerTest, AWaitingEmbedTakesOnlyItsOwnApp) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> for_editor;
   broker()->Embed(page_, "editor", kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, for_editor.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  for_editor.GetCallback());
   RunUntilIdle();
 
   // The terminal connects first. The editor's element is still waiting.
@@ -992,11 +1159,12 @@ TEST_F(FrameSinkBrokerTest, AWaitingEmbedIsDroppedWithItsPage) {
                 kPageFrameSinkId.client_id());
 
   gone_page->Embed(kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                   kEmbeddedSize, kEmbeddedScale, base::DoNothing());
+                   kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                   base::DoNothing());
   const viz::LocalSurfaceId kept_surface = AllocateLocalSurfaceId();
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> kept;
   kept_page->Embed(kTestApp, kPageFrameSinkId, kept_surface, kEmbeddedSize,
-                   kEmbeddedScale, kept.GetCallback());
+                   kEmbeddedScale, kEmbeddedZoom, kept.GetCallback());
   RunUntilIdle();
   gone_page.reset();
   RunUntilIdle();
@@ -1029,12 +1197,14 @@ TEST_F(FrameSinkBrokerTest, EmbedTellsTheProducerWhichSurfaceToSubmitTo) {
   const viz::LocalSurfaceId local_surface_id = AllocateLocalSurfaceId();
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, local_surface_id,
-                  kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
 
   EXPECT_EQ(local_surface_id, observer.embedded_.Get<viz::LocalSurfaceId>());
   EXPECT_EQ(kEmbeddedSize, observer.embedded_.Get<gfx::Size>());
-  // Each monitor's page has its own scale.
-  EXPECT_EQ(kEmbeddedScale, observer.embedded_.Get<double>());
+  // Each monitor's page has its own scale, and each element its own zoom.
+  EXPECT_EQ(kEmbeddedScale, observer.embedded_.Get<2>());
+  EXPECT_EQ(kEmbeddedZoom, observer.embedded_.Get<3>());
 }
 
 // Two <app> elements showing one window share its allocator but use separate
@@ -1055,7 +1225,7 @@ TEST_F(FrameSinkBrokerTest, AnOlderSurfaceArrivingLateIsNotPassedOn) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> for_newer;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, newer, kEmbeddedSize,
-                  kEmbeddedScale, for_newer.GetCallback());
+                  kEmbeddedScale, kEmbeddedZoom, for_newer.GetCallback());
   ASSERT_TRUE(for_newer.Wait());
   RunUntilIdle();
   sink->SubmitCompositorFrame(observer.told_.back(),
@@ -1065,7 +1235,7 @@ TEST_F(FrameSinkBrokerTest, AnOlderSurfaceArrivingLateIsNotPassedOn) {
   // The late embed is still answered: the element needs a FrameSinkId.
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> for_older;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, older, kEmbeddedSize,
-                  kEmbeddedScale, for_older.GetCallback());
+                  kEmbeddedScale, kEmbeddedZoom, for_older.GetCallback());
   ASSERT_TRUE(for_older.Wait());
   RunUntilIdle();
   sink->SubmitCompositorFrame(observer.told_.back(),
@@ -1092,7 +1262,8 @@ TEST_F(FrameSinkBrokerTest, EmbedRegistersTheHierarchyUnderThePage) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
   ASSERT_TRUE(embedded.Wait());
   RunUntilIdle();
 
@@ -1110,7 +1281,8 @@ TEST_F(FrameSinkBrokerTest, AnEmbeddedWindowAsksForNoBeginFrames) {
 
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
   ASSERT_TRUE(embedded.Wait());
   RunUntilIdle();
 
@@ -1130,7 +1302,8 @@ TEST_F(FrameSinkBrokerTest, ABeginFrameWithNothingToDrawIsAnswered) {
       BrokerABrowserHeldSink(remote, observer.BindRemote());
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
   ASSERT_TRUE(embedded.Wait());
   RunUntilIdle();
 
@@ -1146,6 +1319,38 @@ TEST_F(FrameSinkBrokerTest, ABeginFrameWithNothingToDrawIsAnswered) {
   EXPECT_TRUE(begin_frames.AllFramesDidFinish());
 }
 
+// A window the page does not draw still submits now and then, and each frame
+// goes undrawn. Throttled for that, viz would hold back the BeginFrames that
+// carry the frames' failed presentation timing, and the sink would observe the
+// BeginFrameSource for good: the display would tick at its refresh rate for a
+// window nobody sees.
+TEST_F(FrameSinkBrokerTest, AnUndrawnWindowsFramesMayNotBeThrottled) {
+  UseTheGpu();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  FakeSurfaceObserver observer;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerABrowserHeldSink(remote, observer.BindRemote());
+  const viz::LocalSurfaceId local_surface_id = AllocateLocalSurfaceId();
+  base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
+  broker()->Embed(page_, kTestApp, kPageFrameSinkId, local_surface_id,
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
+  ASSERT_TRUE(embedded.Wait());
+  const auto [buffer_id, mailbox] = ImportABuffer(remote, frame_sink_id);
+
+  remote->SubmitBuffer(frame_sink_id, buffer_id, gfx::Rect());
+  RunUntilIdle();
+
+  viz::Surface* surface =
+      frame_sink_manager_->surface_manager()->GetSurfaceForId(
+          viz::SurfaceId(frame_sink_id, local_surface_id));
+  ASSERT_TRUE(surface);
+  ASSERT_TRUE(surface->HasActiveFrame());
+  EXPECT_FALSE(
+      surface->GetActiveFrameMetadata().may_throttle_if_undrawn_frames);
+}
+
 // Destroying a sink also unregisters it from the hierarchy.
 TEST_F(FrameSinkBrokerTest, DestroyingTheSinkUnregistersTheHierarchy) {
   mojo::Remote<mojom::FrameSinkBroker> remote;
@@ -1157,7 +1362,8 @@ TEST_F(FrameSinkBrokerTest, DestroyingTheSinkUnregistersTheHierarchy) {
       BrokerASink(remote, sink_client, sink, mojo::NullRemote());
   base::test::TestFuture<const std::optional<viz::FrameSinkId>&> embedded;
   broker()->Embed(page_, kTestApp, kPageFrameSinkId, AllocateLocalSurfaceId(),
-                  kEmbeddedSize, kEmbeddedScale, embedded.GetCallback());
+                  kEmbeddedSize, kEmbeddedScale, kEmbeddedZoom,
+                  embedded.GetCallback());
   ASSERT_TRUE(embedded.Wait());
   RunUntilIdle();
   ASSERT_TRUE(VizHasHierarchy(kPageFrameSinkId, frame_sink_id));
@@ -1166,6 +1372,51 @@ TEST_F(FrameSinkBrokerTest, DestroyingTheSinkUnregistersTheHierarchy) {
   RunUntilIdle();
 
   EXPECT_FALSE(VizHasHierarchy(kPageFrameSinkId, frame_sink_id));
+}
+
+// A window's subsurface is drawn in the window's own frames: the producer
+// embeds its sink under the window's, so it learns its surface and gets
+// BeginFrames, as a window embedded by a page does.
+TEST_F(FrameSinkBrokerTest, AProducerEmbedsOneOfItsSinksInAnother) {
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+
+  testing::NiceMock<viz::MockCompositorFrameSinkClient> window_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> window_sink;
+  const viz::FrameSinkId window =
+      BrokerASink(remote, window_client, window_sink, mojo::NullRemote());
+  FakeSurfaceObserver observer;
+  testing::NiceMock<viz::MockCompositorFrameSinkClient> child_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> child_sink;
+  const viz::FrameSinkId child =
+      BrokerASink(remote, child_client, child_sink, observer.BindRemote());
+
+  const viz::LocalSurfaceId local_surface_id = AllocateLocalSurfaceId();
+  remote->EmbedFrameSink(child, window, local_surface_id, kEmbeddedSize,
+                         kEmbeddedScale);
+
+  EXPECT_EQ(local_surface_id, observer.embedded_.Get<viz::LocalSurfaceId>());
+  EXPECT_EQ(kEmbeddedSize, observer.embedded_.Get<gfx::Size>());
+  // The scale given already carries the window's zoom.
+  EXPECT_EQ(1.0, observer.embedded_.Get<3>());
+  RunUntilIdle();
+  EXPECT_TRUE(VizHasHierarchy(window, child));
+}
+
+TEST_F(FrameSinkBrokerTest, EmbeddingInASinkNeverBrokeredIsABadMessage) {
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  testing::NiceMock<viz::MockCompositorFrameSinkClient> sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId child =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+  mojo::test::BadMessageObserver bad_message;
+
+  remote->EmbedFrameSink(child, kPageFrameSinkId, AllocateLocalSurfaceId(),
+                         kEmbeddedSize, kEmbeddedScale);
+
+  EXPECT_THAT(bad_message.WaitForBadMessage(),
+              testing::HasSubstr("No brokered frame sink"));
 }
 
 TEST_F(FrameSinkBrokerTest, AnObserverIsToldTheDisplaysAlreadyRead) {
@@ -1191,6 +1442,11 @@ TEST_F(FrameSinkBrokerTest, AnObserverIsToldTheDisplaysAlreadyRead) {
   ASSERT_EQ(observer.lists_[0][0]->modes.size(), 1u);
   EXPECT_EQ(observer.lists_[0][0]->modes[0]->refresh_mhz, 59997);
   EXPECT_EQ(observer.lists_[0][0]->adaptive_sync, mojom::AdaptiveSync::kOn);
+  EXPECT_EQ(observer.lists_[0][0]->hdr, mojom::Hdr::kOn);
+  EXPECT_FLOAT_EQ(observer.lists_[0][0]->max_luminance, 600.f);
+  EXPECT_FLOAT_EQ(observer.lists_[0][0]->max_average_luminance, 350.f);
+  EXPECT_FLOAT_EQ(observer.lists_[0][0]->min_luminance, 0.05f);
+  EXPECT_FLOAT_EQ(observer.lists_[0][0]->sdr_white_nits, 240.f);
 }
 
 TEST_F(FrameSinkBrokerTest, AProducerSaysWhichConnectorsToLight) {
@@ -1202,10 +1458,11 @@ TEST_F(FrameSinkBrokerTest, AProducerSaysWhichConnectorsToLight) {
   std::vector<mojom::DisplayLayoutPtr> layout;
   layout.push_back(mojom::DisplayLayout::New(
       7, true, gfx::Point(1920, 0), mojom::DisplayTransform::kRotate270, 1.2,
-      gfx::Rect(1920, 0, 1800, 3200), gfx::Size(3840, 2160), 120000, true));
+      gfx::Rect(1920, 0, 1800, 3200), gfx::Size(3840, 2160), 120000, true,
+      true, 240.f));
   layout.push_back(mojom::DisplayLayout::New(
       9, false, gfx::Point(), mojom::DisplayTransform::kNormal, 1.0,
-      gfx::Rect(), std::nullopt, 0, false));
+      gfx::Rect(), std::nullopt, 0, false, false, 203.f));
   remote->ConfigureDisplays(std::move(layout));
   RunUntilIdle();
 
@@ -1223,6 +1480,8 @@ TEST_F(FrameSinkBrokerTest, AProducerSaysWhichConnectorsToLight) {
   EXPECT_EQ(layouts_[0][0]->mode, gfx::Size(3840, 2160));
   EXPECT_EQ(layouts_[0][0]->refresh_mhz, 120000);
   EXPECT_TRUE(layouts_[0][0]->adaptive_sync);
+  EXPECT_TRUE(layouts_[0][0]->hdr);
+  EXPECT_FLOAT_EQ(layouts_[0][0]->sdr_white_nits, 240.f);
   EXPECT_EQ(layouts_[0][1]->id, 9);
   EXPECT_FALSE(layouts_[0][1]->enabled);
   EXPECT_FALSE(layouts_[0][1]->mode.has_value());
@@ -1256,7 +1515,7 @@ TEST_F(FrameSinkBrokerTest, AnEmbedderWithNoCrtcDropsTheLayout) {
   std::vector<mojom::DisplayLayoutPtr> layout;
   layout.push_back(mojom::DisplayLayout::New(
       7, true, gfx::Point(), mojom::DisplayTransform::kNormal, 1.0,
-      gfx::Rect(), std::nullopt, 0, false));
+      gfx::Rect(), std::nullopt, 0, false, false, 203.f));
   remote->ConfigureDisplays(std::move(layout));
   RunUntilIdle();
 
@@ -1335,6 +1594,59 @@ TEST_F(FrameSinkBrokerTest, ARampRedrawsItsDisplayOnceItIsSet) {
 
   // After the ramp, so the frame it asks for carries it.
   EXPECT_EQ(redraws_, (std::vector<std::pair<int64_t, size_t>>{{7, 1u}}));
+}
+
+TEST_F(FrameSinkBrokerTest, AProducersColorMatrixReachesItsDisplay) {
+  // A night light on a display driven in HDR: less blue and green, in linear
+  // light.
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+
+  remote->SetColorMatrix(7, {1, 0, 0, 0, 0.8f, 0, 0, 0, 0.5f});
+  RunUntilIdle();
+
+  ASSERT_EQ(color_matrices_.size(), 1u);
+  EXPECT_EQ(color_matrices_[0].first, 7);
+  EXPECT_EQ(color_matrices_[0].second,
+            (FrameSinkBroker::ColorMatrix{1, 0, 0, 0, 0.8f, 0, 0, 0, 0.5f}));
+}
+
+TEST_F(FrameSinkBrokerTest, AColorMatrixOfTheWrongSizeIsABadMessage) {
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+
+  mojo::test::BadMessageObserver bad_message;
+  remote->SetColorMatrix(7, {1, 0, 0, 0, 1, 0, 0, 0});
+
+  EXPECT_THAT(bad_message.WaitForBadMessage(),
+              testing::HasSubstr("nine finite numbers"));
+  EXPECT_TRUE(color_matrices_.empty());
+}
+
+TEST_F(FrameSinkBrokerTest, AColorMatrixThatIsNotFiniteIsABadMessage) {
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+
+  mojo::test::BadMessageObserver bad_message;
+  remote->SetColorMatrix(
+      7, {1, 0, 0, 0, std::numeric_limits<float>::quiet_NaN(), 0, 0, 0, 1});
+
+  EXPECT_THAT(bad_message.WaitForBadMessage(),
+              testing::HasSubstr("nine finite numbers"));
+  EXPECT_TRUE(color_matrices_.empty());
+}
+
+TEST_F(FrameSinkBrokerTest, AColorMatrixThatBrightensIsABadMessage) {
+  // Its diagonal warms the pointer too, which takes gains of 0 to 1.
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+
+  mojo::test::BadMessageObserver bad_message;
+  remote->SetColorMatrix(7, {1, 0, 0, 0, 1.5f, 0, 0, 0, 1});
+
+  EXPECT_THAT(bad_message.WaitForBadMessage(),
+              testing::HasSubstr("diagonal is 0 to 1"));
+  EXPECT_TRUE(color_matrices_.empty());
 }
 
 TEST_F(FrameSinkBrokerTest, AProducersEmulatedInputReachesTheDesk) {
@@ -1524,7 +1836,9 @@ TEST_F(FrameSinkBrokerTest, AnUnchangedCompositingModeIsNotSentAgain) {
 
 TEST_F(FrameSinkBrokerTest, AnObserverHearsTheBrowserWindowsThenEachChange) {
   std::vector<mojom::ListedBrowserWindowPtr> windows;
-  windows.push_back(mojom::ListedBrowserWindow::New("1", "Mail", ""));
+  windows.push_back(mojom::ListedBrowserWindow::New(
+      "1", "Mail", "", "https://mail.example/", true,
+      std::vector<mojom::ListedBrowserViewPtr>()));
   broker()->OnBrowserWindowsChanged(std::move(windows));
 
   mojo::Remote<mojom::FrameSinkBroker> remote;
@@ -1537,7 +1851,29 @@ TEST_F(FrameSinkBrokerTest, AnObserverHearsTheBrowserWindowsThenEachChange) {
   RunUntilIdle();
 
   EXPECT_EQ(observer.lists_, (std::vector<std::vector<std::string>>{
-                                 {"1 Mail"}, {}}));
+                                 {"1 Mail https://mail.example/ private"},
+                                 {}}));
+}
+
+TEST_F(FrameSinkBrokerTest, AnObserverHearsTheInputDevicesThenEachChange) {
+  std::vector<mojom::ListedInputDevicePtr> devices;
+  devices.push_back(mojom::ListedInputDevice::New(
+      4, "Keyboard", mojom::InputDeviceKind::kKeyboard,
+      mojom::InputDeviceConnection::kUsb, "/sys/devices/input4", 0x046d,
+      0xc31c));
+  broker()->OnInputDevicesChanged(std::move(devices));
+
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  FakeInputDeviceListObserver observer;
+  remote->ObserveInputDevices(observer.BindRemote());
+  RunUntilIdle();
+
+  broker()->OnInputDevicesChanged({});
+  RunUntilIdle();
+
+  EXPECT_EQ(observer.lists_,
+            (std::vector<std::vector<std::string>>{{"4 Keyboard"}, {}}));
 }
 
 TEST_F(FrameSinkBrokerTest, ADisplayWithAWindowIsCaptured) {
@@ -1623,6 +1959,64 @@ TEST_F(FrameSinkBrokerTest, ABrowserWindowThatIsNotOpenIsRefused) {
   EXPECT_FALSE(capture.is_connected());
 }
 
+// The producer's frames reach viz on another pipe than the one the browser
+// made the image on. An import answers only once the GPU has made the image,
+// or viz can draw a frame naming an image that is not there yet and leave the
+// window blank.
+TEST_F(FrameSinkBrokerTest, AnImportAnswersOnceTheGpuHasMadeItsImage) {
+  UseTheGpu();
+  HoldSignals();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+  base::test::TestFuture<uint64_t, std::optional<gpu::ExportedSharedImage>>
+      imported;
+
+  remote->ImportBuffer(frame_sink_id, ADmabuf(kBufferSize), kBufferSize,
+                       kArgb8888, gfx::ColorSpace::CreateSRGB(),
+                       imported.GetCallback());
+  remote.FlushForTesting();
+
+  EXPECT_FALSE(imported.IsReady());
+  ASSERT_EQ(held_signals_.size(), 1u);
+  std::move(held_signals_[0].second).Run();
+  auto [buffer_id, exported] = imported.Take();
+  EXPECT_NE(buffer_id, 0u);
+  ASSERT_TRUE(exported.has_value());
+  EXPECT_EQ(held_signals_[0].first,
+            gpu::ClientSharedImage::ImportUnowned(std::move(exported).value())
+                ->creation_sync_token());
+}
+
+// A GPU channel lost before the image is made drops the wait. The image may
+// never exist, so the import is refused rather than left unanswered, which
+// would hang a producer waiting on it.
+TEST_F(FrameSinkBrokerTest, AnImportIsRefusedIfTheGpuGoesBeforeItsImage) {
+  UseTheGpu();
+  HoldSignals();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+  base::test::TestFuture<uint64_t, std::optional<gpu::ExportedSharedImage>>
+      imported;
+  remote->ImportBuffer(frame_sink_id, ADmabuf(kBufferSize), kBufferSize,
+                       kArgb8888, gfx::ColorSpace::CreateSRGB(),
+                       imported.GetCallback());
+  remote.FlushForTesting();
+
+  held_signals_.clear();
+
+  auto [buffer_id, exported] = imported.Take();
+  EXPECT_EQ(buffer_id, 0u);
+  EXPECT_FALSE(exported.has_value());
+}
+
 // The producer submits without waiting for its draw. The GPU waits for the
 // draw's fence before reading the buffer, and the token orders viz's read
 // after the fence is in place.
@@ -1647,6 +2041,31 @@ TEST_F(FrameSinkBrokerTest, AFencedBufferIsReadOnlyAfterItsFence) {
   EXPECT_EQ(sii_->fenced(), std::vector<gpu::Mailbox>{mailbox});
 }
 
+// Viz returns a buffer before its GPU is done reading it. The image goes only
+// after that read, or the read finds no image and viz draws its fallback over
+// the window until the client draws again.
+TEST_F(FrameSinkBrokerTest, ADestroyedBufferGoesAfterVizsLastReadOfIt) {
+  UseTheGpu();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+  const auto [buffer_id, mailbox] = ImportABuffer(remote, frame_sink_id);
+  gpu::SyncToken read_done(gpu::CommandBufferNamespace::GPU_IO,
+                           gpu::CommandBufferId::FromUnsafeValue(7),
+                           /*release_count=*/42);
+  read_done.SetVerifyFlush();
+
+  remote->DestroyBuffer(frame_sink_id, buffer_id, read_done);
+  remote.FlushForTesting();
+
+  EXPECT_FALSE(sii_->CheckSharedImageExists(mailbox));
+  EXPECT_EQ(sii_->MostRecentDestroyTokens(),
+            std::vector<gpu::SyncToken>{read_done});
+}
+
 TEST_F(FrameSinkBrokerTest, FencingABufferNeverImportedIsRefused) {
   UseTheGpu();
   mojo::Remote<mojom::FrameSinkBroker> remote;
@@ -1662,6 +2081,119 @@ TEST_F(FrameSinkBrokerTest, FencingABufferNeverImportedIsRefused) {
 
   EXPECT_FALSE(fenced.Get().has_value());
   EXPECT_TRUE(sii_->fenced().empty());
+}
+
+// Each fourcc a client may draw in, as the SharedImage viz samples. DRM names
+// channels from the most significant bit and viz in memory order. A format
+// with no alpha channel is opaque, whatever its padding bits hold.
+TEST_F(FrameSinkBrokerTest, EachFourccIsImportedInItsOwnFormat) {
+  struct Expected {
+    uint32_t fourcc;
+    viz::SharedImageFormat format;
+    SkAlphaType alpha;
+  };
+  const Expected kExpected[] = {
+      {0x34325241, viz::SinglePlaneFormat::kBGRA_8888, kPremul_SkAlphaType},
+      {0x34325258, viz::SinglePlaneFormat::kBGRX_8888, kOpaque_SkAlphaType},
+      {0x34324241, viz::SinglePlaneFormat::kRGBA_8888, kPremul_SkAlphaType},
+      {0x34324258, viz::SinglePlaneFormat::kRGBX_8888, kOpaque_SkAlphaType},
+      {0x30335241, viz::SinglePlaneFormat::kBGRA_1010102, kPremul_SkAlphaType},
+      {0x30334241, viz::SinglePlaneFormat::kRGBA_1010102, kPremul_SkAlphaType},
+      {0x48344241, viz::SinglePlaneFormat::kRGBA_F16, kPremul_SkAlphaType},
+  };
+  UseTheGpu();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+
+  for (const Expected& expected : kExpected) {
+    SCOPED_TRACE(testing::Message() << "fourcc 0x" << std::hex
+                                    << expected.fourcc);
+    const scoped_refptr<gpu::ClientSharedImage> image =
+        ImportAs(remote, frame_sink_id, expected.fourcc);
+    ASSERT_TRUE(image);
+    EXPECT_EQ(image->format(), expected.format);
+    EXPECT_EQ(image->alpha_type(), expected.alpha);
+  }
+}
+
+// A format the engine does not list would draw with permuted channels.
+TEST_F(FrameSinkBrokerTest, AnUnlistedFourccIsRefused) {
+  UseTheGpu();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+
+  // DRM_FORMAT_RGB565.
+  EXPECT_FALSE(ImportAs(remote, frame_sink_id, 0x36314752));
+}
+
+// Viz has no 10-bit or half-float format without alpha. Its twin with alpha
+// draws the padding bits as alpha, even marked opaque, so a window whose
+// padding is zero would draw transparent.
+TEST_F(FrameSinkBrokerTest, ADeepFourccWithoutAlphaIsRefused) {
+  UseTheGpu();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+
+  // DRM_FORMAT_XRGB2101010, XBGR2101010 and XBGR16161616F.
+  for (const uint32_t fourcc : {0x30335258u, 0x30334258u, 0x48344258u}) {
+    SCOPED_TRACE(testing::Message() << "fourcc 0x" << std::hex << fourcc);
+    EXPECT_FALSE(ImportAs(remote, frame_sink_id, fourcc));
+  }
+}
+
+// A client that described its pixels (wp_color_management_v1) is drawn in
+// that color space, which viz converts from to each display's.
+TEST_F(FrameSinkBrokerTest, ABufferIsImportedInTheColorSpaceAskedFor) {
+  UseTheGpu();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+  const gfx::ColorSpace pq(gfx::ColorSpace::PrimaryID::BT2020,
+                           gfx::ColorSpace::TransferID::PQ);
+
+  // DRM_FORMAT_ABGR2101010.
+  scoped_refptr<gpu::ClientSharedImage> shared_image =
+      ImportAs(remote, frame_sink_id, 0x30334241, pq);
+
+  ASSERT_TRUE(shared_image);
+  EXPECT_EQ(shared_image->color_space(), pq);
+}
+
+// The GPU does not make an image over shared memory, so its import has
+// nothing to wait for.
+TEST_F(FrameSinkBrokerTest, AnImportInSharedMemoryAnswersAtOnce) {
+  CompositeInSoftware();
+  HoldSignals();
+  mojo::Remote<mojom::FrameSinkBroker> remote;
+  broker()->Bind(remote.BindNewPipeAndPassReceiver());
+  viz::MockCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> sink;
+  const viz::FrameSinkId frame_sink_id =
+      BrokerASink(remote, sink_client, sink, mojo::NullRemote());
+  constexpr uint32_t kStride = 4 * 64;
+
+  auto [buffer_id, exported] = ImportShm(
+      remote, frame_sink_id,
+      base::UnsafeSharedMemoryRegion::Create(kStride * 48), kStride);
+
+  EXPECT_NE(buffer_id, 0u);
+  EXPECT_TRUE(exported.has_value());
+  EXPECT_TRUE(held_signals_.empty());
 }
 
 // A window drawn into shared memory, on a browser that composites in

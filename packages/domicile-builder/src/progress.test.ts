@@ -15,6 +15,9 @@ describe("line", () => {
     expect(line(Step.Evaluated("/c/k.json", false))).toBe(
       '{"cached":false,"config":"/c/k.json","step":"evaluated"}',
     );
+    expect(line(Step.Serving("/run/d.sock", "domicile-dev-shell.js"))).toBe(
+      '{"module":"domicile-dev-shell.js","socket":"/run/d.sock","step":"serving"}',
+    );
     expect(line(Step.Failed("no"))).toBe('{"step":"failed","why":"no"}');
   });
 });

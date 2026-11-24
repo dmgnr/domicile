@@ -47,12 +47,14 @@ interface ExternalSurfaceProvider {
   // `app_id` selects the window when a page shows several.
   //
   // `scale` is device pixels per CSS pixel, passed to the producer so it can
-  // configure the client in logical pixels.
+  // configure the client in logical pixels. `zoom` is the element's CSS
+  // `zoom`, which the client draws at on top of `scale`.
   Embed(string app_id,
         viz.mojom.FrameSinkId parent_frame_sink_id,
         viz.mojom.LocalSurfaceId local_surface_id,
         gfx.mojom.Size size,
-        double scale)
+        double scale,
+        double zoom)
       => (viz.mojom.FrameSinkId? frame_sink_id);
 
   // Replies once the browser no longer brokers `frame_sink_id`, saying why.

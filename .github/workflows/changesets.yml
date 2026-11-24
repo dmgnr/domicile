@@ -1,7 +1,8 @@
 name: Changesets
 
 # On pull requests, require a changeset for each changed workspace package
-# (.github/scripts/changeset-required.sh). On main, keep a "Version packages"
+# (.github/scripts/changeset-required.sh), and release notes or a commit saying
+# there are none (.github/scripts/release-notes-required.sh). On main, keep a "Version packages"
 # pull request open that applies the pending changesets: merging it bumps the
 # versions and writes the changelogs. See .changeset/README.md.
 on:
@@ -29,6 +30,24 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: .github/scripts/changeset-required.sh "origin/$BASE"
+        env:
+          BASE: ${{ github.base_ref }}
+
+  release-notes:
+    # The bots' pull requests: the "Version packages" one and the official
+    # engine's repin.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.head_ref != 'changeset-release/main'
+      && github.head_ref != 'engine-official-pin'
+    runs-on: ubuntu-latest
+    steps:
+      # The whole history, so the base branch is there to compare against.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: .github/scripts/release-notes-required.sh "origin/$BASE"
         env:
           BASE: ${{ github.base_ref }}
 

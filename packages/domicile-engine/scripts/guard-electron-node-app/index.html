@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- The page guard-electron-node.sh opens in an Electron app's windows. -->
+<meta charset="utf-8">
+<title>Electron Node guard</title>
+<script>
+  // Runs as the page parses, after the preload.
+  if (typeof require === "function") {
+    // nodeIntegration without context isolation: Node is the page's too.
+    // The page's require is Node's, as nodeIntegration gives it.
+    const nodeRequire = require;
+    nodeRequire("electron").ipcRenderer.send("page", {
+      dirname: typeof __dirname,
+      helper: nodeRequire("./helper.js").answer,
+      joined: nodeRequire("node:path").join("a", "b"),
+      process: typeof process,
+    });
+  } else if (typeof window.guard === "object") {
+    // Context isolation: Node stayed in the preload's world.
+    window.guard.send("page", {
+      process: typeof process,
+      require: typeof require,
+    });
+  } else if (typeof window.guardSend === "function") {
+    // Neither: Node's globals left once the preload ran.
+    window.guardSend("page", {
+      buffer: typeof Buffer,
+      process: typeof process,
+      require: typeof require,
+    });
+  } else {
+    document.title = "no node";
+  }
+</script>
+<p>An Electron app's window.</p>

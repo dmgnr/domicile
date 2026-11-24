@@ -34,6 +34,9 @@
 #                                     Escape typed on Caps Lock
 #   the button entered again         a second request works after the first
 #   exitPageFullscreen() left it     the shell's way out
+#   no fault was reported            WebViewGuest's check that a page left
+#                                     fullscreen raised no false alarm on a page
+#                                     that did
 #
 # NEGATIVE=1 is the control: the press lands on the plain half, which asks for
 # nothing. Nothing may be reported, or the positive run's report could come
@@ -248,6 +251,8 @@ else
     echo "the shell never heard the page enter fullscreen again" >&2
   wait_for_count "$TRIES" 2 "$LEFT_LINE" ||
     echo "the shell never heard the page leave fullscreen when it asked" >&2
+  # Past WebViewGuest's check that the page left, which must stay quiet.
+  sleep 4
 fi
 
 saw() { # $1 pattern
@@ -269,13 +274,14 @@ SAW_ESCAPED=$(saw "$LEFT_LINE")
 SAW_PAGE_LEFT=$(saw "$PAGE_LEFT_LINE")
 SAW_REENTERED=$(saw_twice "$ENTERED_LINE")
 SAW_EXITED=$(saw_twice "$LEFT_LINE")
+SAW_FAULT=$(saw "domicile: a bug")
 SAW_ANY=$( (grep -qF "GUARD webview-fullscreen" "$ENGINE_LOG" ||
   grep -qF "GUARD page-fullscreen" "$ENGINE_LOG") && echo 1 || echo 0)
 
 echo
 echo "shell=$SAW_SHELL page=$SAW_PAGE"
 echo "presses: chrome=$SAW_CHROME page=$SAW_PRESS"
-echo "fullscreen: refused=$SAW_REFUSED entered=$SAW_ENTERED page-entered=$SAW_PAGE_ENTERED escaped=$SAW_ESCAPED page-left=$SAW_PAGE_LEFT reentered=$SAW_REENTERED exited=$SAW_EXITED any=$SAW_ANY"
+echo "fullscreen: refused=$SAW_REFUSED entered=$SAW_ENTERED page-entered=$SAW_PAGE_ENTERED escaped=$SAW_ESCAPED page-left=$SAW_PAGE_LEFT reentered=$SAW_REENTERED exited=$SAW_EXITED any=$SAW_ANY fault=$SAW_FAULT"
 echo
 
 # The verdict: names the component to blame. Checks run in dependency order.
@@ -331,6 +337,10 @@ elif [ "$SAW_EXITED" != "1" ]; then
   FAILURE="the shell called exitPageFullscreen() and the page stayed \
 fullscreen, so a shell cannot take a page out with its window. The element \
 must send ExitPageFullscreen and the guest exit through content"
+elif [ "$SAW_FAULT" = "1" ]; then
+  FAILURE="the page left fullscreen each time and the engine reported it \
+stuck anyway, a false alarm the person would see as an urgent notification. \
+WebViewGuest::CheckLeftFullscreen must read the page's own fullscreen element"
 else
   PASSED="the page entered fullscreen from its button, the shell heard it, \
 and Escape and exitPageFullscreen() each took it out"

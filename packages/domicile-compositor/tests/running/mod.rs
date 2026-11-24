@@ -758,14 +758,14 @@ impl Client {
             .is_none()
     }
 
-    /// Wait until the client has traced at least `wanted` lines matching
-    /// `pattern`, and return whether it did.
+    /// Wait until the client has finished tracing at least `wanted` lines
+    /// matching `pattern`, and return whether it did.
     ///
     /// Bounded, so a missing line fails the test instead of hanging it.
     pub fn wait_for_trace(&mut self, pattern: &str, wanted: usize) -> bool {
         let until = Instant::now() + PATIENCE;
         loop {
-            if self.trace().matches(pattern).count() >= wanted {
+            if whole_lines(&self.trace()).matches(pattern).count() >= wanted {
                 return true;
             }
             if Instant::now() >= until {
@@ -823,6 +823,12 @@ impl Client {
             said.clone()
         }
     }
+}
+
+/// The lines of `trace` the client has finished writing. A line still being
+/// written may end before the part a check reads.
+fn whole_lines(trace: &str) -> &str {
+    trace.rfind('\n').map_or("", |end| &trace[..=end])
 }
 
 impl Drop for Client {

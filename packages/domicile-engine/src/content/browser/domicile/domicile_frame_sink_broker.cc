@@ -3,6 +3,7 @@
 
 #include "content/browser/domicile/domicile_frame_sink_broker.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -32,11 +33,13 @@
 #include "content/browser/domicile/domicile_spike_probe.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/gpu_data_manager_observer.h"
 #include "content/public/browser/gpu_utils.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "gpu/command_buffer/client/context_support.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "ui/aura/env.h"
@@ -46,7 +49,12 @@
 #include "ui/display/display_observer.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/display/screen.h"
+#include "ui/gfx/buffer_types.h"
+#include "ui/events/devices/device_data_manager.h"
+#include "ui/events/devices/input_device.h"
+#include "ui/events/devices/input_device_event_observer.h"
 #include "ui/ozone/public/ozone_platform.h"
+#include "third_party/skia/include/core/SkM44.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 #include "mojo/public/cpp/platform/platform_channel_server_endpoint.h"
@@ -80,6 +88,35 @@ gpu::SharedImageInterface* GetSharedImageInterface() {
     return nullptr;
   }
   return context_provider->SharedImageInterface();
+}
+
+// Runs `done` once the GPU channel GetSharedImageInterface's images are made
+// on passes `sync_token`. The same channel carries the images' creation, so
+// the wait is ordered after it. Drops `done` if the context is gone or lost
+// first.
+void SignalSyncToken(const gpu::SyncToken& sync_token,
+                     base::OnceClosure done) {
+  ui::ContextFactory* context_factory =
+      aura::Env::GetInstance()->context_factory();
+  CHECK(context_factory) << "domicile: a GPU import without a context factory";
+  scoped_refptr<viz::RasterContextProvider> context_provider =
+      context_factory->SharedMainThreadRasterContextProvider();
+  if (!context_provider) {
+    LOG(ERROR) << "domicile: the GPU context went before an imported buffer "
+                  "was made; the import is refused";
+    return;
+  }
+  context_provider->ContextSupport()->SignalSyncToken(sync_token,
+                                                      std::move(done));
+}
+
+// Whether the GPU can make the dmabufs viz captures a display into: BGRA, for
+// scanout, as media::RenderableMappableSharedImageVideoFramePool asks for
+// without CPU access. Nested on Wayland it cannot without a render node or
+// the session's dmabuf formats, and viz then fails the capture's first frame.
+bool CanCaptureIntoDmabufs() {
+  return ui::OzonePlatform::GetInstance()->IsNativePixmapConfigSupported(
+      viz::SinglePlaneFormat::kBGRA_8888, gfx::BufferUsage::SCANOUT);
 }
 
 // The interface that makes a window in shared memory a software image, while
@@ -167,6 +204,11 @@ class DomicileDisplayWatcher : public display::DisplayObserver {
       crossing.refresh_mhz = panel.refresh_mhz;
       crossing.physical_size_mm = panel.physical_size_mm;
       crossing.adaptive_sync = AdaptiveSyncOf(panel.adaptive_sync);
+      crossing.hdr = HdrOf(panel.hdr);
+      crossing.max_luminance = panel.max_luminance;
+      crossing.max_average_luminance = panel.max_average_luminance;
+      crossing.min_luminance = panel.min_luminance;
+      crossing.sdr_white_nits = panel.sdr_white_nits;
     }
     broker_->OnDisplaysChanged(domicile::DisplayListFor(
         display::Screen::Get()->GetAllDisplays(),
@@ -184,6 +226,18 @@ class DomicileDisplayWatcher : public display::DisplayObserver {
         return domicile::mojom::AdaptiveSync::kOff;
       case ui::DomicileAdaptiveSync::kOn:
         return domicile::mojom::AdaptiveSync::kOn;
+    }
+  }
+
+  // A switch rather than a cast, so a new state is a compile error here.
+  static domicile::mojom::Hdr HdrOf(ui::DomicileHdr hdr) {
+    switch (hdr) {
+      case ui::DomicileHdr::kUnsupported:
+        return domicile::mojom::Hdr::kUnsupported;
+      case ui::DomicileHdr::kOff:
+        return domicile::mojom::Hdr::kOff;
+      case ui::DomicileHdr::kOn:
+        return domicile::mojom::Hdr::kOn;
     }
   }
 
@@ -246,7 +300,9 @@ void SetDisplayLayout(std::vector<domicile::mojom::DisplayLayoutPtr> layout) {
                       .desk = display->desk,
                       .mode = display->mode,
                       .refresh_mhz = display->refresh_mhz,
-                      .adaptive_sync = display->adaptive_sync});
+                      .adaptive_sync = display->adaptive_sync,
+                      .hdr = display->hdr,
+                      .sdr_white_nits = display->sdr_white_nits});
   }
   ui::OzonePlatform::GetInstance()->SetDomicileDisplayLayout(wanted);
   // Update the desk after requesting the modeset, so a page moved onto a
@@ -379,12 +435,88 @@ void RedrawDisplay(int64_t display_id) {
   }
 }
 
+// Has viz draw display `display_id` through `matrix`, 3x3 and row-major, in
+// linear light (patch 0217), and redraws it so a still screen shows it. A
+// display no window shows has nothing to draw.
+//
+// The cursor plane skips that matrix, so the pointer on the display is warmed
+// by its gains too. The night light's matrix is diagonal.
+void SetColorMatrix(int64_t display_id,
+                    const domicile::FrameSinkBroker::ColorMatrix& m) {
+  const std::vector<display::Display> displays =
+      display::Screen::Get()->GetAllDisplays();
+  const auto display =
+      std::ranges::find(displays, display_id, &display::Display::id);
+  if (display != displays.end()) {
+    ui::OzonePlatform::GetInstance()->SetDomicileCursorTint(
+        display_id, display->bounds(), {m[0], m[4], m[8]});
+  }
+  const std::optional<viz::FrameSinkId> target =
+      DisplayCaptureTarget(display_id);
+  if (!target) {
+    return;
+  }
+  // SkM44's sixteen-number constructor takes rows.
+  const SkM44 matrix(m[0], m[1], m[2], 0,  //
+                     m[3], m[4], m[5], 0,  //
+                     m[6], m[7], m[8], 0,  //
+                     0, 0, 0, 1);
+  for (aura::WindowTreeHost* host :
+       aura::Env::GetInstance()->window_tree_hosts()) {
+    if (host->compositor()->frame_sink_id() == *target) {
+      host->compositor()->SetDisplayColorMatrix(matrix);
+      host->compositor()->ScheduleFullRedraw();
+    }
+  }
+}
+
 // The browser's frame sink broker and the socket producers reach it over.
 //
 // The socket path is the only access control. A FrameSinkBroker pipe can
 // allocate any frame sink in viz. Renderers cannot get the invitation, and the
 // ExternalSurfaceProvider they do get cannot allocate.
-class DomicileBrowserService : public content::GpuDataManagerObserver {
+// How `device` is attached, for the producer.
+domicile::mojom::InputDeviceConnection ConnectionOf(
+    const ui::InputDevice& device) {
+  switch (device.type) {
+    case ui::INPUT_DEVICE_INTERNAL:
+      return domicile::mojom::InputDeviceConnection::kInternal;
+    case ui::INPUT_DEVICE_USB:
+      return domicile::mojom::InputDeviceConnection::kUsb;
+    case ui::INPUT_DEVICE_BLUETOOTH:
+      return domicile::mojom::InputDeviceConnection::kBluetooth;
+    case ui::INPUT_DEVICE_UNKNOWN:
+      return domicile::mojom::InputDeviceConnection::kUnknown;
+  }
+}
+
+// Every input device the browser reads, kind by kind, each in the order the
+// browser found it.
+std::vector<domicile::mojom::ListedInputDevicePtr> ListedInputDevices() {
+  const ui::DeviceDataManager* manager = ui::DeviceDataManager::GetInstance();
+  std::vector<domicile::mojom::ListedInputDevicePtr> listed;
+  // Each list holds its own subclass of ui::InputDevice.
+  const auto add = [&listed](const auto& devices,
+                             domicile::mojom::InputDeviceKind kind) {
+    for (const ui::InputDevice& device : devices) {
+      listed.push_back(domicile::mojom::ListedInputDevice::New(
+          device.id, device.name, kind, ConnectionOf(device),
+          device.sys_path.value(), device.vendor_id, device.product_id));
+    }
+  };
+  using Kind = domicile::mojom::InputDeviceKind;
+  add(manager->GetKeyboardDevices(), Kind::kKeyboard);
+  add(manager->GetMouseDevices(), Kind::kMouse);
+  add(manager->GetTouchpadDevices(), Kind::kTouchpad);
+  add(manager->GetTouchscreenDevices(), Kind::kTouchscreen);
+  add(manager->GetPointingStickDevices(), Kind::kPointingStick);
+  add(manager->GetGraphicsTabletDevices(), Kind::kGraphicsTablet);
+  add(manager->GetUncategorizedDevices(), Kind::kOther);
+  return listed;
+}
+
+class DomicileBrowserService : public content::GpuDataManagerObserver,
+                               public ui::InputDeviceEventObserver {
  public:
   DomicileBrowserService()
       : broker_(GetHostFrameSinkManager(),
@@ -400,7 +532,10 @@ class DomicileBrowserService : public content::GpuDataManagerObserver {
                 base::BindRepeating(&SetGamma),
                 base::BindRepeating(&InjectInput),
                 base::BindRepeating(&SetInputConfig),
-                base::BindRepeating(&RedrawDisplay)),
+                base::BindRepeating(&RedrawDisplay),
+                base::BindRepeating(&SetColorMatrix),
+                base::BindRepeating(&CanCaptureIntoDmabufs),
+                base::BindRepeating(&SignalSyncToken)),
         provider_(&broker_) {
     // Registered on every platform so copies made in a page reach the producer.
     // `SetClipboard` handles copies made outside. Unretained is safe: this is a
@@ -419,6 +554,10 @@ class DomicileBrowserService : public content::GpuDataManagerObserver {
         &DomicileBrowserService::BrowserWindowsChanged,
         base::Unretained(this)));
     BrowserWindowsChanged();
+    // `domicile list-inputs` lists the devices. Never removed: this is a
+    // NoDestructor.
+    ui::DeviceDataManager::GetInstance()->AddObserver(this);
+    InputDevicesChanged();
     const base::CommandLine& command_line =
         *base::CommandLine::ForCurrentProcess();
     // Only on DRM or a headless desk. A nested run's screen is the host's
@@ -453,6 +592,12 @@ class DomicileBrowserService : public content::GpuDataManagerObserver {
         content::GpuDataManagerImpl::GetInstance()->IsGpuCompositingDisabled());
   }
 
+  // ui::InputDeviceEventObserver implementation.
+  void OnInputDeviceConfigurationChanged(uint8_t input_device_types) override {
+    InputDevicesChanged();
+  }
+  void OnDeviceListsComplete() override { InputDevicesChanged(); }
+
   void Bind(
       mojo::PendingReceiver<domicile::mojom::ExternalSurfaceProvider> receiver,
       uint32_t renderer_client_id) {
@@ -469,16 +614,16 @@ class DomicileBrowserService : public content::GpuDataManagerObserver {
     }
   }
 
-  // Forwards the browser windows a capture tool lists to the producer.
+  // Forwards the browser windows a capture tool lists to the producer, each
+  // with the views it holds and shows.
   void BrowserWindowsChanged() {
-    std::vector<domicile::mojom::ListedBrowserWindowPtr> windows;
-    for (domicile::ListedBrowserWindow& window :
-         domicile::ListedBrowserWindows()) {
-      windows.push_back(domicile::mojom::ListedBrowserWindow::New(
-          std::move(window.id), std::move(window.title),
-          std::move(window.app_id)));
-    }
-    broker_.OnBrowserWindowsChanged(std::move(windows));
+    broker_.OnBrowserWindowsChanged(
+        domicile::ForCaptureTools(domicile::ListedBrowserWindows()));
+  }
+
+  // Forwards the input devices the browser reads to the producer.
+  void InputDevicesChanged() {
+    broker_.OnInputDevicesChanged(ListedInputDevices());
   }
 
   // Binding the socket does blocking I/O, so it runs off the UI thread.

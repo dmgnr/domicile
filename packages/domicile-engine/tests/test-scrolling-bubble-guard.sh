@@ -108,37 +108,29 @@ says() { # $1 MEASURED, $2 what the sentence must contain
   esac
 }
 
-# MEASURED is "<mode> <synced> <frames> <together> <tops> <off>".
+# MEASURED is "<mode> <frames> <together> <tops> <off>".
 echo
-echo "the claim — the page syncs frames"
-expect "every frame at its stripe is the pass" "pass" "$(verdict "sync 1 240 200 25 0")"
-expect "one frame off is a failure" "fail" "$(verdict "sync 1 240 200 25 1")"
-expect "and says the bubble lagged" "yes" "$(says "sync 1 240 200 25 1" "LAGGED")"
-expect "a page never given a synced frame is a failure" "fail" \
-  "$(verdict "sync 0 240 200 25 0")"
-expect "and says nothing was synced" "yes" \
-  "$(says "sync 0 240 200 25 0" "never named a synced frame")"
+echo "the claim — the window's frame draws its subsurface"
+expect "every frame at its stripe is the pass" "pass" "$(verdict "sync 240 200 25 0")"
+expect "one frame off is a failure" "fail" "$(verdict "sync 240 200 25 1")"
+expect "and says the bubble lagged" "yes" "$(says "sync 240 200 25 1" "LAGGED")"
 
 echo
-echo "the control — the page syncs frames but places each move a step late"
-expect "a frame off is the control's pass" "pass" "$(verdict "control 1 240 200 25 3")"
-expect "no frame off is the control's failure" "fail" "$(verdict "control 1 240 200 25 0")"
+echo "the control — the client moves its bubble a frame late"
+expect "a frame off is the control's pass" "pass" "$(verdict "control 240 200 25 3")"
+expect "no frame off is the control's failure" "fail" "$(verdict "control 240 200 25 0")"
 expect "and says the guard cannot see a lag" "yes" \
-  "$(says "control 1 240 200 25 0" "cannot see a lag")"
-expect "a control never given a synced frame is a failure" "fail" \
-  "$(verdict "control 0 240 200 25 3")"
-expect "and says nothing was synced" "yes" \
-  "$(says "control 0 240 200 25 3" "never named a synced frame")"
+  "$(says "control 240 200 25 0" "cannot see a lag")"
 
 echo
 echo "a run that measured too little"
-expect "no frames is a failure" "fail" "$(verdict "sync 1 0 0 0 0")"
-expect "and says the cast sent none" "yes" "$(says "sync 1 0 0 0 0" "no frame")"
-expect "too few frames with both is a failure" "fail" "$(verdict "sync 1 240 10 10 0")"
-expect "a window that did not scroll is a failure" "fail" "$(verdict "control 1 240 200 1 3")"
-expect "and says so" "yes" "$(says "control 1 240 200 1 3" "did not scroll")"
+expect "no frames is a failure" "fail" "$(verdict "sync 0 0 0 0")"
+expect "and says the cast sent none" "yes" "$(says "sync 0 0 0 0" "no frame")"
+expect "too few frames with both is a failure" "fail" "$(verdict "sync 240 10 10 0")"
+expect "a window that did not scroll is a failure" "fail" "$(verdict "control 240 200 1 3")"
+expect "and says so" "yes" "$(says "control 240 200 1 3" "did not scroll")"
 expect "an empty measurement is a failure" "fail" "$(verdict "")"
-expect "and so is a mode nobody runs" "fail" "$(verdict "elephant 1 240 200 25 0")"
+expect "and so is a mode nobody runs" "fail" "$(verdict "elephant 240 200 25 0")"
 
 if [ "$FAILED" -eq 0 ]; then
   echo "the scrolling bubble guard reads frames and names the right end in every case"

@@ -8,9 +8,9 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use super::uri::percent_encoded;
 
-/// Opens a `mailto:` URL with the desk's mail client. `Err` names why none
-/// opened.
-pub type Open = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+/// Opens a `mailto:` URL, asked for by the application with this desktop
+/// file id, with the desk's mail client. `Err` names why none opened.
+pub type Open = Box<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
 
 /// The `Email` backend object.
 pub struct Email {
@@ -28,10 +28,10 @@ impl Email {
         _parent_window: String,
         options: HashMap<String, OwnedValue>,
     ) -> (u32, HashMap<String, OwnedValue>) {
-        let response = match (self.open)(&mailto(options)) {
+        let response = match (self.open)(&mailto(options), &app_id) {
             Ok(()) => 0,
             Err(why) => {
-                tracing::warn!(%why, %handle, %app_id, "an application's email was not opened");
+                tracing::error!(%why, %handle, %app_id, "an application's email was not opened");
                 2
             }
         };

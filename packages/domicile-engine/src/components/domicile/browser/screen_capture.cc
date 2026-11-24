@@ -6,6 +6,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/check.h"
 #include "media/mojo/mojom/display_media_information.mojom.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 
@@ -13,15 +14,28 @@ namespace domicile {
 
 bool IsScreenCapture(blink::mojom::MediaStreamType video) {
   return video == blink::mojom::MediaStreamType::DISPLAY_VIDEO_CAPTURE ||
-         video == blink::mojom::MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB;
+         video ==
+             blink::mojom::MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB ||
+         video == blink::mojom::MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE;
+}
+
+bool WantsScreenSound(blink::mojom::MediaStreamType audio) {
+  return audio == blink::mojom::MediaStreamType::DISPLAY_AUDIO_CAPTURE ||
+         audio == blink::mojom::MediaStreamType::GUM_DESKTOP_AUDIO_CAPTURE;
 }
 
 blink::mojom::StreamDevicesSetPtr AsRequested(
     blink::mojom::MediaStreamType video,
+    blink::mojom::MediaStreamType audio,
     blink::mojom::StreamDevicesSetPtr answer) {
   for (blink::mojom::StreamDevicesPtr& devices : answer->stream_devices) {
     if (devices->video_device.has_value()) {
       devices->video_device->type = video;
+    }
+    // A pick carries sound only when the request asked for it.
+    if (devices->audio_device.has_value()) {
+      CHECK(WantsScreenSound(audio));
+      devices->audio_device->type = audio;
     }
   }
   return answer;

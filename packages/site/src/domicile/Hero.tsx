@@ -26,7 +26,10 @@ export const Hero = () => (
         </span>
       </>
     }
-    tag={{ href: "#why", label: "A Linux desktop on Chromium" }}
+    tag={{
+      href: "/docs/release-notes",
+      label: "New: Electron apps on the engine, and browser profiles →",
+    }}
     title={
       <>
         You're already running two compositors.{" "}

@@ -36,6 +36,12 @@ inline constexpr char kDomicileAppHostPrefix[] = "app-";
 // Directory the shell's files are read from.
 inline constexpr char kDomicileShellRootSwitch[] = "domicile-shell-root";
 
+// Present when --domicile-shell-root names a dev server's unix socket rather
+// than a directory: `domicile dev` serves the shell with hot module
+// replacement. See components/domicile/browser/shell_dev_server.h.
+inline constexpr char kDomicileShellDevServerSwitch[] =
+    "domicile-shell-dev-server";
+
 // The compositor's control socket (its --chrome-socket): a unix stream of
 // newline-delimited JSON.
 inline constexpr char kDomicileControlSocketSwitch[] =
@@ -49,6 +55,13 @@ inline constexpr char kDomicileControlSocketSwitch[] =
 // these messages. Absent unless `domicile load-shell` started the engine.
 inline constexpr char kDomicileCommandSocketSwitch[] =
     "domicile-command-socket";
+
+// The engine's Electron socket: a unix stream the engine binds and each
+// `electron-host` dials, one connection per running Electron app, JSON lines
+// both ways. See `components/domicile/browser/electron_protocol.h`. Absent
+// unless the supervisor passes it.
+inline constexpr char kDomicileElectronSocketSwitch[] =
+    "domicile-electron-socket";
 
 // Path to the shell's JavaScript module. There is no manifest: the shell
 // provides everything through its exports once running.

@@ -4,6 +4,7 @@ import { render } from "@testing-library/react";
 
 import { css } from "../styled-system/css";
 import { GroupWell } from "./GroupWell";
+import { SlidingScreen } from "./sliding-screen";
 
 // Loads the real stylesheet so motion and settling styles resolve.
 loadEmittedStylesheet(
@@ -33,6 +34,20 @@ const well = (container: HTMLElement): HTMLElement => {
 };
 
 describe("GroupWell", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself to its workspace while a switch slides it", () => {
+    const { container } = render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <GroupWell {...wellProps} motion="leaving-to-start" />
+      </SlidingScreen>,
+    );
+
+    expect(well(container).style.clip).toBe(
+      "rect(-82px, 1260px, 918px, -20px)",
+    );
+  });
+
   it("covers its box at the depth of the windows in it", () => {
     const { container } = render(<GroupWell {...wellProps} depth={3} />);
 

@@ -5,8 +5,10 @@
 
 use std::io::{ErrorKind, Read as _};
 use std::os::fd::OwnedFd;
+use std::time::{Duration, Instant};
 
 use smithay::output::Output;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::wayland_protocols_wlr::gamma_control::v1::server::{
     zwlr_gamma_control_manager_v1::{self, ZwlrGammaControlManagerV1},
     zwlr_gamma_control_v1::{self, ZwlrGammaControlV1},
@@ -18,7 +20,11 @@ use smithay::reexports::wayland_server::{
 use tracing::{debug, warn};
 
 use crate::clipboard::without_blocking;
-use crate::DomicileCompositor;
+use crate::engine::HdrState;
+use crate::{CalloopData, DomicileCompositor};
+
+/// How often the night light is drawn while it fades.
+const FADE_FRAME: Duration = Duration::from_millis(16);
 
 /// Advertises the manager.
 pub fn advertise(display: &DisplayHandle) {
@@ -26,6 +32,29 @@ pub fn advertise(display: &DisplayHandle) {
 }
 
 impl DomicileCompositor {
+    /// Draws the night light as it is now, and again each [`FADE_FRAME`]
+    /// until its fade ends. Nothing is drawn between fades.
+    pub fn draw_the_night_light(&mut self) {
+        let now = Instant::now();
+        self.gamma.set_lights(self.night_light.at(now));
+        self.restate_the_gamma();
+        if self.night_light.fading(now) && !self.night_light_frame_due {
+            self.night_light_frame_due = true;
+            self.loop_handle
+                .insert_source(
+                    Timer::from_duration(FADE_FRAME),
+                    |_, _, data: &mut CalloopData| {
+                        data.state.night_light_frame_due = false;
+                        data.state.draw_the_night_light();
+                        TimeoutAction::Drop
+                    },
+                )
+                // Timers register nothing with the kernel, so inserting cannot
+                // fail.
+                .expect("the compositor's own loop takes a timer");
+        }
+    }
+
     /// Sends every engine display its ramp. Run when the displays, a night
     /// light or a client's hold change.
     pub fn restate_the_gamma(&self) {
@@ -34,7 +63,8 @@ impl DomicileCompositor {
         }
     }
 
-    /// Sends engine display `display` its ramp, if it has gamma.
+    /// Sends engine display `display` its ramp, if it has gamma, and its color
+    /// matrix, which carries the night light in HDR or with no gamma.
     fn restate_the_gamma_of(&self, display: i64) {
         let Some(session) = self.engine.as_ref() else {
             return;
@@ -46,6 +76,30 @@ impl DomicileCompositor {
             .map(|advertised| advertised.name.as_str());
         if let Some(ramp) = self.gamma.ramp(display, output) {
             session.set_gamma(display, &ramp);
+        }
+        session.set_color_matrix(display, &self.gamma.matrix(display, output));
+    }
+
+    /// Takes which engine displays are on a connector and which are driven in
+    /// HDR. A client holding one that went into HDR hears `failed`: its ramp
+    /// assumes SDR.
+    pub fn gamma_displays_reported(&mut self) {
+        let connected = self
+            .engine_displays
+            .iter()
+            .filter(|display| !display.connector.is_empty())
+            .map(|display| display.id)
+            .collect();
+        self.gamma.set_connected(connected);
+        let hdr = self
+            .engine_displays
+            .iter()
+            .filter(|display| display.hdr.state == HdrState::On)
+            .map(|display| display.id)
+            .collect();
+        for lost in self.gamma.set_hdr(hdr) {
+            debug!(control = ?lost.id(), "gamma control: its monitor went into HDR");
+            lost.failed();
         }
     }
 

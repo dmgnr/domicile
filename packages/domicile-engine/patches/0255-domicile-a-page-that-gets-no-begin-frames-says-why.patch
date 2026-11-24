@@ -1,0 +1,442 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 20 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page that gets no begin frames says why
+
+In the CI VM repro a window froze with its compositor getting no begin
+frames at all ("begin frames 0, last 10 s ago") while its main thread
+waited on a commit it had asked for. Nothing said whether the page
+stopped asking for begin frames or viz stopped sending them, so this
+logs both sides at once:
+
+- The compositor-thread line (0248) adds the scheduler: whether it has
+  and watches a begin frame source, whether it wants begin frames, and
+  the state machine flags that decide that (visible, source paused,
+  frame sink state, begin main frame state, pending tree, redraw,
+  prepare tiles, frames awaiting ack). It also says why it cannot draw
+  and the viewport size.
+- viz logs, once per starvation, a frame sink whose client has wanted
+  begin frames for 3 s and got none: whether it has a begin frame
+  source and whether that is paused, whether it observes it, how many
+  begin frames the source offered since the last one sent and the last
+  reason it held one back, how far its unanswered begin frames are
+  from the throttle and stop limits, and when it last sent one.
+
+Log only, and the viz check is a 3 s timer only while a client wants
+begin frames and gets none.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+---
+ cc/scheduler/scheduler.cc                     |  9 +++
+ cc/scheduler/scheduler.h                      |  4 +
+ cc/scheduler/scheduler_state_machine.cc       | 33 ++++++++
+ cc/scheduler/scheduler_state_machine.h        |  5 ++
+ cc/trees/layer_tree_host_impl.cc              | 24 +++++-
+ cc/trees/layer_tree_host_impl_delegate.h      |  6 ++
+ cc/trees/proxy_impl.cc                        |  4 +
+ cc/trees/proxy_impl.h                         |  2 +
+ .../compositor_frame_sink_support.cc          | 79 ++++++++++++++++++-
+ .../compositor_frame_sink_support.h           | 14 ++++
+ 10 files changed, 178 insertions(+), 2 deletions(-)
+
+diff --git a/cc/scheduler/scheduler.cc b/cc/scheduler/scheduler.cc
+index 69bcf0c..f625d83 100644
+--- a/cc/scheduler/scheduler.cc
++++ b/cc/scheduler/scheduler.cc
+@@ -14,6 +14,7 @@
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/strings/strcat.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/rand_util.h"
+@@ -143,6 +144,14 @@ void Scheduler::NotifyReadyToActivate() {
+   ProcessScheduledActions();
+ }
+ 
++std::string Scheduler::DomicileState() const {
++  return base::StrCat(
++      {"begin frame source ", begin_frame_source_ ? "set" : "none",
++       ", observing it ", observing_begin_frame_source_ ? "yes" : "no",
++       ", stopped ", stopped_ ? "yes" : "no", ", ",
++       state_machine_->DomicileStateToString()});
++}
++
+ bool Scheduler::IsReadyToActivate() {
+   return state_machine_->IsReadyToActivate();
+ }
+diff --git a/cc/scheduler/scheduler.h b/cc/scheduler/scheduler.h
+index 64dda38..eba7a52 100644
+--- a/cc/scheduler/scheduler.h
++++ b/cc/scheduler/scheduler.h
+@@ -236,6 +236,10 @@ class CC_EXPORT Scheduler : public viz::BeginFrameObserverBase {
+     return state_machine_->ImplLatencyTakesPriority();
+   }
+ 
++  // Domicile: whether this scheduler watches a begin frame source and what
++  // its state machine waits on, for a page that draws nothing at a new size.
++  std::string DomicileState() const;
++
+   // Pass in a main_thread_start_time of base::TimeTicks() if it is not
+   // known or not trustworthy (e.g. blink is running on a remote channel)
+   // to signal that the start time isn't known and should not be used for
+diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
+index 5b4a5d6..c579e9d 100644
+--- a/cc/scheduler/scheduler_state_machine.cc
++++ b/cc/scheduler/scheduler_state_machine.cc
+@@ -11,6 +11,8 @@
+ #include "base/metrics/histogram_macros.h"
+ #include "base/notreached.h"
+ #include "base/rand_util.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/strcat.h"
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/trace_event/traced_value.h"
+@@ -1150,6 +1152,37 @@ bool SchedulerStateMachine::BeginFrameNeededForVideo() const {
+   return video_needs_begin_frames_;
+ }
+ 
++std::string SchedulerStateMachine::DomicileStateToString() const {
++  auto yn = [](bool b) { return b ? "yes" : "no"; };
++  auto n = [](int i) { return base::NumberToString(i); };
++  return base::StrCat(
++      {"begin frames needed ", yn(BeginFrameNeeded()), ", visible ",
++       yn(visible_), ", source paused ", yn(begin_frame_source_paused_),
++       ", frame sink state ", n(static_cast<int>(layer_tree_frame_sink_state_)),
++       ", begin impl frame state ",
++       n(static_cast<int>(begin_impl_frame_state_)),
++       ", begin main frame state ",
++       n(static_cast<int>(begin_main_frame_state_)),
++       ", needs begin main frame ", yn(needs_begin_main_frame_),
++       ", defer begin main frame ", yn(defer_begin_main_frame_),
++       ", rendering paused ",
++       yn(view_transition_snapshot_state_.IsRenderingPaused()),
++       ", snapshot capturing ",
++       yn(view_transition_snapshot_state_.IsCapturing()), ", needs redraw ",
++       yn(needs_redraw_), ", needs prepare tiles ", yn(needs_prepare_tiles_),
++       ", needs one begin impl frame ", yn(needs_one_begin_impl_frame_),
++       ", can draw ", yn(can_draw_), ", has pending tree ",
++       yn(has_pending_tree_), ", pending tree ready ",
++       yn(pending_tree_is_ready_for_activation_),
++       ", active tree needs first draw ", yn(active_tree_needs_first_draw_),
++       ", active tree ready to draw ", yn(active_tree_is_ready_to_draw_),
++       ", waiting for activation after resume ",
++       yn(view_transition_snapshot_state_
++              .waiting_for_activation_after_rendering_resumed()),
++       ", frames awaiting ack ", n(pending_submit_frames_),
++       ", forced redraw state ", n(static_cast<int>(forced_redraw_state_))});
++}
++
+ bool SchedulerStateMachine::BeginFrameNeeded() const {
+   // If we shouldn't subscribe to BeginFrames it implies BeginFrames are not
+   // needed.
+diff --git a/cc/scheduler/scheduler_state_machine.h b/cc/scheduler/scheduler_state_machine.h
+index 12c0532..9f3efd1 100644
+--- a/cc/scheduler/scheduler_state_machine.h
++++ b/cc/scheduler/scheduler_state_machine.h
+@@ -8,6 +8,7 @@
+ #include <stdint.h>
+ 
+ #include <atomic>
++#include <string>
+ 
+ #include "base/time/time.h"
+ #include "base/tracing/protos/chrome_track_event.pbzero.h"
+@@ -172,6 +173,10 @@ class CC_EXPORT SchedulerStateMachine {
+   // to make progress.
+   bool BeginFrameNeeded() const;
+ 
++  // Domicile: the flags that decide whether a begin frame is wanted and what
++  // it does, for a page that draws nothing at a new size.
++  std::string DomicileStateToString() const;
++
+   // Indicates whether the compositor should continue to receive BeginFrame
+   // notifications. This is different from BeginFrameNeeded() for cases where we
+   // temporarily stop drawing. Unsubscribing and re-subscribing to BeginFrame
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index f6759ad..716dde3 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -2075,12 +2075,29 @@ void LayerTreeHostImpl::DomicileReportTargetWait() {
+   const viz::LocalSurfaceId& active =
+       active_tree()->local_surface_id_from_parent();
+   const base::TimeTicks now = base::TimeTicks::Now();
++  // Why CanDraw() says no, in its own order.
++  std::string cannot_draw;
++  if (!layer_tree_frame_sink_) {
++    cannot_draw = " (no frame sink)";
++  } else if (resourceless_software_draw_) {
++    cannot_draw = "";
++  } else if (active_tree_->LayerListIsEmpty()) {
++    cannot_draw = " (no root layer)";
++  } else if (evicted_local_surface_id_.is_valid()) {
++    cannot_draw = " (evicted)";
++  } else if (active_tree_->GetDeviceViewport().IsEmpty()) {
++    cannot_draw = " (empty viewport)";
++  } else if (EvictedUIResourcesExist()) {
++    cannot_draw = " (UI resources evicted)";
++  }
+   std::string last_begin_frame = "never";
+   if (!domicile_last_begin_frame_.is_null()) {
+     last_begin_frame =
+         base::NumberToString((now - domicile_last_begin_frame_).InSecondsF()) +
+         " s ago";
+   }
++  std::string scheduler_state;
++  delegate_->DomicileSchedulerState(&scheduler_state);
+   LOG(ERROR) << "domicile: compositor " << id_
+              << " thread has sent no frame at its new surface "
+              << target_local_surface_id_.ToString() << " in "
+@@ -2096,7 +2113,9 @@ void LayerTreeHostImpl::DomicileReportTargetWait() {
+              << (pending_tree()
+                      ? pending_tree()->local_surface_id_from_parent().ToString()
+                      : std::string("none"))
+-             << ", can draw " << (CanDraw() ? "yes" : "no")
++             << ", can draw " << (CanDraw() ? "yes" : "no" + cannot_draw)
++             << ", viewport "
++             << active_tree_->GetDeviceViewport().size().ToString()
+              << ", evicted "
+              << (evicted_local_surface_id_.is_valid() ? "yes" : "no")
+              << ", frame sink " << (layer_tree_frame_sink_ ? "bound" : "none")
+@@ -2105,6 +2124,9 @@ void LayerTreeHostImpl::DomicileReportTargetWait() {
+                            (pending_tree_fully_painted_ ? "yes" : "no") +
+                            ", " + tile_manager_.DomicileWhyNotReadyToActivate()
+                      : std::string())
++             << "; scheduler: "
++             << (scheduler_state.empty() ? std::string("not reported")
++                                         : scheduler_state)
+              << ".";
+ }
+ 
+diff --git a/cc/trees/layer_tree_host_impl_delegate.h b/cc/trees/layer_tree_host_impl_delegate.h
+index 2e0a0ae..3a35d89 100644
+--- a/cc/trees/layer_tree_host_impl_delegate.h
++++ b/cc/trees/layer_tree_host_impl_delegate.h
+@@ -7,6 +7,8 @@
+ 
+ #include <stdint.h>
+ 
++#include <string>
++
+ #include "base/containers/flat_set.h"
+ #include "base/functional/callback_forward.h"
+ #include "base/time/time.h"
+@@ -113,6 +115,10 @@ class LayerTreeHostImplDelegate {
+ 
+   virtual void ReturnResource(viz::ReturnedResource returned_resource) {}
+ 
++  // Domicile: what the scheduler waits on, for a page that draws nothing at a
++  // new size. Left empty where no scheduler drives this LayerTreeHostImpl.
++  virtual void DomicileSchedulerState(std::string* out) const {}
++
+ 
+ 
+   virtual size_t CommitDurationSampleCountForTesting() const = 0;
+diff --git a/cc/trees/proxy_impl.cc b/cc/trees/proxy_impl.cc
+index 52f96fe..5eea32a 100644
+--- a/cc/trees/proxy_impl.cc
++++ b/cc/trees/proxy_impl.cc
+@@ -1091,6 +1091,10 @@ void ProxyImpl::ClearHistory() {
+   scheduler_->ClearHistory();
+ }
+ 
++void ProxyImpl::DomicileSchedulerState(std::string* out) const {
++  *out = scheduler_ ? scheduler_->DomicileState() : std::string("none");
++}
++
+ size_t ProxyImpl::CommitDurationSampleCountForTesting() const {
+   return scheduler_->CommitDurationSampleCountForTesting();  // IN-TEST
+ }
+diff --git a/cc/trees/proxy_impl.h b/cc/trees/proxy_impl.h
+index e35e915..7c85fda 100644
+--- a/cc/trees/proxy_impl.h
++++ b/cc/trees/proxy_impl.h
+@@ -6,6 +6,7 @@
+ #define CC_TREES_PROXY_IMPL_H_
+ 
+ #include <memory>
++#include <string>
+ #include <utility>
+ #include <vector>
+ 
+@@ -136,6 +137,7 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplDelegate,
+ 
+   void ClearHistory() override;
+   size_t CommitDurationSampleCountForTesting() const override;
++  void DomicileSchedulerState(std::string* out) const override;
+   const DelayedUniqueNotifier& SmoothnessPriorityExpirationNotifierForTesting()
+       const {
+     return smoothness_priority_expiration_notifier_;
+diff --git a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+index 75c02ca..2fbeab8 100644
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -21,6 +21,7 @@
+ #include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/system/sys_info.h"
+ #include "base/task/common/task_annotator.h"
+ #include "base/task/sequenced_task_runner.h"
+@@ -78,9 +79,17 @@ namespace {
+ BASE_FEATURE(kCleanupOrphanedReservedResourceIds,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+-bool RecordShouldSendBeginFrame(const std::string& reason, bool should_send) {
++// Domicile: the reason RecordShouldSendBeginFrame() last gave. Every frame
++// sink decides on the one viz compositor thread, and OnBeginFrame() reads it
++// straight after its own decision.
++const char* g_domicile_last_send_decision = "none";
++
++constexpr base::TimeDelta kDomicileStarvedAfter = base::Seconds(3);
++
++bool RecordShouldSendBeginFrame(const char* reason, bool should_send) {
+   TRACE_EVENT2("viz", "SendBeginFrameDecision", "reason", reason, "should_send",
+                should_send);
++  g_domicile_last_send_decision = reason;
+   return should_send;
+ }
+ 
+@@ -637,10 +646,71 @@ void CompositorFrameSinkSupport::EvictLastActiveSurface() {
+ }
+ 
+ void CompositorFrameSinkSupport::SetNeedsBeginFrame(bool needs_begin_frame) {
++  if (needs_begin_frame && !client_needs_begin_frame_) {
++    domicile_wanted_since_ = base::TimeTicks::Now();
++    domicile_offered_since_sent_ = 0;
++    DomicileArmStarvedCheck(kDomicileStarvedAfter);
++  } else if (!needs_begin_frame) {
++    domicile_starved_timer_.Stop();
++    domicile_reported_starved_ = false;
++  }
+   client_needs_begin_frame_ = needs_begin_frame;
+   UpdateNeedsBeginFramesInternal();
+ }
+ 
++void CompositorFrameSinkSupport::DomicileArmStarvedCheck(
++    base::TimeDelta delay) {
++  domicile_starved_timer_.Start(
++      FROM_HERE, delay,
++      base::BindOnce(&CompositorFrameSinkSupport::DomicileCheckStarved,
++                     base::Unretained(this)));
++}
++
++void CompositorFrameSinkSupport::DomicileCheckStarved() {
++  if (!client_needs_begin_frame_) {
++    return;
++  }
++  const base::TimeTicks now = base::TimeTicks::Now();
++  const base::TimeTicks since =
++      std::max(domicile_wanted_since_, domicile_last_sent_);
++  if (now - since < kDomicileStarvedAfter) {
++    DomicileArmStarvedCheck(kDomicileStarvedAfter - (now - since));
++    return;
++  }
++  if (!domicile_reported_starved_) {
++    domicile_reported_starved_ = true;
++    std::string last_sent = "never";
++    if (!domicile_last_sent_.is_null()) {
++      last_sent = last_begin_frame_args_.ToString() + ", " +
++                  base::NumberToString((now - domicile_last_sent_).InSecondsF()) +
++                  " s ago";
++    }
++    LOG(ERROR) << "domicile: frame sink " << frame_sink_id_.ToString()
++               << " has wanted begin frames for "
++               << (now - domicile_wanted_since_).InSecondsF()
++               << " s and got none for " << (now - since).InSecondsF()
++               << " s: begin frame source "
++               << (begin_frame_source_ ? "set" : "none") << " (paused "
++               << (domicile_source_paused_ ? "yes" : "no") << "), observing it "
++               << (added_frame_observer_ ? "yes" : "no") << ", bundled "
++               << (bundle_id_.has_value() ? "yes" : "no")
++               << ", needs begin frame " << (needs_begin_frame_ ? "yes" : "no")
++               << ", offered " << domicile_offered_since_sent_
++               << " since the last sent (last decision: "
++               << domicile_last_decision_ << "), unanswered "
++               << (begin_frame_tracker_.ShouldStopBeginFrame()
++                       ? "at the stop limit"
++                       : (begin_frame_tracker_.ShouldThrottleBeginFrame()
++                              ? "at the throttle limit"
++                              : "below the limits"))
++               << ", pending frames " << pending_frames_
++               << ", active surface " << last_activated_surface_id_.ToString()
++               << ", client " << (client_ ? "bound" : "none")
++               << ", last sent " << last_sent << ".";
++  }
++  DomicileArmStarvedCheck(kDomicileStarvedAfter);
++}
++
+ void CompositorFrameSinkSupport::SetWantsAnimateOnlyBeginFrames() {
+   wants_animate_only_begin_frames_ = true;
+ }
+@@ -1218,6 +1288,9 @@ void CompositorFrameSinkSupport::OnBeginFrame(const BeginFrameArgs& args) {
+       ShouldSendBeginFrame(args.frame_id, adjusted_args.frame_time,
+                            args.interval) &&
+       (client_ || layer_context_);
++  ++domicile_offered_since_sent_;
++  domicile_last_decision_ =
++      (client_ || layer_context_) ? g_domicile_last_send_decision : "NoClient";
+   if (should_send_begin_frame) {
+     if (last_activated_surface_id_.is_valid()) {
+       surface_manager_->SurfaceDamageExpected(last_activated_surface_id_,
+@@ -1251,6 +1324,9 @@ void CompositorFrameSinkSupport::OnBeginFrame(const BeginFrameArgs& args) {
+       client_->OnBeginFrame(adjusted_args, frame_timing_details_,
+                             std::vector<ReturnedResource>());
+       frame_timing_details_.clear();
++      domicile_last_sent_ = base::TimeTicks::Now();
++      domicile_offered_since_sent_ = 0;
++      domicile_reported_starved_ = false;
+     }
+ 
+     begin_frame_tracker_.SentBeginFrame(adjusted_args);
+@@ -1274,6 +1350,7 @@ const BeginFrameArgs& CompositorFrameSinkSupport::LastUsedBeginFrameArgs()
+ }
+ 
+ void CompositorFrameSinkSupport::OnBeginFrameSourcePausedChanged(bool paused) {
++  domicile_source_paused_ = paused;
+   if (client_) {
+     client_->OnBeginFramePausedChanged(paused);
+   }
+diff --git a/components/viz/service/frame_sinks/compositor_frame_sink_support.h b/components/viz/service/frame_sinks/compositor_frame_sink_support.h
+index 1b25749..97a40f1 100644
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.h
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.h
+@@ -18,6 +18,7 @@
+ #include "base/memory/read_only_shared_memory_region.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/time/time.h"
++#include "base/timer/timer.h"
+ #include "components/viz/common/frame_sinks/begin_frame_source.h"
+ #include "components/viz/common/frame_timing_details_map.h"
+ #include "components/viz/common/quads/compositor_frame.h"
+@@ -335,6 +336,10 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
+   bool WantsAnimateOnlyBeginFrames() const override;
+ 
+   void UpdateNeedsBeginFramesInternal();
++  // Domicile: logs a client that has wanted begin frames for 3 s and got
++  // none, and keeps checking while it wants them.
++  void DomicileCheckStarved();
++  void DomicileArmStarvedCheck(base::TimeDelta delay);
+   void StartObservingBeginFrameSource();
+   void StopObservingBeginFrameSource();
+ 
+@@ -463,6 +468,15 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
+   BeginFrameTracker begin_frame_tracker_;
+   // Domicile: whether the current stop for an unresponsive client is logged.
+   bool domicile_reported_stop_ = false;
++  // Domicile: a client that wants begin frames and gets none draws nothing,
++  // and the page looks frozen. These say why viz sent none.
++  base::OneShotTimer domicile_starved_timer_;
++  base::TimeTicks domicile_wanted_since_;
++  base::TimeTicks domicile_last_sent_;
++  int domicile_offered_since_sent_ = 0;
++  const char* domicile_last_decision_ = "none";
++  bool domicile_source_paused_ = false;
++  bool domicile_reported_starved_ = false;
+ 
+   // Keeps track of the timestamps for a specific frame's submission and
+   // embedding. Observes the surface if the frame hasn't been embedded yet.

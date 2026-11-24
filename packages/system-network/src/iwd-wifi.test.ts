@@ -16,18 +16,23 @@ import {
 import {
   connectIwdWifi,
   disconnectIwdWifi,
+  forgetIwdWifi,
   scanIwdWifi,
+  setIwdWifiAutoJoin,
   setIwdWifiEnabled,
   watchIwdWifi,
 } from "./iwd-wifi";
-import type { Wifi, WifiNetwork } from "./wifi-state";
-import { WifiBackend } from "./wifi-state";
+import type { SavedWifi, Wifi, WifiNetwork } from "./wifi-state";
+import { WifiBackend, WifiSecurity } from "./wifi-state";
 
 const IWD = "net.connman.iwd";
 const DEVICE = "/net/connman/iwd/0/4";
 const HOME = `${DEVICE}/486f6d65_psk`;
 const CAFE = `${DEVICE}/43616665_open`;
 const KNOWN_HOME = "/net/connman/iwd/486f6d65_psk";
+const KNOWN_OFFICE = "/net/connman/iwd/4f6666696365_8021x";
+const KNOWN_LIBRARY = "/net/connman/iwd/4c696272617279_open";
+const HOME_JOINED = "2025-11-18T21:46:40Z";
 
 const v = (signature: string, value: unknown) => ({ signature, value });
 
@@ -79,7 +84,29 @@ const managed = (powered: boolean, diagnostics = true): DbusBody => ({
           }
         : {}),
       [KNOWN_HOME]: {
-        [`${IWD}.KnownNetwork`]: { Name: v("s", "Home"), Type: v("s", "psk") },
+        [`${IWD}.KnownNetwork`]: {
+          AutoConnect: v("b", true),
+          Hidden: v("b", false),
+          LastConnectedTime: v("s", HOME_JOINED),
+          Name: v("s", "Home"),
+          Type: v("s", "psk"),
+        },
+      },
+      [KNOWN_OFFICE]: {
+        [`${IWD}.KnownNetwork`]: {
+          AutoConnect: v("b", false),
+          Hidden: v("b", false),
+          Name: v("s", "Office"),
+          Type: v("s", "8021x"),
+        },
+      },
+      [KNOWN_LIBRARY]: {
+        [`${IWD}.KnownNetwork`]: {
+          AutoConnect: v("b", true),
+          Hidden: v("b", false),
+          Name: v("s", "Library"),
+          Type: v("s", "open"),
+        },
       },
     },
   ],
@@ -136,6 +163,32 @@ const cafe: WifiNetwork = {
   strength: 0.5,
 };
 
+const SAVED: SavedWifi[] = [
+  {
+    autoJoin: true,
+    lastUsed: new Date(HOME_JOINED),
+    profile: KNOWN_HOME,
+    security: WifiSecurity.Password,
+    ssid: "Home",
+  },
+  {
+    autoJoin: false,
+    lastUsed: undefined,
+    profile: KNOWN_OFFICE,
+    security: WifiSecurity.Enterprise,
+    ssid: "Office",
+  },
+  {
+    autoJoin: true,
+    lastUsed: undefined,
+    profile: KNOWN_LIBRARY,
+    security: WifiSecurity.Open,
+    ssid: "Library",
+  },
+];
+
+const [savedHome] = SAVED as [SavedWifi];
+
 const CONNECTED: Wifi = {
   backend: WifiBackend.Iwd,
   connection: {
@@ -150,6 +203,7 @@ const CONNECTED: Wifi = {
   hardwareAddress: "a4:c3:f0:85:ac:2d",
   interface: "wlan0",
   networks: [home, cafe],
+  saved: SAVED,
   scanning: false,
 };
 
@@ -265,6 +319,21 @@ describe("watchIwdWifi", () => {
     expect(await seen.next()).toStrictEqual(Ok(Some(CONNECTED)));
     expect(seen.pending).toBe(0);
   });
+
+  it("reads again when a saved network changes", async () => {
+    const bus = iwdBus(recorded(true));
+    const seen = reports<Option<Wifi>>();
+    watchIwdWifi(bus.domicile, seen.on);
+    await seen.next();
+
+    await bus.send(
+      propertiesChanged(KNOWN_OFFICE, `${IWD}.KnownNetwork`, {
+        AutoConnect: v("b", true),
+      }),
+    );
+
+    expect(await seen.next()).toStrictEqual(Ok(Some(CONNECTED)));
+  });
 });
 
 describe("iwd Wi-Fi requests", () => {
@@ -316,6 +385,34 @@ describe("iwd Wi-Fi requests", () => {
     );
     expect(bus.calls).toStrictEqual([
       request(DEVICE, `${IWD}.Station`, "Disconnect"),
+    ]);
+  });
+
+  it("forgets a saved network", async () => {
+    const bus = iwdBus(new Map([[`${KNOWN_HOME} Forget`, Ok(DONE)]]));
+
+    expect(
+      await forgetIwdWifi(bus.domicile, CONNECTED, savedHome),
+    ).toStrictEqual(Ok("done"));
+    expect(bus.calls).toStrictEqual([
+      request(KNOWN_HOME, `${IWD}.KnownNetwork`, "Forget"),
+    ]);
+  });
+
+  it("stops joining a saved network by itself", async () => {
+    const bus = iwdBus(
+      new Map([[`${KNOWN_HOME} Set ${IWD}.KnownNetwork`, Ok(DONE)]]),
+    );
+
+    expect(
+      await setIwdWifiAutoJoin(bus.domicile, CONNECTED, savedHome, false),
+    ).toStrictEqual(Ok("done"));
+    expect(bus.calls).toStrictEqual([
+      request(KNOWN_HOME, "org.freedesktop.DBus.Properties", "Set", [
+        `${IWD}.KnownNetwork`,
+        "AutoConnect",
+        v("b", false),
+      ]),
     ]);
   });
 

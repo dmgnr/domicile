@@ -49,6 +49,7 @@ mkdir -p "$BIN"
 cat > "$BIN/curl" <<'FAKE'
 #!/usr/bin/env bash
 url="${!#}"
+echo "$url" >>"$FAKE_STATE.calls"
 tag="${url##*/}"
 if [ "$tag" = "$(cat "$FAKE_STATE" 2>/dev/null)" ]; then
   printf '{"tag_name":"%s"}\n' "$tag"
@@ -110,6 +111,9 @@ expect "the release has to be built" true "$(key "$out" build)"
 expect "and written back" true "$(key "$out" write)"
 expect "under the tag this series names" "$TAG" "$(key "$out" tag)"
 expect "and the identity is stated in full" "$IDENTITY" "$(key "$out" identity)"
+expect "the builds repository is asked, not this one" \
+  "https://api.github.com/repos/cprussin/domicile-builds/releases/tags/$TAG" \
+  "$(tail -1 "$WORK/published.calls")"
 
 echo
 echo "== the fork moved and this series is already published =="

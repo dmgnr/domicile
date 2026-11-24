@@ -47,6 +47,10 @@ pub struct Arguments {
     /// Where the clients this desktop launched are kept, for the compositor
     /// that replaces this one after a crash. `None` keeps no record.
     pub launches: Option<PathBuf>,
+    /// The data directory, first on the clients' `XDG_DATA_DIRS`, where the
+    /// config's `electron.apps` get the desktop entries that run them on the
+    /// engine. `None` writes none. See `domicile_host::electron_entries`.
+    pub electron_entries: Option<PathBuf>,
 }
 
 /// A command line the compositor will not run.
@@ -83,6 +87,7 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
     let mut engine_takes_input = None;
     let mut pam_confdir = None;
     let mut launches = None;
+    let mut electron_entries = None;
 
     let mut args = args.into_iter();
     let mut seen = Vec::new();
@@ -107,6 +112,7 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
             ENGINE_TAKES_INPUT => &mut engine_takes_input,
             PAM_CONFDIR => &mut pam_confdir,
             LAUNCHES => &mut launches,
+            ELECTRON_ENTRIES => &mut electron_entries,
             _ => return Err(ArgumentError::Unknown { argument: flag }),
         };
         let value = match joined {
@@ -150,6 +156,7 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
         },
         pam_confdir: pam_confdir.map(PathBuf::from),
         launches: launches.map(PathBuf::from),
+        electron_entries: electron_entries.map(PathBuf::from),
     })
 }
 
@@ -163,6 +170,7 @@ const SOFTWARE_COMPOSITING: &str = "--software-compositing";
 const ENGINE_TAKES_INPUT: &str = "--engine-takes-input";
 const PAM_CONFDIR: &str = "--pam-confdir";
 const LAUNCHES: &str = "--launches";
+const ELECTRON_ENTRIES: &str = "--electron-entries";
 
 /// Parses the `yes` or `no` given to `--expect-a-page`.
 ///

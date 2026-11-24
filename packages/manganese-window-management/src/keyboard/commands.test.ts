@@ -11,12 +11,12 @@ import {
   idleInhibitor,
   keymap,
   launcher,
+  layer,
   micMute,
   nightLight,
   notifications,
   overview,
   removeVirtualMonitor,
-  scratchpad,
   screenshot,
   searchClipboard,
   stepWorkspace,
@@ -134,13 +134,13 @@ describe("manganese's default keys", () => {
     });
   });
 
-  it("pull the scratchpad down with four fingers and push it back up", () => {
+  it("step between the scratchpad, the desk and the overview with four fingers up and down", () => {
     expect(DEFAULT_KEYBINDINGS).toMatchObject({
-      "swipe:4:down": scratchpad("bring"),
-      "swipe:4:up": scratchpad("hide"),
+      "swipe:4:down": layer("down"),
+      "swipe:4:up": layer("up"),
     });
-    expect(scratchpad("bring")).toEqual({
-      args: ["scratchpad", "bring"],
+    expect(layer("up")).toEqual({
+      args: ["layer", "up"],
       kind: KeyActionKind.SendShell,
     });
   });
@@ -189,10 +189,10 @@ describe("manganese's default keys", () => {
 });
 
 describe("exec", () => {
-  it("is sway's `exec`, with the argv as its words", () => {
+  it("is Domicile's `exec`, which the SDK starts without the shell", () => {
     expect(exec("kitty", "--hold")).toEqual({
-      args: ["exec", "kitty", "--hold"],
-      kind: KeyActionKind.SendShell,
+      argv: ["kitty", "--hold"],
+      kind: KeyActionKind.Exec,
     });
   });
 });

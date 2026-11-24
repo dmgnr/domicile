@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: Energy Saver slows only unfocused webviews
+
+Energy Saver, which follows the OS power-saver profile, throttled every
+frame sink to 30 Hz: on the engine, the whole desk.
+
+- Its frame throttling delegate throttles only the <webview>s other than
+  the last focused one (domicile::UnfocusedWebViews). The shell, native
+  windows, Electron windows and the focused page keep their full rate.
+- Fails loudly if FrameThrottlingPolicy is on: it throttles through the
+  same list of frame sinks.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ chrome/browser/performance_manager/BUILD.gn          |  1 +
+ .../user_tuning/battery_saver_mode_manager.cc        | 12 ++++++++++--
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/performance_manager/BUILD.gn b/chrome/browser/performance_manager/BUILD.gn
+index 3cc792d..6091825 100644
+--- a/chrome/browser/performance_manager/BUILD.gn
++++ b/chrome/browser/performance_manager/BUILD.gn
+@@ -176,6 +176,7 @@ source_set("impl") {
+     "//chrome/browser/ui/browser_window",
+     "//chrome/common:buildflags",
+     "//chrome/common:chrome_features",
++    "//components/domicile:unfocused_web_views",
+     "//components/domicile:web_view_guest",
+     "//components/favicon/content",
+     "//components/guest_view/browser",
+diff --git a/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc b/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc
+index 2676cea..62b3dcf 100644
+--- a/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc
++++ b/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc
+@@ -22,6 +22,7 @@
+ #include "base/run_loop.h"
+ #include "base/scoped_multi_source_observation.h"
+ #include "base/values.h"
++#include "components/domicile/browser/unfocused_web_views.h"
+ #include "components/performance_manager/freezing/freezing_policy.h"
+ #include "components/performance_manager/performance_manager_impl.h"
+ #include "components/performance_manager/public/features.h"
+@@ -77,12 +78,19 @@ class FrameThrottlingDelegateImpl
+     : public performance_manager::user_tuning::BatterySaverModeManager::
+           FrameThrottlingDelegate {
+  public:
++  // DOMICILE: UNFOCUSED <WEBVIEW>S ONLY. Every frame sink is the whole desk:
++  // the shell, native windows and the page being used would all draw at 30
++  // fps. See components/domicile/browser/unfocused_web_views.h.
+   void StartThrottlingAllFrameSinks() override {
+-    content::StartThrottlingAllFrameSinks(base::Hertz(30));
++    // FrameThrottlingPolicy throttles through the same one list of frame
++    // sinks, and each call replaces the other's.
++    CHECK(!base::FeatureList::IsEnabled(
++        performance_manager::features::kThrottleUnimportantFrameRate));
++    domicile::UnfocusedWebViews::Get().Start(base::Hertz(30));
+   }
+ 
+   void StopThrottlingAllFrameSinks() override {
+-    content::StopThrottlingAllFrameSinks();
++    domicile::UnfocusedWebViews::Get().Stop();
+   }
+ 
+   ~FrameThrottlingDelegateImpl() override = default;

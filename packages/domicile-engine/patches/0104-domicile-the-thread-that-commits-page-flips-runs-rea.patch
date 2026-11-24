@@ -22,7 +22,7 @@ accepts pid 0).
  1 file changed, 15 insertions(+)
 
 diff --git a/ui/ozone/platform/drm/gpu/drm_thread.cc b/ui/ozone/platform/drm/gpu/drm_thread.cc
-index e1320af..23c0762 100644
+index bf2021e..f47fe26 100644
 --- a/ui/ozone/platform/drm/gpu/drm_thread.cc
 +++ b/ui/ozone/platform/drm/gpu/drm_thread.cc
 @@ -5,6 +5,7 @@
@@ -59,7 +59,7 @@ index e1320af..23c0762 100644
  void CreateBufferWithGbmFlags(const scoped_refptr<DrmDevice>& drm,
                                uint32_t fourcc_format,
                                const gfx::Size& size,
-@@ -103,6 +116,8 @@ void DrmThread::RunTaskAfterDeviceReady(base::OnceClosure task,
+@@ -107,6 +120,8 @@ void DrmThread::RunTaskAfterDeviceReady(base::OnceClosure task,
  
  void DrmThread::Init() {
    TRACE_EVENT0("drm", "DrmThread::Init");

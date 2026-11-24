@@ -2,11 +2,12 @@
 """The compositor's end of the control socket, for guard-extension-installer.sh
 and guard-extension-in-private.sh.
 
-It answers the browser's `hello` with a `welcome` and one `extensions`
-message naming the directories it was given as `unpacked` -- none, for the
-installer guard's control -- and the `settings` it was given, as JSON. That is what the real compositor sends at the
-handshake from a desk's `[extensions]`, spelled as `domicile-protocol` spells
-it (`wire/host-messages.jsonl`).
+It answers the browser's `hello` with a `welcome`, the `browser_profiles` it
+was given as JSON if any, and one `extensions` message naming the directories
+it was given as `unpacked` -- none, for the installer guard's control -- and
+the `settings` it was given, as JSON. That is what the real compositor sends
+at the handshake from a desk's `[browser]` and `[extensions]`, spelled as
+`domicile-protocol` spells it (`wire/host-messages.jsonl`).
 
 It says `sent the extensions` once the line is written, which is the guard's
 reading of whether the list crossed at all: a run with no mark and no such
@@ -27,9 +28,12 @@ def send(connection, message):
     print("sent: %s" % line.strip(), flush=True)
 
 
-def greet(connection, unpacked, settings):
-    """Send the welcome and the list."""
+def greet(connection, unpacked, settings, profiles):
+    """Send the welcome, the profiles and the list."""
     send(connection, {"type": "welcome", "protocol_version": 1})
+    if profiles is not None:
+        send(connection, dict({"type": "browser_profiles"}, **profiles))
+        print("sent the browser profiles", flush=True)
     send(
         connection,
         {
@@ -51,7 +55,7 @@ def is_hello(line):
     return json.loads(line).get("type") == "hello"
 
 
-def serve(path, unpacked, settings):
+def serve(path, unpacked, settings, profiles):
     """Accept on `path`, send the welcome and the list on `hello`, and read
     until EOF."""
     if os.path.exists(path):
@@ -77,7 +81,7 @@ def serve(path, unpacked, settings):
                     line, remainder = remainder.split(b"\n", 1)
                     print("said: %s" % line.decode("utf-8", "replace"), flush=True)
                     if is_hello(line):
-                        greet(connection, unpacked, settings)
+                        greet(connection, unpacked, settings, profiles)
         print("the channel went away", flush=True)
 
 
@@ -95,9 +99,25 @@ def main():
         default="{}",
         help="each extension's settings by id, as JSON; none by default",
     )
+    parser.add_argument(
+        "--browser-profiles",
+        default=None,
+        help="the desk's browser profiles, as the message's JSON without its "
+        "type; none sent by default",
+    )
     arguments = parser.parse_args()
+    profiles = (
+        None
+        if arguments.browser_profiles is None
+        else json.loads(arguments.browser_profiles)
+    )
     try:
-        serve(arguments.socket, arguments.unpacked, json.loads(arguments.settings))
+        serve(
+            arguments.socket,
+            arguments.unpacked,
+            json.loads(arguments.settings),
+            profiles,
+        )
     except KeyboardInterrupt:
         return 0
     return 0

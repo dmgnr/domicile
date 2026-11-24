@@ -42,11 +42,12 @@ export const deskInbox = perDesktop((domicile) => {
     email: string,
     client: GoogleClient,
     nickname: string,
+    profile?: string,
   ): DeskAccount => {
     const known = accounts.get(email);
     if (known === undefined) {
-      const account = watchedAccount(domicile, email, client, (news) =>
-        notify({ email, nickname }, news),
+      const account = watchedAccount(domicile, email, client, profile, (news) =>
+        notify({ email, nickname, profile }, news),
       );
       accounts.set(email, account);
       return account;
@@ -60,6 +61,7 @@ const watchedAccount = (
   domicile: Domicile,
   email: string,
   client: GoogleClient,
+  profile: string | undefined,
   onMail: (news: MailNews) => Promise<void>,
 ): DeskAccount => {
   const read = inboxReader(domicile, client, email, onMail);
@@ -84,7 +86,7 @@ const watchedAccount = (
         throw new Error(`no bar shows ${email} to sign in from`);
       } else {
         running.watch.answer(
-          signIn(domicile, client, email).then(() => read()),
+          signIn(domicile, client, email, profile).then(() => read()),
         );
       }
     },

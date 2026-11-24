@@ -10,15 +10,19 @@
 //! only then is the client told `locked` or `confined`. The page lets go the
 //! same way, so Escape and a focus change are the shell's to decide.
 //!
-//! Smithay says nothing when a client destroys its constraint, so the offer is
-//! checked again at each pointer motion, which keeps coming while a lock is
-//! held.
+//! The offer carries the constraint's region, the part of the window it holds,
+//! as rectangles of the surface; the page keeps a confined pointer inside it.
+//!
+//! Smithay says nothing when a client destroys its constraint or changes its
+//! region, so the offer is checked again at each pointer motion, which keeps
+//! coming while a lock is held.
 
-use domicile_protocol::{HostMessage, PointerConstraint};
+use domicile_protocol::{HostMessage, PointerConstraint, SurfaceRect};
 use smithay::delegate_pointer_constraints;
 use smithay::input::pointer::PointerHandle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Rectangle};
+use smithay::wayland::compositor::RegionAttributes;
 use smithay::wayland::pointer_constraints::{
     with_pointer_constraint, PointerConstraint as Constraint, PointerConstraintsHandler,
 };
@@ -32,16 +36,62 @@ pub(crate) struct Offered {
     app_id: String,
     surface: WlSurface,
     constraint: PointerConstraint,
+    region: Option<Vec<SurfaceRect>>,
+}
+
+/// `region` as rectangles that do not overlap: the cells of the grid its
+/// rectangles' edges draw, kept where the region holds them, each row's
+/// neighbors joined. A cell's top-left corner stands for the whole cell, since
+/// no edge crosses it.
+pub(crate) fn region_rects(region: &RegionAttributes) -> Vec<SurfaceRect> {
+    let edges = |of: fn(&Rectangle<i32, Logical>) -> [i32; 2]| {
+        let mut edges: Vec<i32> = region.rects.iter().flat_map(|(_, rect)| of(rect)).collect();
+        edges.sort_unstable();
+        edges.dedup();
+        edges
+    };
+    let xs = edges(|rect| [rect.loc.x, rect.loc.x + rect.size.w]);
+    let ys = edges(|rect| [rect.loc.y, rect.loc.y + rect.size.h]);
+    let mut rects = Vec::new();
+    for row in ys.windows(2) {
+        let mut run: Option<SurfaceRect> = None;
+        for column in xs.windows(2) {
+            if region.contains((column[0], row[0])) {
+                match run.as_mut() {
+                    Some(run) => run.width = column[1] - run.x,
+                    None => {
+                        run = Some(SurfaceRect {
+                            x: column[0],
+                            y: row[0],
+                            width: column[1] - column[0],
+                            height: row[1] - row[0],
+                        });
+                    }
+                }
+            } else if let Some(ended) = run.take() {
+                rects.push(ended);
+            }
+        }
+        rects.extend(run);
+    }
+    rects
 }
 
 impl DomicileCompositor {
-    /// The constraint the client asked for on `surface`, if any.
-    fn constraint_on(&self, surface: &WlSurface) -> Option<PointerConstraint> {
+    /// The constraint the client asked for on `surface`, if any, and its
+    /// region: `None` for the whole window.
+    fn constraint_on(
+        &self,
+        surface: &WlSurface,
+    ) -> Option<(PointerConstraint, Option<Vec<SurfaceRect>>)> {
         let pointer = self.seat.get_pointer()?;
         with_pointer_constraint(surface, &pointer, |constraint| {
-            constraint.map(|constraint| match &*constraint {
-                Constraint::Locked(_) => PointerConstraint::Lock,
-                Constraint::Confined(_) => PointerConstraint::Confine,
+            constraint.map(|constraint| {
+                let kind = match &*constraint {
+                    Constraint::Locked(_) => PointerConstraint::Lock,
+                    Constraint::Confined(_) => PointerConstraint::Confine,
+                };
+                (kind, constraint.region().map(region_rects))
             })
         })
     }
@@ -65,11 +115,13 @@ impl DomicileCompositor {
     pub(crate) fn offer_pointer_constraint(&mut self) {
         let wanted = match (self.pointer_app.clone(), self.pointer_surface.clone()) {
             (Some(app_id), Some(surface)) => {
-                self.constraint_on(&surface).map(|constraint| Offered {
-                    app_id,
-                    surface,
-                    constraint,
-                })
+                self.constraint_on(&surface)
+                    .map(|(constraint, region)| Offered {
+                        app_id,
+                        surface,
+                        constraint,
+                        region,
+                    })
             }
             _ => None,
         };
@@ -82,13 +134,15 @@ impl DomicileCompositor {
             self.hub.broadcast(HostMessage::AppPointerConstraint {
                 app_id: offered.app_id,
                 constraint: None,
+                region: None,
             });
         }
         if let Some(wanted) = wanted {
-            debug!(app_id = %wanted.app_id, constraint = ?wanted.constraint, "pointer constraint offered -> Host");
+            debug!(app_id = %wanted.app_id, constraint = ?wanted.constraint, region = ?wanted.region, "pointer constraint offered -> Host");
             self.hub.broadcast(HostMessage::AppPointerConstraint {
                 app_id: wanted.app_id.clone(),
                 constraint: Some(wanted.constraint),
+                region: wanted.region.clone(),
             });
             self.pointer_constraint_offered = Some(wanted);
         }
@@ -170,3 +224,68 @@ impl PointerConstraintsHandler for DomicileCompositor {
 }
 
 delegate_pointer_constraints!(DomicileCompositor);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smithay::wayland::compositor::RectangleKind;
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (width, height).into())
+    }
+
+    fn surface_rect(x: i32, y: i32, width: i32, height: i32) -> SurfaceRect {
+        SurfaceRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn one_rectangle_is_itself() {
+        let region = RegionAttributes {
+            rects: vec![(RectangleKind::Add, rect(10, 20, 300, 200))],
+        };
+        assert_eq!(region_rects(&region), vec![surface_rect(10, 20, 300, 200)]);
+    }
+
+    #[test]
+    fn a_hole_leaves_the_rectangles_around_it() {
+        let region = RegionAttributes {
+            rects: vec![
+                (RectangleKind::Add, rect(0, 0, 30, 30)),
+                (RectangleKind::Subtract, rect(10, 10, 10, 10)),
+            ],
+        };
+        assert_eq!(
+            region_rects(&region),
+            vec![
+                surface_rect(0, 0, 30, 10),
+                surface_rect(0, 10, 10, 10),
+                surface_rect(20, 10, 10, 10),
+                surface_rect(0, 20, 30, 10),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlapping_rectangles_do_not_overlap_once_cut() {
+        let region = RegionAttributes {
+            rects: vec![
+                (RectangleKind::Add, rect(0, 0, 20, 10)),
+                (RectangleKind::Add, rect(10, 0, 20, 20)),
+            ],
+        };
+        assert_eq!(
+            region_rects(&region),
+            vec![surface_rect(0, 0, 30, 10), surface_rect(10, 10, 20, 10)]
+        );
+    }
+
+    #[test]
+    fn an_empty_region_holds_nothing() {
+        assert_eq!(region_rects(&RegionAttributes::default()), vec![]);
+    }
+}

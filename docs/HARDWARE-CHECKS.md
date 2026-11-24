@@ -30,6 +30,8 @@ In Manganese with windows on two workspaces of one monitor:
 - a four-finger swipe left goes to the next workspace, and right to the
   previous one;
 - a four-finger swipe down pulls the scratchpad down, and up puts it away;
+- with the scratchpad away, a four-finger swipe up opens the overview, and
+  down closes it without pulling the scratchpad down;
 - spreading three fingers opens the launcher, from the overview too, and
   again closes it;
 - pinching four fingers in opens the overview, spreading four closes it, and
@@ -138,6 +140,21 @@ such as GNOME Boxes after clicking into the guest. Expect:
 With the compositor at `--log-level debug`, a lock logs `pointer constraint
 offered -> Host` then `pointer constrained`, and letting go logs `pointer let
 go`.
+
+## Pointer confinement and raw mouse motion in a game
+
+On a console, with a physical mouse. Run a game or VM viewer that confines
+the pointer rather than locking it, such as a strategy game under Wayland
+(SDL's `SDL_VIDEODRIVER=wayland` with mouse grab on) or `virt-viewer` with its
+pointer grab. Put its window across two monitors if it fits. Expect:
+
+- Pushing the mouse against each edge of the window stops the pointer there,
+  on both monitors, and it slides along the edge.
+- Switching windows with a keyboard chord frees the pointer; coming back
+  holds it again.
+- In a game that reads raw motion (aiming in a first-person game with
+  pointer lock), a fast and a slow flick over the same distance on the desk
+  turn the camera the same amount, as with acceleration off.
 
 ## Dead GPU process
 
@@ -340,10 +357,43 @@ its own menu, on DisplayPort or HDMI 2.1, and a driver that supports it
    should flicker once and come back, and `adaptiveSync` should read `"on"`.
    The monitor's own OSD (often a FreeSync or refresh counter) should show the
    rate moving with what is drawn, for example while a video plays at 24 fps.
+   With it on, the overview and workspace slides should be as smooth as with
+   it off.
 3. If it reads `"off"` instead, the log at `--v=1` should say the DRM thread
    refused a modeset with adaptive sync and tried again without it, and the
    panel should still be lit.
 4. Remove `adaptive_sync` and reload. It should read `"off"` again.
+
+## 10-bit scanout
+
+Needs a monitor whose EDID reports 10 bits a channel (`edid-decode` on
+`/sys/class/drm/card*-<connector>/edid` says "Bits per primary color channel:
+10"), on DisplayPort or HDMI straight from the GPU, not through a DisplayLink
+dock.
+
+1. At `--v=1`, the GPU process should not log `cannot set 'max bpc'` for that
+   connector, and `/sys/kernel/debug/dri/0/<connector>/output_bpc` (amdgpu)
+   should read 10.
+2. Open a smooth gray gradient page (for example a full-screen CSS
+   `linear-gradient(black, white)`). It should show no bands.
+3. A monitor that reports 8 bits should look as before.
+
+## HDR on an HDR10 monitor
+
+Needs a monitor that takes HDR10 (`edid-decode` on its EDID lists "HDR Static
+Metadata Data Block" with "SMPTE ST2084"), that passes the 10-bit scanout check
+above, with HDR allowed in the monitor's own menu.
+
+1. With no `hdr` in the profile, the monitor should look as before.
+2. Add `"hdr": true` to its profile entry and reload. The monitor should
+   flicker once and its OSD should say it is in HDR. Windows and the shell
+   should look about as bright and as colored as before, not washed out or
+   oversaturated.
+3. Play an HDR video in a browser tab (for example an HDR test clip on
+   YouTube): its highlights should be brighter than the page's white.
+4. Set `"sdr_white": 300` and reload: windows should get brighter, and the
+   HDR video's highlights should not.
+5. Remove `hdr` and reload. The monitor should leave HDR and look as in 1.
 
 ## A cursor an app draws itself
 
@@ -397,7 +447,7 @@ from a page, such as a wallet extension's "connect Ledger".
 
 - No `asked for a device; asking the shell` line: the request never reached
   patch 0110's override.
-- The chooser says `No compatible devices found`: the device is unplugged, or
+- The chooser says `No devices found`: the device is unplugged, or
   the page's filters exclude it.
 - `answered with 1 device(s)` and the page cannot open the device: the session
   cannot open its `/dev/hidraw*` node. Check `getfacl /dev/hidraw*`.
@@ -427,6 +477,13 @@ Unverified. On a tty, leave a monitor showing something that does not move
 (no clock, no blinking caret), then change the night light from the shell.
 Expect the monitor to warm at once, not when the pointer next moves over it or
 something on it next redraws.
+
+## Night light and the pointer on a DisplayLink dock
+
+Unverified. On a tty with the night light on, move the pointer from a laptop
+panel onto a monitor on a DisplayLink dock. Expect a white arrow warmed the
+same on both, not blue on the dock's; and the dock's pointer to warm and cool
+with the night light's fade.
 
 ## An input method in a native window
 

@@ -18,7 +18,7 @@ job builds it on `crux`.
  3 files changed, 19 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 3bb3985..e103a26 100644
+index 0182048..649bd0a 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -7,6 +7,7 @@
@@ -29,7 +29,7 @@ index 3bb3985..e103a26 100644
  #include "chrome/browser/domicile/domicile_extension_tray.h"
  #include "chrome/browser/domicile/domicile_pointer_warp.h"
  #include "chrome/browser/domicile/domicile_shell_fetch.h"
-@@ -669,6 +670,21 @@ void PopulateChromeFrameBinders(
+@@ -701,6 +702,21 @@ void PopulateChromeFrameBinders(
          domicile::BindBrowserWindows(frame, std::move(receiver));
        }));
  
@@ -52,10 +52,10 @@ index 3bb3985..e103a26 100644
    //
    // Gated at BIND time like the browser windows, and for their reason: a page
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index d8c0eb8..54c2ef6 100644
+index 082a579..d1cf965 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
-@@ -2345,6 +2345,8 @@ generated_interface_sources_in_modules = [
+@@ -2349,6 +2349,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_window.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_window.h",

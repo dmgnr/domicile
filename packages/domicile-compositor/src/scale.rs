@@ -44,6 +44,37 @@ pub fn logical_box(device: (u32, u32), ratio: f64) -> (u32, u32) {
     (logical(device.0), logical(device.1))
 }
 
+/// The scale a window draws at: its display's `scale` times its CSS `zoom`.
+///
+/// For `wp_fractional_scale_v1`. A zoomed window is configured `zoom` times
+/// smaller ([`logical_box`] at the zoomed ratio) and draws `zoom` times
+/// denser, so its buffer still fills the box pixel for pixel.
+///
+/// Not clamped: the shell draws the window's popups at the same CSS `zoom`,
+/// so any other factor here would put them in the wrong place. The engine
+/// refuses a zoom that is not a positive number.
+pub fn zoomed(scale: f64, zoom: f64) -> f64 {
+    scale * zoom
+}
+
+/// `screen`, in desktop units, in the logical units of a window at `window`
+/// zoomed by `zoom`, from the window's corner. What a popup's positioner or a
+/// candidate list is kept inside.
+pub fn screen_in_window(
+    window: domicile_scene::Point,
+    screen: domicile_scene::Bounds,
+    zoom: f64,
+) -> domicile_scene::Bounds {
+    let into = |point: domicile_scene::Point| domicile_scene::Point {
+        x: (point.x - window.x) / zoom,
+        y: (point.y - window.y) / zoom,
+    };
+    domicile_scene::Bounds {
+        min: into(screen.min),
+        max: into(screen.max),
+    }
+}
+
 /// The logical size of a surface whose buffer is `buffer` pixels at
 /// `buffer_scale`.
 ///
@@ -58,7 +89,7 @@ pub fn logical_size(buffer: (u32, u32), buffer_scale: i32) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{logical_box, logical_size, output_scale};
+    use super::{logical_box, logical_size, output_scale, screen_in_window, zoomed};
 
     #[test]
     fn an_ordinary_display_asks_for_no_scaling() {
@@ -157,5 +188,48 @@ mod tests {
         // A buffer smaller than its own scale violates the protocol, but a zero
         // here would divide by zero in the chrome's pointer mapping.
         assert_eq!(logical_size((1, 1), 4), (1, 1));
+    }
+
+    #[test]
+    fn an_unzoomed_window_draws_at_its_displays_scale() {
+        assert_eq!(zoomed(1.5, 1.0), 1.5);
+    }
+
+    #[test]
+    fn a_zoomed_window_draws_denser_by_its_zoom() {
+        // Text 1.5x larger on a scale-1 display: drawn at 1.5, not resampled.
+        assert_eq!(zoomed(1.0, 1.5), 1.5);
+        assert_eq!(zoomed(2.0, 0.5), 1.0);
+    }
+
+    #[test]
+    fn a_zoomed_box_is_configured_smaller_and_drawn_back_to_size() {
+        // A 1200x800 device-pixel box on a 2x page, zoomed 1.5.
+        let ratio = zoomed(2.0, 1.5);
+        let logical = logical_box((1200, 800), ratio);
+        assert_eq!(logical, (400, 267));
+        // Drawn at the zoomed scale, the buffer fills the box again.
+        assert_eq!((f64::from(logical.0) * ratio).round(), 1200.0);
+    }
+
+    #[test]
+    fn a_screen_is_measured_from_a_zoomed_windows_corner_in_its_units() {
+        let screen = domicile_scene::Bounds {
+            min: domicile_scene::Point { x: 0.0, y: 0.0 },
+            max: domicile_scene::Point {
+                x: 1920.0,
+                y: 1080.0,
+            },
+        };
+        let window = domicile_scene::Point { x: 100.0, y: 80.0 };
+        // At zoom 2 a window unit is two desktop pixels, so the screen is half
+        // as many of them, starting 50 units left of the window.
+        assert_eq!(
+            screen_in_window(window, screen, 2.0),
+            domicile_scene::Bounds {
+                min: domicile_scene::Point { x: -50.0, y: -40.0 },
+                max: domicile_scene::Point { x: 910.0, y: 500.0 },
+            }
+        );
     }
 }

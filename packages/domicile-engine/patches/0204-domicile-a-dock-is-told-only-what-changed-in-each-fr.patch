@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Claude <noreply@anthropic.com>
-Date: Tue, 10 Nov 2026 00:00:00 +0000
+From: roll <a@b>
+Date: Fri, 20 Nov 2026 07:10:05 +0000
 Subject: [PATCH] domicile: a dock is told only what changed in each frame
 
 DisplayLinkManager used lots of CPU on lyra's dock. evdi passes each page
@@ -18,6 +18,10 @@ first DRM device (crbug.com/572557701).
 - No clip for empty damage or a turned plane: the kernel then takes the
   whole plane as changed.
 - `FakeDrmDevice` names `FB_DAMAGE_CLIPS`.
+- Upstream since dropped FB_DAMAGE_CLIPS altogether. This brings back
+  what it removed: the plane property, `CreateDCBlob`,
+  `ScopedDrmModeRectPtr`, and `AssignPlaneProps`' `drm` and
+  `damage_rect`.
 
 Tested by `DrmDamageClipsTest`.
 
@@ -29,15 +33,21 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_011frZatTUhkRWKPdRizJWsH
 ---
  ui/ozone/platform/drm/BUILD.gn                |  1 +
+ .../platform/drm/common/scoped_drm_types.h    |  3 ++
+ ui/ozone/platform/drm/gpu/drm_gpu_util.cc     | 16 +++++++++
+ ui/ozone/platform/drm/gpu/drm_gpu_util.h      |  5 +++
  ui/ozone/platform/drm/gpu/fake_drm_device.cc  |  1 +
  ui/ozone/platform/drm/gpu/fake_drm_device.h   |  1 +
- .../drm/gpu/hardware_display_plane.cc         | 10 +++----
- .../drm/gpu/hardware_display_plane_atomic.cc  | 27 ++++++++++++-------
- .../drm/gpu/hardware_display_plane_atomic.h   |  4 +++
- 6 files changed, 29 insertions(+), 15 deletions(-)
+ .../drm/gpu/hardware_display_plane.cc         |  8 ++++-
+ .../platform/drm/gpu/hardware_display_plane.h |  2 ++
+ .../drm/gpu/hardware_display_plane_atomic.cc  | 34 +++++++++++++++++--
+ .../drm/gpu/hardware_display_plane_atomic.h   |  9 ++++-
+ .../hardware_display_plane_manager_atomic.cc  | 12 +++----
+ ...hardware_display_plane_manager_unittest.cc |  4 ++-
+ 12 files changed, 84 insertions(+), 12 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index aafbf66..6116e45 100644
+index 951a3f6..75c5fc2 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -266,6 +266,7 @@ source_set("gbm_unittests") {
@@ -48,8 +58,79 @@ index aafbf66..6116e45 100644
      "domicile/drm_desk_input_unittest.cc",
      "domicile/drm_fullscreen_unittest.cc",
      "domicile/drm_input_controller_unittest.cc",
+diff --git a/ui/ozone/platform/drm/common/scoped_drm_types.h b/ui/ozone/platform/drm/common/scoped_drm_types.h
+index b5cb839..628334d 100644
+--- a/ui/ozone/platform/drm/common/scoped_drm_types.h
++++ b/ui/ozone/platform/drm/common/scoped_drm_types.h
+@@ -24,6 +24,7 @@ typedef struct _drmVersion drmVersion;
+ typedef struct drm_color_lut drm_color_lut;
+ typedef struct drm_color_ctm drm_color_ctm;
+ typedef struct hdr_output_metadata drm_hdr_output_metadata;
++typedef struct drm_mode_rect drm_mode_rect;
+ 
+ namespace ui {
+ 
+@@ -88,6 +89,8 @@ typedef std::unique_ptr<drm_color_lut, base::FreeDeleter> ScopedDrmColorLutPtr;
+ typedef std::unique_ptr<drm_color_ctm, base::FreeDeleter> ScopedDrmColorCtmPtr;
+ typedef std::unique_ptr<drm_hdr_output_metadata, base::FreeDeleter>
+     ScopedDrmHdrOutputMetadataPtr;
++// DOMICILE: an FB_DAMAGE_CLIPS rect. See CreateDCBlob.
++typedef std::unique_ptr<drm_mode_rect, base::FreeDeleter> ScopedDrmModeRectPtr;
+ 
+ }  // namespace ui
+ 
+diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_util.cc b/ui/ozone/platform/drm/gpu/drm_gpu_util.cc
+index 3e4f7ad..e506850 100644
+--- a/ui/ozone/platform/drm/gpu/drm_gpu_util.cc
++++ b/ui/ozone/platform/drm/gpu/drm_gpu_util.cc
+@@ -272,6 +272,22 @@ bool ParseCTMBlob(const void* data, size_t size, skcms_Matrix3x3& result) {
+   return true;
+ }
+ 
++ScopedDrmModeRectPtr CreateDCBlob(const gfx::Rect& rect) {
++  // Damage rect can be empty, but sending empty or negative rects can result in
++  // artifacting and black screens. Filter them out here.
++  if (rect.width() <= 0 || rect.height() <= 0 || rect.x() < 0 || rect.y() < 0) {
++    return nullptr;
++  }
++
++  ScopedDrmModeRectPtr dmg_rect(
++      static_cast<drm_mode_rect*>(malloc(sizeof(drm_mode_rect))));
++  dmg_rect->x1 = rect.x();
++  dmg_rect->y1 = rect.y();
++  dmg_rect->x2 = rect.right();
++  dmg_rect->y2 = rect.bottom();
++  return dmg_rect;
++}
++
+ std::vector<std::unique_ptr<HardwareDisplayControllerInfo>>
+ GetDisplayInfosAndUpdateCrtcs(DrmWrapper& drm) {
+   auto [displays, invalid_crtcs] = GetDisplayInfosAndInvalidCrtcs(drm);
+diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_util.h b/ui/ozone/platform/drm/gpu/drm_gpu_util.h
+index 04d05f4..462055a 100644
+--- a/ui/ozone/platform/drm/gpu/drm_gpu_util.h
++++ b/ui/ozone/platform/drm/gpu/drm_gpu_util.h
+@@ -10,6 +10,7 @@
+ #include "base/containers/flat_map.h"
+ #include "base/containers/span.h"
+ #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
++#include "ui/gfx/geometry/rect.h"
+ #include "ui/ozone/platform/drm/common/drm_util.h"
+ #include "ui/ozone/platform/drm/common/drm_wrapper.h"
+ #include "ui/ozone/platform/drm/common/scoped_drm_types.h"
+@@ -81,6 +82,10 @@ ScopedDrmColorCtmPtr CreateCTMBlob(const skcms_Matrix3x3& color_matrix,
+ // Parse a CTM blob to retrieve a skcms_Matrix3x3.
+ bool ParseCTMBlob(const void* data, size_t size, skcms_Matrix3x3& result);
+ 
++// DOMICILE: creates an FB_DAMAGE_CLIPS blob, or null for an empty or negative
++// rect. Upstream dropped it; a dock (evdi) needs it.
++ScopedDrmModeRectPtr CreateDCBlob(const gfx::Rect& rect);
++
+ // Returns the display infos parsed in
+ // |GetDisplayInfosAndInvalidCrtcs| and disables the invalid CRTCs
+ // that weren't picked as preferred CRTCs.
 diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.cc b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
-index ec1ad52..eb42398 100644
+index efe58eb..3207cc8 100644
 --- a/ui/ozone/platform/drm/gpu/fake_drm_device.cc
 +++ b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
 @@ -94,6 +94,7 @@ constexpr auto kPlaneOptionalPropertyNames =
@@ -61,10 +142,10 @@ index ec1ad52..eb42398 100644
  
  template <class T>
 diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.h b/ui/ozone/platform/drm/gpu/fake_drm_device.h
-index 0d70b3d..1a81901 100644
+index 2781dd4..5ea0f5b 100644
 --- a/ui/ozone/platform/drm/gpu/fake_drm_device.h
 +++ b/ui/ozone/platform/drm/gpu/fake_drm_device.h
-@@ -105,6 +105,7 @@ inline constexpr uint32_t kRotationPropId = 5003;
+@@ -106,6 +106,7 @@ inline constexpr uint32_t kRotationPropId = 5003;
  inline constexpr uint32_t kColorEncodingPropId = 5004;
  inline constexpr uint32_t kColorRangePropId = 5005;
  inline constexpr uint32_t kSizeHintsPropId = 5006;
@@ -73,25 +154,23 @@ index 0d70b3d..1a81901 100644
  // Blob IDs:
  inline constexpr uint32_t kBaseBlobId = 6000;
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane.cc
-index df539da..baa1b20 100644
+index 198700f..baa1b20 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_plane.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_plane.cc
-@@ -17,7 +17,6 @@
- #include "base/strings/string_util.h"
- #include "base/trace_event/traced_value.h"
- #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
--#include "ui/display/display_features.h"
- #include "ui/ozone/platform/drm/common/drm_util.h"
- #include "ui/ozone/platform/drm/gpu/drm_device.h"
- #include "ui/ozone/platform/drm/gpu/drm_gpu_util.h"
-@@ -336,10 +335,11 @@ void HardwareDisplayPlane::InitializeProperties(DrmDevice* drm) {
+@@ -120,7 +120,8 @@ std::ostream& HardwareDisplayPlane::DumpProperties(std::ostream& out) const {
+   DRM_PROPERTY_DUMP_OPTIONAL(rotation, DRM_ROTATION)                   \
+   DRM_PROPERTY_DUMP_OPTIONAL(in_fence_fd, DRM_INT)                     \
+   DRM_PROPERTY_DUMP_OPTIONAL(plane_color_encoding, DRM_COLOR_ENCODING) \
+-  DRM_PROPERTY_DUMP_OPTIONAL(plane_color_range, DRM_COLOR_RANGE)
++  DRM_PROPERTY_DUMP_OPTIONAL(plane_color_range, DRM_COLOR_RANGE)       \
++  DRM_PROPERTY_DUMP_OPTIONAL(plane_fb_damage_clips, DRM_INT)
+ 
+ #define DRM_PROPERTY_DUMP_OPTIONAL(property, dump) \
+   if (properties_.property.id) {                   \
+@@ -334,6 +335,11 @@ void HardwareDisplayPlane::InitializeProperties(DrmDevice* drm) {
                          &properties_.plane_color_encoding);
    GetDrmPropertyForName(drm, props.get(), "COLOR_RANGE",
                          &properties_.plane_color_range);
--  if (display::features::IsPanelSelfRefresh2Enabled()) {
--    GetDrmPropertyForName(drm, props.get(), "FB_DAMAGE_CLIPS",
--                          &properties_.plane_fb_damage_clips);
--  }
 +  // DOMICILE: every frame says what changed, not only with ChromeOS's PSR2
 +  // flag. Without a clip, evdi tells DisplayLink the whole screen changed on
 +  // every flip.
@@ -100,31 +179,48 @@ index df539da..baa1b20 100644
    GetDrmPropertyForName(drm, props.get(), "SIZE_HINTS",
                          &properties_.size_hints);
  }
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane.h b/ui/ozone/platform/drm/gpu/hardware_display_plane.h
+index 048798e..a7c7f94 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_plane.h
++++ b/ui/ozone/platform/drm/gpu/hardware_display_plane.h
+@@ -83,6 +83,8 @@ class HardwareDisplayPlane {
+     DrmWrapper::Property in_fence_fd;
+     DrmWrapper::Property plane_color_encoding;
+     DrmWrapper::Property plane_color_range;
++    // DOMICILE: upstream dropped it; a dock (evdi) needs it.
++    DrmWrapper::Property plane_fb_damage_clips;
+     DrmWrapper::Property size_hints;
+   };
+ 
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc
-index cbafb6b..950ea1b 100644
+index 5f1a2c0..54634ba 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.cc
-@@ -8,7 +8,6 @@
- 
- #include "base/files/platform_file.h"
+@@ -10,6 +10,7 @@
  #include "base/logging.h"
--#include "base/no_destructor.h"
  #include "media/media_buildflags.h"
  #include "ui/gfx/geometry/rect.h"
- #include "ui/ozone/platform/drm/common/scoped_drm_types.h"
-@@ -143,15 +142,23 @@ bool HardwareDisplayPlaneAtomic::AssignPlaneProps(
-                << " not contained inside display bounds"
-                << " crtc: " << crtc_rect.ToString();
++#include "ui/ozone/platform/drm/common/scoped_drm_types.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device.h"
+ #include "ui/ozone/platform/drm/gpu/drm_gpu_util.h"
+ 
+@@ -95,10 +96,12 @@ bool HardwareDisplayPlaneAtomic::Initialize(DrmDevice* drm) {
+ }
+ 
+ bool HardwareDisplayPlaneAtomic::AssignPlaneProps(
++    DrmDevice* drm,
+     uint32_t crtc_id,
+     uint32_t framebuffer,
+     const gfx::Rect& crtc_rect,
+     const gfx::Rect& src_rect,
++    const gfx::Rect& damage_rect,
+     const gfx::OverlayTransform transform,
+     const gfx::ColorSpace& color_space,
+     int in_fence_fd,
+@@ -131,6 +134,25 @@ bool HardwareDisplayPlaneAtomic::AssignPlaneProps(
+         OverlayTransformToDrmRotationPropertyValue(transform);
    }
--  if (drm && assigned_props_.plane_fb_damage_clips.id) {
--    ScopedDrmModeRectPtr dmg_clip_blob_data = CreateDCBlob(damage_rect);
--    // dmg_clip_blob needs to live long enough to be committed.
--    // TODO(crbug.com/572557701): This is created once, from the first frame's
--    // damage rect and DRM device, and never updated.
--    static base::NoDestructor<ScopedDrmPropertyBlob> dmg_clip_blob(
--        drm->CreatePropertyBlob(dmg_clip_blob_data.get(),
--                                sizeof(drm_mode_rect)));
--    assigned_props_.plane_fb_damage_clips.value = (*dmg_clip_blob)->id();
+ 
 +  // DOMICILE: each frame names what changed, on its own plane's device.
 +  // Upstream sent the first frame's rect, made on the first device, for every
 +  // frame on every plane (crbug.com/572557701). No clip (0) means the whole
@@ -142,14 +238,57 @@ index cbafb6b..950ea1b 100644
 +      return false;
 +    }
 +    assigned_props_.plane_fb_damage_clips.value = damage_clips_blob_->id();
++  }
++
+   if (assigned_props_.plane_color_encoding.id) {
+     assigned_props_.plane_color_encoding.value =
+         color_space.GetMatrixID() == gfx::ColorSpace::MatrixID::BT709
+@@ -162,6 +184,12 @@ bool HardwareDisplayPlaneAtomic::SetPlaneProps(drmModeAtomicReq* property_set) {
+         AddPropertyIfValid(property_set, id_, assigned_props_.rotation);
    }
  
-   if (assigned_props_.plane_color_encoding.id) {
++  // DOMICILE: upstream dropped FB_DAMAGE_CLIPS; a dock (evdi) needs it.
++  if (assigned_props_.plane_fb_damage_clips.id) {
++    plane_set_succeeded &= AddPropertyIfValid(
++        property_set, id_, assigned_props_.plane_fb_damage_clips);
++  }
++
+   if (assigned_props_.in_fence_fd.id) {
+     plane_set_succeeded &=
+         AddPropertyIfValid(property_set, id_, assigned_props_.in_fence_fd);
+@@ -191,9 +219,9 @@ bool HardwareDisplayPlaneAtomic::SetPlaneProps(drmModeAtomicReq* property_set) {
+ void HardwareDisplayPlaneAtomic::AssignDisableProps() {
+   set_in_use(false);
+   set_owning_crtc(0);
+-  AssignPlaneProps(0, 0, gfx::Rect(), gfx::Rect(), gfx::OVERLAY_TRANSFORM_NONE,
+-                   gfx::ColorSpace(), base::kInvalidPlatformFile,
+-                   DRM_FORMAT_INVALID, false);
++  AssignPlaneProps(nullptr, 0, 0, gfx::Rect(), gfx::Rect(), gfx::Rect(),
++                   gfx::OVERLAY_TRANSFORM_NONE, gfx::ColorSpace(),
++                   base::kInvalidPlatformFile, DRM_FORMAT_INVALID, false);
+ }
+ 
+ uint32_t HardwareDisplayPlaneAtomic::AssignedCrtcId() const {
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h
-index cc4bca6..c8633b8 100644
+index 93abfbc..d8949bc 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_atomic.h
-@@ -54,6 +54,10 @@ class HardwareDisplayPlaneAtomic : public HardwareDisplayPlane {
+@@ -32,10 +32,13 @@ class HardwareDisplayPlaneAtomic : public HardwareDisplayPlane {
+   bool Initialize(DrmDevice* drm) override;
+ 
+   // Saves the props locally onto the plane to be committed later.
+-  virtual bool AssignPlaneProps(uint32_t crtc_id,
++  // DOMICILE: `drm` and `damage_rect` make each frame's FB_DAMAGE_CLIPS.
++  virtual bool AssignPlaneProps(DrmDevice* drm,
++                                uint32_t crtc_id,
+                                 uint32_t framebuffer,
+                                 const gfx::Rect& crtc_rect,
+                                 const gfx::Rect& src_rect,
++                                const gfx::Rect& damage_rect,
+                                 const gfx::OverlayTransform transform,
+                                 const gfx::ColorSpace& color_space,
+                                 int in_fence_fd,
+@@ -52,6 +55,10 @@ class HardwareDisplayPlaneAtomic : public HardwareDisplayPlane {
   private:
    // Intermediate variable between Assign()ment and Set()ting.
    HardwareDisplayPlane::Properties assigned_props_;
@@ -160,3 +299,51 @@ index cc4bca6..c8633b8 100644
  };
  
  }  // namespace ui
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
+index 0947fd2..ec19fc0 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
+@@ -488,9 +488,9 @@ bool HardwareDisplayPlaneManagerAtomic::DisableOverlayPlanes(
+       HardwareDisplayPlaneAtomic* atomic_plane =
+           static_cast<HardwareDisplayPlaneAtomic*>(plane);
+       atomic_plane->AssignPlaneProps(
+-          0, 0, gfx::Rect(), gfx::Rect(), gfx::OVERLAY_TRANSFORM_NONE,
+-          gfx::ColorSpace(), base::kInvalidPlatformFile, DRM_FORMAT_INVALID,
+-          false);
++          nullptr, 0, 0, gfx::Rect(), gfx::Rect(), gfx::Rect(),
++          gfx::OVERLAY_TRANSFORM_NONE, gfx::ColorSpace(),
++          base::kInvalidPlatformFile, DRM_FORMAT_INVALID, false);
+       atomic_plane->SetPlaneProps(atomic_property_set.get());
+     }
+     ret = drm_->CommitProperties(atomic_property_set.get(),
+@@ -542,9 +542,9 @@ bool HardwareDisplayPlaneManagerAtomic::SetPlaneData(
+   }
+ 
+   if (!atomic_plane->AssignPlaneProps(
+-          crtc_id, framebuffer_id, crtc_rect, src_rect, overlay.plane_transform,
+-          overlay.color_space, fence_fd,
+-          overlay.buffer->framebuffer_pixel_format(),
++          drm_, crtc_id, framebuffer_id, crtc_rect, src_rect,
++          overlay.damage_rect, overlay.plane_transform, overlay.color_space,
++          fence_fd, overlay.buffer->framebuffer_pixel_format(),
+           overlay.buffer->is_original_buffer())) {
+     return false;
+   }
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_unittest.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_unittest.cc
+index e9aa528..05bcfab 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_unittest.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_unittest.cc
+@@ -2142,10 +2142,12 @@ class HardwareDisplayPlaneAtomicMock : public HardwareDisplayPlaneAtomic {
+   HardwareDisplayPlaneAtomicMock() : HardwareDisplayPlaneAtomic(1) {}
+   ~HardwareDisplayPlaneAtomicMock() override = default;
+ 
+-  bool AssignPlaneProps(uint32_t crtc_id,
++  bool AssignPlaneProps(DrmDevice* drm,
++                        uint32_t crtc_id,
+                         uint32_t framebuffer,
+                         const gfx::Rect& crtc_rect,
+                         const gfx::Rect& src_rect,
++                        const gfx::Rect& damage_rect,
+                         const gfx::OverlayTransform transform,
+                         const gfx::ColorSpace& color_space,
+                         int in_fence_fd,

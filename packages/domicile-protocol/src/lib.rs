@@ -70,13 +70,25 @@ impl std::fmt::Debug for Passphrase {
     }
 }
 
+/// One browser profile, in [`HostMessage::BrowserProfiles`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserProfile {
+    /// Names its directory: lowercase letters, digits and `-`.
+    pub id: String,
+    pub name: String,
+    /// `#rrggbb`.
+    pub color: String,
+    /// Keeps nothing past its last page.
+    pub private: bool,
+    /// The extension ids it turns on; `None` turns on all of them, or none
+    /// for a private profile.
+    pub extensions: Option<Vec<String>>,
+}
+
 /// One extension's chrome://extensions settings, in
 /// [`HostMessage::Extensions`]. Each is left as the user set it when absent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionSettings {
-    /// Runs in private windows.
-    #[serde(rename = "private", default, skip_serializing_if = "Option::is_none")]
-    pub in_private: Option<bool>,
     /// Runs on `file://` pages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_access: Option<bool>,
@@ -189,6 +201,15 @@ pub enum PointerConstraint {
     Confine,
 }
 
+/// A rectangle of a window's surface, in its surface-local units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 /// Messages sent from the chrome (in-page client) to the host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -239,7 +260,8 @@ pub enum ChromeMessage {
         size: [f64; 2],
     },
 
-    /// Request keyboard focus for an app.
+    /// Request keyboard focus for an app. A popup's id focuses the window
+    /// under it, and an open menu keeps the keyboard.
     FocusApp { app_id: String },
 
     /// Return keyboard focus to the chrome.
@@ -251,11 +273,18 @@ pub enum ChromeMessage {
     /// no direct reply; [`HostMessage::AppClosed`] follows if it closes.
     CloseApp { app_id: String },
 
-    /// Spawn a client process (argv) for a keybinding or launcher.
+    /// Spawn a client process (argv) for a keybinding, the launcher or
+    /// `domicile open`.
     ///
     /// The child inherits the compositor's environment, so it connects to
     /// Domicile's Wayland display.
     Spawn { command: Vec<String> },
+
+    /// Start a program (argv) as [`ChromeMessage::Spawn`] does, `argv[0]`
+    /// looked up on the compositor's `PATH`. Answered with
+    /// [`HostMessage::Executed`] on this connection only. Sent by `domicile
+    /// exec` and `domicile open`.
+    Exec { command: Vec<String> },
 
     // Input the chrome captured over an <app> element, for the compositor to
     // inject into the client.
@@ -275,9 +304,18 @@ pub enum ChromeMessage {
     /// For `zwp_relative_pointer_v1`, which games and VM viewers read.
     ///
     /// The browser sends it only for a hand on the mouse: not for a move under
-    /// a still pointer, nor for a shell's pointer warp. Its deltas are the
-    /// accelerated ones, which the compositor also gives as unaccelerated.
-    PointerRelative { app_id: String, dx: f64, dy: f64 },
+    /// a still pointer, nor for a shell's pointer warp. `(dx, dy)` is after
+    /// pointer acceleration; `(dx_unaccel, dy_unaccel)` is the device's own
+    /// motion in the same units. A device that reports no unaccelerated
+    /// motion (a nested desktop's host, emulated input) gives the accelerated
+    /// deltas for both.
+    PointerRelative {
+        app_id: String,
+        dx: f64,
+        dy: f64,
+        dx_unaccel: f64,
+        dy_unaccel: f64,
+    },
     /// The page took or let go of the pointer for a window that asked to lock
     /// or confine it ([`HostMessage::AppPointerConstraint`]).
     ///
@@ -348,6 +386,13 @@ pub enum ChromeMessage {
     /// `domicile_host::clipboard`.
     CopyClipboardEntry { entry: u32 },
 
+    /// Drop a clipboard history entry and its contents.
+    ///
+    /// Removing the [`ClipboardEntry::current`] entry also empties the
+    /// clipboard, so it can no longer be pasted. An unknown id is logged and
+    /// ignored. The next [`HostMessage::Clipboard`] leaves the entry out.
+    RemoveClipboardEntry { entry: u32 },
+
     /// The user picked a theme from the shell's toggle or `domicile theme`.
     ///
     /// The compositor applies it to the clients too (see
@@ -363,6 +408,94 @@ pub enum ChromeMessage {
     /// Sent by `domicile theme`, whose connection never says `hello` and so
     /// hears no broadcast.
     WhichTheme,
+
+    /// Report each lit monitor under the names a display profile can call it
+    /// by. Answered with [`HostMessage::Monitors`] on this connection only.
+    ///
+    /// Sent by `domicile-app-host` for Settings, whose connection never says
+    /// `hello` and so hears no broadcast.
+    WhichMonitors,
+
+    /// Report every display with the names it answers to and whether it is
+    /// lit. Answered with [`HostMessage::DisplayList`] on this connection
+    /// only. Sent by `domicile list-displays`.
+    WhichDisplays,
+
+    /// Report every window, native and browser. Answered with
+    /// [`HostMessage::WindowList`] on this connection only. Sent by
+    /// `domicile list-windows`.
+    WhichWindows,
+
+    /// Report how the desktop is. Answered with [`HostMessage::Status`] on
+    /// this connection only. Sent by `domicile status`.
+    WhichStatus,
+
+    /// Report the commands the shell's pages run for `domicile send-shell`.
+    /// Answered with [`HostMessage::ShellCommandList`] on this connection
+    /// only. Sent by `domicile list-shell-commands`.
+    WhichShellCommands,
+
+    /// Report the keys and gestures the shell's pages bind. Answered with
+    /// [`HostMessage::ShellBindingList`] on this connection only. Sent by
+    /// `domicile list-bindings`.
+    WhichShellBindings,
+
+    /// Report the keyboards, pointers and touch devices the engine reads.
+    /// Answered with [`HostMessage::InputList`] on this connection only. Sent
+    /// by `domicile list-inputs`.
+    WhichInputs,
+
+    /// Report how long nobody has used the desktop. Answered with
+    /// [`HostMessage::IdleTime`] on this connection only. Sent by
+    /// `domicile idle-time`.
+    WhichIdleTime,
+
+    /// Hear about `topics` on this connection until it closes: each topic's
+    /// answer at once ([`HostMessage::WindowList`], [`HostMessage::DisplayList`],
+    /// [`HostMessage::InputList`], [`HostMessage::Status`]), then again
+    /// whenever it changes. Sent by `domicile subscribe`, whose connection
+    /// never says `hello`.
+    Watch { topics: Vec<WatchTopic> },
+
+    /// Focus, close or kill the native window `id`, its
+    /// `ext-foreign-toplevel-list-v1` identifier as `domicile list-windows`
+    /// prints it. Answered with [`HostMessage::WindowActed`] on this
+    /// connection only. Sent by `domicile focus-window`, `close-window` and
+    /// `kill-window`.
+    ActOnWindow { id: String, act: WindowAct },
+
+    /// Write a PNG of the whole desk, or of its `area`, to the absolute path
+    /// `file`, shrunk so its longer side is at most `fit` pixels. Answered
+    /// with [`HostMessage::DeskShot`] on this connection only. Sent by
+    /// `domicile screenshot --fit`.
+    ShootDesk {
+        file: String,
+        fit: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<DeskRect>,
+    },
+
+    /// Send `input` to the desk, in order, as one emulated device would; it
+    /// lets go of what it held once done. Answered with
+    /// [`HostMessage::Emulated`] on this connection only. Sent by `domicile
+    /// pointer`, `key` and `type`.
+    Emulate { input: Vec<EmulatedInput> },
+
+    /// Change how the monitor `display` is set up until the desktop restarts,
+    /// over what its config's profile says, like `swaymsg output`. `display`
+    /// is a name `domicile list-displays` prints or a profile matches.
+    /// Answered with [`HostMessage::DisplayConfigured`] on this connection
+    /// only. Sent by `domicile configure-display`.
+    ConfigureDisplay {
+        display: String,
+        change: DisplayChange,
+    },
+
+    /// Log at `levels` until the desktop restarts. They replace the levels
+    /// set before; [`LogLevels::default`] goes back to the starting levels.
+    /// Answered with [`HostMessage::LogLevelsSet`] on this connection only.
+    /// Sent by `domicile set-log-level`.
+    SetLogLevels { levels: LogLevels },
 
     /// This page has captured its old frame for `theme`; the windows may now
     /// switch.
@@ -407,6 +540,16 @@ pub enum ChromeMessage {
         /// from when known, e.g. `"MouseMoved from Logitech USB Receiver"`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<String>,
+    },
+
+    /// The engine caught itself in a bug: a page it took out of fullscreen
+    /// stayed in it, say.
+    ///
+    /// The compositor logs it as an error and tells the person, with a way to
+    /// report it, rather than leaving a broken window unexplained.
+    EngineFault {
+        /// What went wrong, in a sentence a person can read.
+        what: String,
     },
 
     /// Where the pointer is on the desk, in the shell page's CSS pixels,
@@ -685,9 +828,15 @@ pub enum HostMessage {
     ///
     /// Only the window under the pointer is offered one. The page answers
     /// with [`ChromeMessage::PointerConstrained`].
+    ///
+    /// `region` is the part of the window the constraint holds, as
+    /// non-overlapping rectangles of its surface; `None` for the whole
+    /// window, and always `None` with no constraint. A confined pointer stays
+    /// inside it; a lock begins only inside it.
     AppPointerConstraint {
         app_id: String,
         constraint: Option<PointerConstraint>,
+        region: Option<Vec<SurfaceRect>>,
     },
 
     /// A window or popup reached the screen: viz showed its first frame, or
@@ -754,6 +903,86 @@ pub enum HostMessage {
     /// daemon.
     Displays { displays: Vec<DisplayInfo> },
 
+    /// Each lit monitor, under the names a display profile can call it by.
+    /// Answers [`ChromeMessage::WhichMonitors`] on the asking connection
+    /// only, so Settings can offer HDR only where a monitor takes it.
+    Monitors { monitors: Vec<MonitorInfo> },
+
+    /// Answers [`ChromeMessage::WhichDisplays`] on the asking connection only.
+    DisplayList { displays: Vec<ListedDisplay> },
+
+    /// Answers [`ChromeMessage::WhichWindows`] on the asking connection only.
+    /// Native windows first, in the order they opened, then browser windows.
+    WindowList { windows: Vec<ListedWindow> },
+
+    /// Answers [`ChromeMessage::WhichStatus`] on the asking connection only.
+    Status(DesktopStatus),
+
+    /// Answers [`ChromeMessage::WhichShellCommands`] on the asking connection
+    /// only: what each listening page said it runs, once each, in the order
+    /// the pages started listening.
+    ShellCommandList { commands: Vec<ShellCommandHelp> },
+
+    /// Answers [`ChromeMessage::WhichShellBindings`] on the asking connection
+    /// only: each listening page's bindings, in the order the pages started
+    /// listening.
+    ShellBindingList { bindings: Vec<ShellBinding> },
+
+    /// Answers [`ChromeMessage::WhichInputs`] on the asking connection only,
+    /// in the order the engine found the devices.
+    InputList { inputs: Vec<ListedInput> },
+
+    /// Answers [`ChromeMessage::WhichIdleTime`] on the asking connection only:
+    /// whole seconds since the last input from a keyboard, pointer, touch or
+    /// tablet, or since the compositor started when there has been none. Idle
+    /// inhibitors don't reset it, as they don't reset Electron's
+    /// `powerMonitor.getSystemIdleTime`.
+    IdleTime { seconds: u64 },
+
+    /// Answers [`ChromeMessage::ActOnWindow`] on the asking connection only:
+    /// why it was not done, or nothing when it was.
+    WindowActed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
+
+    /// Answers [`ChromeMessage::ConfigureDisplay`] on the asking connection
+    /// only: why it was not done, or nothing when the desktop took it.
+    DisplayConfigured {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
+
+    /// Answers [`ChromeMessage::SetLogLevels`] on the asking connection only:
+    /// why they were not set, or nothing.
+    LogLevelsSet {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
+
+    /// Answers [`ChromeMessage::ShootDesk`] on the asking connection only:
+    /// what the PNG shows, or why there is none.
+    DeskShot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shot: Option<DeskShot>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
+
+    /// Answers [`ChromeMessage::Exec`] on the asking connection only: why
+    /// the program did not start, or nothing when it did.
+    Executed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
+
+    /// Answers [`ChromeMessage::Emulate`] on the asking connection only: why
+    /// it was not sent, or nothing when it was.
+    Emulated {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
+
     /// The compositor's compiled keymap, in `XKB_KEYMAP_FORMAT_TEXT_V1`.
     ///
     /// Read by the browser process and never forwarded to the page. Off
@@ -812,6 +1041,28 @@ pub enum HostMessage {
         web_store: Vec<String>,
         unpacked: Vec<String>,
         settings: BTreeMap<String, ExtensionSettings>,
+    },
+
+    /// The browser profiles and the profile each site opens in: the config's
+    /// `browser`. See `docs/architecture/BROWSER-PROFILES.md`.
+    ///
+    /// Always the full set. Sent with the handshake and on reloads that
+    /// change it. Not sent by a host without a config, whose browser keeps
+    /// one profile and its private one.
+    BrowserProfiles {
+        profiles: Vec<BrowserProfile>,
+        default_profile: String,
+        default_private_profile: String,
+        /// Profile ids by site: a host, `*.host`, or a host and path.
+        sites: BTreeMap<String, String>,
+    },
+
+    /// The config's `spellcheck`: whether the browser checks spelling in
+    /// pages' text fields, and in which languages. Sent with the handshake and
+    /// on reloads that change it.
+    Spellcheck {
+        enabled: bool,
+        languages: Vec<String>,
     },
 
     /// Host names of sites the browser draws dark while the theme is dark.
@@ -1099,6 +1350,10 @@ pub enum PortalKind {
     /// `org.freedesktop.impl.portal.Screenshot`'s `PickColor`: pick a pixel
     /// of a frozen desk.
     PickColor(FrozenDesk),
+    /// An agent, such as one connected through `domicile mcp`, asks to see
+    /// and use the desk: all of it, or only some windows. Domicile's own, not
+    /// a portal's. Allowed with [`PortalAnswer::Agent`].
+    Agent(AgentDialog),
 }
 
 impl PortalKind {
@@ -1151,6 +1406,12 @@ impl PortalKind {
             (PortalKind::PickColor(desk), PortalAnswer::PickColor { x, y }) => {
                 *x < desk.width && *y < desk.height
             }
+            // Only the whole desk is remembered: window ids last as long as
+            // their windows.
+            (PortalKind::Agent(_), PortalAnswer::Agent { reach, remember }) => match reach {
+                AgentReach::Desk => true,
+                AgentReach::Windows { windows } => !windows.is_empty() && !remember,
+            },
             // A stop, pause, resume or discard answers a running session and
             // a press or release a bound shortcut, never a request.
             (
@@ -1169,7 +1430,9 @@ impl PortalKind {
                 | PortalAnswer::ScreenshotWindow { .. }
                 | PortalAnswer::ScreenshotBrowserWindow { .. }
                 | PortalAnswer::PickColor { .. }
+                | PortalAnswer::Agent { .. }
                 | PortalAnswer::Stop
+                | PortalAnswer::Change
                 | PortalAnswer::Pause
                 | PortalAnswer::Resume
                 | PortalAnswer::Discard
@@ -1326,6 +1589,100 @@ pub enum CapturingKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         running_since_ms: Option<u64>,
     },
+    /// An agent the user let in, until it disconnects or the shell stops it.
+    Agent(AgentSession),
+}
+
+/// An agent's ask to see and use the desk, as [`PortalKind::Agent`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDialog {
+    /// What the agent calls itself, such as "Claude Code". Its own word, not
+    /// checked.
+    pub agent: String,
+    /// The windows the user may pick from: every one open but private
+    /// browser windows, which no agent reaches.
+    pub windows: Vec<AgentWindow>,
+    /// What it reaches now, when the user asked to change it with
+    /// [`PortalAnswer::Change`]. Canceling keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<AgentReach>,
+    /// Whether it is let in without asking now, so a change starts with
+    /// Remember on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remembered: bool,
+}
+
+/// The agents the desk knows: those let in now, and those let in for good.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownAgents {
+    /// Let in now, oldest first.
+    pub connected: Vec<ConnectedAgent>,
+    /// Let in without asking, by name, most recently used first.
+    pub remembered: Vec<RememberedAgent>,
+}
+
+/// An agent let in now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectedAgent {
+    /// Its [`CapturingKind::Agent`] session's id, which
+    /// [`SystemRequest::StopAgent`] takes.
+    pub session: u32,
+    pub agent: String,
+    pub reach: AgentReach,
+}
+
+/// An agent the user let reach the whole desk without asking again, until
+/// [`SystemRequest::ForgetAgent`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RememberedAgent {
+    pub agent: String,
+    /// When it was last let in, in milliseconds since the Unix epoch.
+    pub last_used_ms: u64,
+}
+
+/// A window an agent may be let reach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentWindow {
+    /// Its `list-windows` id: its `ext-foreign-toplevel-list-v1` identifier.
+    pub id: String,
+    pub kind: WindowKind,
+    /// Empty when it has none.
+    pub title: String,
+    /// A native window's desktop entry id, or a browser window's app id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+/// What an agent may reach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentReach {
+    /// Every window, the pointer and the keyboard.
+    Desk,
+    /// These windows alone, through their accessibility trees and their own
+    /// screenshots. Never the pointer or the keyboard.
+    Windows { windows: Vec<AgentWindow> },
+}
+
+/// A running [`CapturingKind::Agent`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSession {
+    pub agent: String,
+    pub reach: AgentReach,
+    /// What it did last, newest first, at most [`AGENT_ACTIONS`].
+    pub actions: Vec<AgentAction>,
+}
+
+/// How many of an agent's actions its session lists.
+pub const AGENT_ACTIONS: usize = 5;
+
+/// One thing an agent did, as it says it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentAction {
+    /// Such as `Clicked "Save" in Notes`.
+    pub said: String,
+    /// When, in milliseconds since the Unix epoch.
+    pub at_ms: u64,
 }
 
 /// An `AccessDialog`'s texts.
@@ -1544,6 +1901,48 @@ pub struct ShotWindow {
     pub title: String,
     /// Its Wayland app id, which names its desktop entry; empty if unset.
     pub app_id: String,
+}
+
+/// What a [`HostMessage::DeskShot`]'s PNG shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeskShot {
+    /// The desktop the PNG covers: every monitor.
+    pub place: DeskRect,
+    /// The PNG's size, in pixels.
+    pub width: u32,
+    pub height: u32,
+}
+
+/// One event of a [`ChromeMessage::Emulate`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EmulatedInput {
+    /// Move the pointer to `x`, `y`: logical pixels from the top-left corner
+    /// of the desk, which is a [`DeskShot`]'s `place`.
+    PointTo { x: f64, y: f64 },
+    Button {
+        button: PointerButton,
+        pressed: bool,
+    },
+    /// Smooth scrolling, in logical pixels; positive is down and right.
+    Scroll { dx: f64, dy: f64 },
+    /// Press or release the key that types the XKB keysym named `key`, such
+    /// as `Return` or `Control_L`.
+    Key { key: String, pressed: bool },
+    /// Type `text`, a key for each character; a line break presses Return.
+    Text { text: String },
+    /// Wait `ms` milliseconds before the next event, as a hand would between
+    /// the moves of a drag.
+    Wait { ms: u32 },
+}
+
+/// A pointer button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerButton {
+    Left,
+    Right,
+    Middle,
 }
 
 /// A rectangle of the desktop, in logical pixels.
@@ -1886,6 +2285,18 @@ pub enum PortalAnswer {
     },
     /// The pixel of a [`PortalKind::PickColor`] the user picked.
     PickColor { x: u32, y: u32 },
+    /// What the user lets a [`PortalKind::Agent`] reach. Windows must be
+    /// ones its dialog offered; the compositor drops any other. `remember`
+    /// lets the agent reach the whole desk later without asking; it takes
+    /// [`AgentReach::Desk`].
+    Agent {
+        reach: AgentReach,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        remember: bool,
+    },
+    /// Ask the user again what the [`CapturingKind::Agent`] with this id may
+    /// reach. Answers no request.
+    Change,
     /// Pause the [`CapturingKind::Recording`] with this id. Answers no
     /// request.
     Pause,
@@ -1924,9 +2335,11 @@ impl PortalAnswer {
             | PortalAnswer::ScreenshotWindow { .. }
             | PortalAnswer::ScreenshotBrowserWindow { .. }
             | PortalAnswer::PickColor { .. }
+            | PortalAnswer::Agent { .. }
             | PortalAnswer::Stop => 0,
             PortalAnswer::Canceled => 1,
             PortalAnswer::Refused
+            | PortalAnswer::Change
             | PortalAnswer::Pause
             | PortalAnswer::Resume
             | PortalAnswer::Discard
@@ -2107,13 +2520,55 @@ pub enum SystemRequest {
     PreviewWindow { window: PreviewedWindow },
     /// Report each command sent with [`SystemRequest::SendShell`]. Answered
     /// with [`SystemReply::Started`], then a [`SystemEvent::ShellCommand`] per
-    /// command. [`SystemRequest::Unwatch`] ends it.
-    ShellCommands,
+    /// command, which the page answers with
+    /// [`SystemRequest::AnswerShellCommand`]. [`SystemRequest::Unwatch`] ends
+    /// it.
+    ///
+    /// `commands` describes what the page runs, for
+    /// `domicile list-shell-commands`, and `bindings` the keys and gestures
+    /// that run them, for `domicile list-bindings`, while it listens.
+    ShellCommands {
+        #[serde(default)]
+        commands: Vec<ShellCommandHelp>,
+        #[serde(default)]
+        bindings: Vec<ShellBinding>,
+    },
     /// Send `command` to every page listening with
     /// [`SystemRequest::ShellCommands`], as a `send-shell` keybinding would
-    /// run it. Answered with [`SystemReply::Sent`]. `domicile send-shell`
-    /// sends this.
+    /// run it. Answered with [`SystemReply::Sent`] once a page ran it, or a
+    /// failure when every page refused it or none answered in time.
+    /// `domicile send-shell` sends this.
     SendShell { command: Vec<String> },
+    /// Open links of `schemes` for the desktop: report each one
+    /// [`SystemRequest::OpenLink`] hands over. `domicile open`, and so
+    /// `xdg-open` and applications' links, and the Email portal hand them
+    /// over. Answered with [`SystemReply::Started`], then a
+    /// [`SystemEvent::Link`] per link. [`SystemRequest::Unwatch`] ends it.
+    ///
+    /// `schemes` are without the colon, such as `mailto`, in any case. A
+    /// link goes to the page that claimed its scheme last.
+    ClaimLinks { schemes: Vec<String> },
+    /// Hand `url` to the page that claimed its scheme with
+    /// [`SystemRequest::ClaimLinks`]. `app_id` is the desktop file id of the
+    /// application that asked, when known. Answered with
+    /// [`SystemReply::Sent`] once the page has it, or
+    /// [`SystemErrorKind::NotFound`] when no page claims its scheme.
+    OpenLink {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_id: Option<String>,
+    },
+    /// Say whether this page ran the [`SystemEvent::ShellCommand`] numbered
+    /// `sent`: `refused` says why not. A command that ran may answer with
+    /// `output`, such as a query's JSON, which `domicile send-shell` prints.
+    /// Answered with [`SystemReply::Set`].
+    AnswerShellCommand {
+        sent: u64,
+        #[serde(default)]
+        refused: Option<String>,
+        #[serde(default)]
+        output: Option<String>,
+    },
     /// Report when nobody has been at the desktop for `seconds`, and when
     /// somebody is again. Answered with [`SystemReply::Started`], then a
     /// [`SystemEvent::Idle`] on each change: `true` that long after the last
@@ -2177,6 +2632,26 @@ pub enum SystemRequest {
         #[serde(default)]
         scale: Scale,
     },
+    /// Let the agent `agent` see and use the desk, as the user allows in a
+    /// [`PortalKind::Agent`] dialog. Answered with [`SystemReply::Agent`]
+    /// once allowed, or [`SystemErrorKind::Canceled`] when the user cancels
+    /// or does not answer within a minute. Listed as a
+    /// [`CapturingKind::Agent`] until [`SystemRequest::Unwatch`] or the
+    /// caller going away. When the shell stops it, ends with
+    /// [`SystemEnd::Stopped`]. `domicile agent` sends this.
+    Agent { agent: String },
+    /// Note that the agent this id let in did `said`, for the shell to list.
+    /// No reply.
+    AgentDid { said: String },
+    /// Report the agents let in now and those remembered. Answered with
+    /// [`SystemReply::Agents`].
+    Agents,
+    /// End the [`CapturingKind::Agent`] session `session`, as the shell's
+    /// [`PortalAnswer::Stop`] does. Answered with [`SystemReply::Set`].
+    StopAgent { session: u32 },
+    /// Make the remembered agent `agent` ask again next time. Answered with
+    /// [`SystemReply::Set`], whether or not it was remembered.
+    ForgetAgent { agent: String },
     /// Report the keymaps the desktop switches between and which it types
     /// on. Answered with [`SystemReply::Started`], then a
     /// [`SystemEvent::Keymaps`] at once and on each change.
@@ -2198,8 +2673,8 @@ pub enum SystemRequest {
     /// [`HostMessage::AppInhibitsShortcuts`] follows each change. See
     /// `docs/architecture/KEYBINDINGS.md`.
     ShortcutsInhibitor { action: InhibitorAction },
-    /// Draw `display`, a [`DisplayInfo::name`], or every monitor when
-    /// `None`, as if its white were a light of `kelvin`, as a night light
+    /// Draw `display`, any name a profile matches it by, or every monitor
+    /// when `None`, as if its white were a light of `kelvin`, as a night light
     /// does; `6500` draws colors as they are. Every monitor's replaces each
     /// one's. Answered with [`SystemReply::Set`],
     /// [`SystemErrorKind::InvalidInput`] outside 1000 to 6500, or
@@ -2213,8 +2688,8 @@ pub enum SystemRequest {
     },
     /// Turn every monitor off now, keeping the desktop as it is. Input more
     /// than a second later, or [`SystemRequest::WakeDisplays`], lights them
-    /// again. With `display`, a [`DisplayInfo::name`], turn only that one
-    /// off; it keeps its place and windows, and sleeps through input until
+    /// again. With `display`, any name a profile matches it by, turn only
+    /// that one off; it keeps its place and windows, and sleeps through input until
     /// woken. Answered with [`SystemReply::Set`], or
     /// [`SystemErrorKind::NotFound`] for a display the desktop does not have.
     /// See `docs/IDLE.md#sleeping-on-demand`.
@@ -2378,12 +2853,20 @@ pub enum SystemReply {
     Copied,
     /// A window's frame, as a `data:` URL of a PNG.
     Preview { frame: String },
-    /// At least one page heard the command.
-    Sent,
+    /// A page ran the command, and what it printed, if anything.
+    Sent {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
     /// The window's states were replaced, or the color temperature set.
     Set,
     /// The virtual monitor was added, as the `wl_output` named `output`.
     VirtualMonitor { output: String },
+    /// The user let the agent reach this. A
+    /// [`SystemEvent::AgentReach`] follows each time they change it.
+    Agent { reach: AgentReach },
+    /// The agents the desk knows.
+    Agents(KnownAgents),
     /// The call failed. Nothing else follows under this id.
     Failed { error: SystemError },
 }
@@ -2417,8 +2900,17 @@ pub enum SystemEvent {
     /// The watched file, or an entry of the watched directory, changed.
     /// `path` is absolute.
     Changed { path: String },
-    /// A command sent with [`SystemRequest::SendShell`].
-    ShellCommand { command: Vec<String> },
+    /// A command sent with [`SystemRequest::SendShell`], numbered `sent` for
+    /// [`SystemRequest::AnswerShellCommand`].
+    ShellCommand { command: Vec<String>, sent: u64 },
+    /// A link handed over with [`SystemRequest::OpenLink`], for the page to
+    /// open. `app_id` is the asking application's desktop file id, when
+    /// known.
+    Link {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_id: Option<String>,
+    },
     /// Whether nobody has been at the desktop for the time a
     /// [`SystemRequest::IdleAfter`] or [`SystemRequest::IdleBeforeBlanking`]
     /// named.
@@ -2442,6 +2934,8 @@ pub enum SystemEvent {
     /// A client rang the bell, from window `app_id`, or from none when it
     /// named no surface or one that is not a window.
     Bell { app_id: Option<String> },
+    /// The user changed what the agent this id let in may reach.
+    AgentReach { reach: AgentReach },
     /// The keymaps the desktop switches between, in the config's order, and
     /// the name of the one it types on.
     Keymaps {
@@ -2539,7 +3033,8 @@ pub enum SystemErrorKind {
 /// One clipboard history entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClipboardEntry {
-    /// The id [`ChromeMessage::CopyClipboardEntry`] uses.
+    /// The id [`ChromeMessage::CopyClipboardEntry`] and
+    /// [`ChromeMessage::RemoveClipboardEntry`] use.
     ///
     /// Never reused, so a stale id matches nothing. Not a position. 32 bits
     /// because the browser process carries it in a `base::Value`, whose
@@ -2563,6 +3058,11 @@ pub struct ClipboardEntry {
     /// Absent for text, and for an image the compositor could not read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail: Option<String>,
+
+    /// Whether this is what the clipboard holds. Only the newest entry can
+    /// be, and none is after the current entry is removed, until the next
+    /// copy or restore.
+    pub current: bool,
 }
 
 /// One display, in logical units (CSS pixels).
@@ -2596,6 +3096,17 @@ pub struct DisplayInfo {
     /// Whether the monitor scans out with a variable refresh rate.
     #[serde(default)]
     pub adaptive_sync: AdaptiveSync,
+    /// Whether the monitor is driven in HDR10. See `docs/COLOR.md`.
+    #[serde(default)]
+    pub hdr: DisplayHdr,
+    /// The panel's peak luminance from its EDID, in cd/m². Zero when it
+    /// reports none.
+    #[serde(default)]
+    pub peak_luminance: u32,
+    /// While [`DisplayHdr::On`], the luminance SDR content's white is shown
+    /// at, in cd/m². Zero otherwise.
+    #[serde(default)]
+    pub sdr_white: u32,
     /// How the monitor is rotated.
     #[serde(default)]
     pub transform: DisplayTransform,
@@ -2612,6 +3123,245 @@ pub enum AdaptiveSync {
     Unsupported,
     /// It can, and is not: its profile does not ask for it, or the driver
     /// refused it.
+    Off,
+    /// It is.
+    On,
+}
+
+/// A lit monitor as a display profile names it. See
+/// [`HostMessage::Monitors`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitorInfo {
+    /// Every name a profile's `display` matches it by: its output name first,
+    /// then its connector, and its EDID name with the maker as a three-letter
+    /// code and spelled out.
+    pub names: Vec<String>,
+    /// Whether it is driven in HDR10.
+    pub hdr: DisplayHdr,
+}
+
+/// A display as `domicile list-displays` prints it. See
+/// [`HostMessage::DisplayList`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedDisplay {
+    #[serde(flatten)]
+    pub display: DisplayInfo,
+    /// Every name `sleep-displays` and a profile's `display` take for it, its
+    /// output name first.
+    pub names: Vec<String>,
+    /// Off when slept or blanked.
+    pub lit: bool,
+}
+
+/// One command a shell runs, as `domicile list-shell-commands` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellCommandHelp {
+    /// Its words, such as `focus left|right|up|down` or `workspace <name>`.
+    pub usage: String,
+    /// What it does, in a sentence.
+    pub description: String,
+}
+
+/// One key or gesture a shell binds, as `domicile list-bindings` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellBinding {
+    /// The binding mode it is in; `default` until a binding changes mode.
+    pub mode: String,
+    /// The chord (`Meta+Shift+l`), touchpad gesture (`swipe:3:left`) or
+    /// touchscreen edge swipe (`edge:left`), in the shell's one spelling.
+    pub chord: String,
+    /// What it runs, as words: `send-shell focus left`, `mode resize`, or
+    /// `hold <press> / <release>`.
+    pub action: String,
+}
+
+/// How the desktop is, as `domicile status` prints it. See
+/// [`HostMessage::Status`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopStatus {
+    pub theme: Theme,
+    pub locked: bool,
+    /// The config's name for the keymap typed on; `None` before the
+    /// compositor lists the keymaps.
+    pub keymap: Option<String>,
+    /// Every monitor is off: blanked while idle, or slept together.
+    pub screens_off: bool,
+    /// What keeps the screens on, one name per idle inhibitor.
+    pub held_awake_by: Vec<String>,
+    /// What records or controls the desktop: screen casts, recordings, remote
+    /// desktop and input capture sessions.
+    pub capturing: Vec<Capturing>,
+}
+
+/// Who draws a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowKind {
+    /// A Wayland client.
+    Native,
+    /// The engine: a browser or app window.
+    Browser,
+}
+
+/// A window as `domicile list-windows` prints it. See
+/// [`HostMessage::WindowList`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListedWindow {
+    /// Its `ext-foreign-toplevel-list-v1` identifier.
+    pub id: String,
+    pub kind: WindowKind,
+    /// Empty when it has none.
+    pub title: String,
+    /// A native window's desktop entry id, or a browser window's app id.
+    pub app: Option<String>,
+    /// A native window's process.
+    pub pid: Option<i32>,
+    /// A native window's size, logical.
+    pub size: Option<[f64; 2]>,
+    /// It has the keyboard. Only a native window can: the shell's page holds
+    /// the keyboard for browser windows.
+    pub focused: bool,
+    /// It asked for the keyboard and was refused.
+    pub urgent: bool,
+    /// A browser window's address, or the one it is opening.
+    pub url: Option<String>,
+    /// A browser window in the off-the-record profile.
+    pub private: bool,
+    /// A browser window's id in the engine, which `domicile devtools` sends
+    /// to.
+    pub engine_id: Option<String>,
+    /// The views a browser window holds and shows, bottom first: an Electron
+    /// app's `WebContentsView`s, each a page of its own.
+    #[serde(default)]
+    pub views: Vec<ListedView>,
+}
+
+/// A view a [`ListedWindow`] holds: a page the app placed in the window's
+/// page, which `domicile devtools --view` drives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedView {
+    /// Its id in the engine.
+    pub id: String,
+    /// Its top-left corner in the window's page, in that page's CSS pixels.
+    pub position: [i32; 2],
+    /// In CSS pixels.
+    pub size: [i32; 2],
+}
+
+/// What a [`ChromeMessage::ActOnWindow`] does to a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowAct {
+    /// Ask the shell to show and focus it, as the window's own activation
+    /// request does ([`HostMessage::FocusRequested`]). The shell decides.
+    Focus,
+    /// Ask its client to close it, as its close button does. The client may
+    /// refuse, for example to ask about unsaved work.
+    Close,
+    /// Kill its client's process with `SIGKILL`, and every window it has.
+    Kill,
+}
+
+/// What a [`ChromeMessage::ConfigureDisplay`] changes about a monitor. Each
+/// field left out stays as before; `reset` first drops every earlier change,
+/// back to what the config says.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DisplayChange {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reset: bool,
+    /// Lit, or turned off and left out of the desktop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Width and height in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<(u32, u32)>,
+    /// In Hz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+    /// Its top-left corner in the desktop, in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<(i32, i32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<DisplayTransform>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_sync: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hdr: Option<bool>,
+    /// The nits SDR white is shown at with HDR on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdr_white: Option<u32>,
+}
+
+/// What a [`ChromeMessage::Watch`] hears about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WatchTopic {
+    /// [`HostMessage::WindowList`].
+    Windows,
+    /// [`HostMessage::DisplayList`].
+    Displays,
+    /// [`HostMessage::InputList`].
+    Inputs,
+    /// [`HostMessage::Status`].
+    Status,
+}
+
+/// An input device as `domicile list-inputs` prints it. See
+/// [`HostMessage::InputList`]. A device that is both, like a keyboard with a
+/// touchpad, is listed once for each kind under one id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedInput {
+    /// The engine's id for it, while it stays plugged in.
+    pub id: i32,
+    /// What its driver calls it.
+    pub name: String,
+    pub kind: InputKind,
+    pub connection: InputConnection,
+    /// Its device under `/sys`, or empty when unknown.
+    pub sys_path: String,
+    /// Its USB or Bluetooth vendor id, or 0.
+    pub vendor: u16,
+    /// Its USB or Bluetooth product id, or 0.
+    pub product: u16,
+}
+
+/// What an input device is. See [`ListedInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputKind {
+    Keyboard,
+    Mouse,
+    Touchpad,
+    Touchscreen,
+    PointingStick,
+    Tablet,
+    /// Read for its keys or switches alone, like a power button or a lid.
+    Other,
+}
+
+/// How an input device is attached. See [`ListedInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputConnection {
+    /// Built into the machine.
+    Internal,
+    Usb,
+    Bluetooth,
+    Unknown,
+}
+
+/// Whether a monitor is driven in HDR10: BT.2020 primaries with the PQ
+/// transfer function. See `docs/COLOR.md`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisplayHdr {
+    /// Its EDID takes no PQ, its connector cannot scan out in 10 bits, or the
+    /// desktop runs in a window.
+    #[default]
+    Unsupported,
+    /// It can, and is not: its profile does not ask for it.
     Off,
     /// It is.
     On,
@@ -2692,6 +3442,118 @@ pub enum CursorShape {
     AllScroll,
     ZoomIn,
     ZoomOut,
+}
+
+/// How much a part of the desktop logs, from least to most.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    /// The name `domicile set-log-level` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+}
+
+/// An area of the desktop whose logs can be turned up on their own. Each part
+/// (compositor, engine, shell) maps it to the code it logs from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Subsystem {
+    Input,
+    Displays,
+    Windows,
+    Rendering,
+    Cast,
+    Portals,
+    Idle,
+    Clipboard,
+    Notifications,
+    Electron,
+    Agents,
+    Shell,
+    Session,
+}
+
+impl Subsystem {
+    /// Every subsystem, in the order help lists them.
+    pub const ALL: [Subsystem; 13] = [
+        Subsystem::Input,
+        Subsystem::Displays,
+        Subsystem::Windows,
+        Subsystem::Rendering,
+        Subsystem::Cast,
+        Subsystem::Portals,
+        Subsystem::Idle,
+        Subsystem::Clipboard,
+        Subsystem::Notifications,
+        Subsystem::Electron,
+        Subsystem::Agents,
+        Subsystem::Shell,
+        Subsystem::Session,
+    ];
+
+    /// The name `domicile set-log-level` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Subsystem::Input => "input",
+            Subsystem::Displays => "displays",
+            Subsystem::Windows => "windows",
+            Subsystem::Rendering => "rendering",
+            Subsystem::Cast => "cast",
+            Subsystem::Portals => "portals",
+            Subsystem::Idle => "idle",
+            Subsystem::Clipboard => "clipboard",
+            Subsystem::Notifications => "notifications",
+            Subsystem::Electron => "electron",
+            Subsystem::Agents => "agents",
+            Subsystem::Shell => "shell",
+            Subsystem::Session => "session",
+        }
+    }
+
+    /// What it covers, for help and the Settings app.
+    pub fn description(self) -> &'static str {
+        match self {
+            Subsystem::Input => "Keyboards, pointers, touch, gestures and input methods",
+            Subsystem::Displays => "Monitors, modes, scale, color and night light",
+            Subsystem::Windows => "App windows, popups, focus and launching apps",
+            Subsystem::Rendering => "Frames, buffers, page flips and latency",
+            Subsystem::Cast => "Screen sharing, screenshots and casting",
+            Subsystem::Portals => "Desktop portals and their dialogs",
+            Subsystem::Idle => "Idle, the screen lock and sleep",
+            Subsystem::Clipboard => "Copy and paste",
+            Subsystem::Notifications => "Notifications and the system tray",
+            Subsystem::Electron => "Electron apps on the engine",
+            Subsystem::Agents => "Agents that use the desktop",
+            Subsystem::Shell => "The shell and its connection to the desktop",
+            Subsystem::Session => "Starting, stopping and the login session",
+        }
+    }
+}
+
+/// The log levels set at runtime, over the starting ones.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogLevels {
+    /// The level for everything Domicile logs, or the starting level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<LogLevel>,
+    /// Levels for single subsystems, over `all`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub subsystems: std::collections::BTreeMap<Subsystem, LogLevel>,
 }
 
 /// The desktop's color theme.

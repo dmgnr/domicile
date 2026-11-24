@@ -1,6 +1,6 @@
 import { AnimatedPlusIcon } from "@domicile-desktop/component-library/AnimatedPlusIcon";
 import { Button } from "@domicile-desktop/component-library/Button";
-import { useRef } from "react";
+import { useContext, useRef } from "react";
 
 import { cva, cx } from "../styled-system/css";
 import { flex } from "../styled-system/patterns";
@@ -11,6 +11,7 @@ import { within } from "./rect";
 import type { Restack } from "./restacking";
 import { StripButtons } from "./StripButtons";
 import { StripEnd } from "./StripEnd";
+import { SlidingScreen } from "./sliding-screen";
 import type { Aim, DropTargets } from "./tiled/aim";
 import type { StripGroup } from "./tree/frames";
 import { useLowered } from "./useLowered";
@@ -20,6 +21,7 @@ import type { WindowMotion } from "./window-motion";
 import { barMotion, isLeaving, isMoving } from "./window-motion";
 import {
   clickThroughStyles,
+  clippedAlong,
   heldStyles,
   movingStyles,
   originOf,
@@ -144,6 +146,7 @@ const PlacedStrip = ({
   const leaving = isLeaving(motion);
   const playing = stripMotion(motion);
   const lowered = useLowered(depth);
+  const sliding = useContext(SlidingScreen);
   useSettling({
     element,
     origin,
@@ -172,6 +175,7 @@ const PlacedStrip = ({
       ref={element}
       style={{
         ...placedAt(box, depth),
+        ...clippedAlong(sliding, box),
         ...scaledAbout(frame, box),
         ...shuffledBy(restack),
       }}

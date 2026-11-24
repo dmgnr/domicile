@@ -42,11 +42,6 @@ pub fn components(
     exists: &dyn Fn(&Path) -> bool,
 ) -> Result<Components, Missing> {
     let bin = binary.parent().unwrap_or_else(|| Path::new("."));
-    let libexec = bin
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("libexec")
-        .join("domicile");
     Ok(Components {
         compositor: one(
             "compositor",
@@ -55,14 +50,23 @@ pub fn components(
             env,
             exists,
         )?,
-        engine: one(
-            "engine",
-            "DOMICILE_ENGINE",
-            libexec.join("engine"),
-            env,
-            exists,
-        )?,
+        engine: engine(binary, env, exists)?,
     })
+}
+
+/// The engine alone: `DOMICILE_ENGINE`, or `libexec/domicile/engine`.
+pub fn engine(
+    binary: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Result<PathBuf, Missing> {
+    one(
+        "engine",
+        "DOMICILE_ENGINE",
+        libexec(binary).join("engine"),
+        env,
+        exists,
+    )
 }
 
 /// The shell builder: `DOMICILE_BUILDER`, or `libexec/domicile/builder`.
@@ -77,6 +81,38 @@ pub fn builder(
         "shell builder",
         "DOMICILE_BUILDER",
         libexec(binary).join("builder"),
+        env,
+        exists,
+    )
+}
+
+/// What runs an Electron app's main process: `DOMICILE_ELECTRON_HOST`, or
+/// `libexec/domicile/electron-host`. See `docs/architecture/ELECTRON-APPS.md`.
+pub fn electron_host(
+    binary: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Result<PathBuf, Missing> {
+    one(
+        "Electron app host",
+        "DOMICILE_ELECTRON_HOST",
+        libexec(binary).join("electron-host"),
+        env,
+        exists,
+    )
+}
+
+/// The Perfetto install `domicile trace` records with, holding `bin/traced`
+/// and `bin/perfetto`: `DOMICILE_PERFETTO`, or `libexec/domicile/perfetto`.
+pub fn perfetto(
+    binary: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Result<PathBuf, Missing> {
+    one(
+        "Perfetto",
+        "DOMICILE_PERFETTO",
+        libexec(binary).join("perfetto"),
         env,
         exists,
     )
@@ -125,6 +161,12 @@ pub fn app_module(
         )?,
     };
     Ok(root.join(format!("{name}.js")))
+}
+
+/// The file naming the installed version and commit: `libexec/domicile/version`.
+/// `flake.nix` and `packages/distro/stage.sh` write it.
+pub fn version_file(binary: &Path) -> PathBuf {
+    libexec(binary).join("version")
 }
 
 /// The `libexec/domicile` directory next to `binary`'s `bin`.

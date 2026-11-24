@@ -14,7 +14,7 @@ desk's hook with the function's include_incognito_information
 Verified: not built. This repository cannot build Chromium; the engine
 job builds it on `crux`.
 ---
- chrome/browser/extensions/chrome_extension_function_details.cc | 9 ++++++---
+ .../extensions/chrome_extension_function_details.cc      | 9 ++++++---
  1 file changed, 6 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/extensions/chrome_extension_function_details.cc b/chrome/browser/extensions/chrome_extension_function_details.cc

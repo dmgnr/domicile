@@ -1,0 +1,16 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// What DomicileHost.configureExtension() sets on an extension: each member
+// present is set, and the rest are left. The names and values are
+// DomicileInstalledExtension's.
+
+dictionary DomicileExtensionSettings {
+  boolean fileAccess;
+  boolean userScripts;
+  // "on_click", "specific_sites" or "all_sites".
+  DOMString siteAccess;
+  // With "specific_sites" only: hosts, each also as `*.host` for its
+  // subdomains.
+  sequence<DOMString> sites;
+};

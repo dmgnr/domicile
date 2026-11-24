@@ -27,13 +27,15 @@ class MODULES_EXPORT DomicileClipboardEntry final : public ScriptWrappable {
   DomicileClipboardEntry(uint32_t id,
                          bool image,
                          const String& preview,
-                         const String& thumbnail);
+                         const String& thumbnail,
+                         bool current);
   ~DomicileClipboardEntry() override;
 
   uint32_t id() const { return id_; }
   bool image() const { return image_; }
   const String& preview() const { return preview_; }
   const String& thumbnail() const { return thumbnail_; }
+  bool current() const { return current_; }
 
   void Trace(Visitor*) const override;
 
@@ -50,6 +52,8 @@ class MODULES_EXPORT DomicileClipboardEntry final : public ScriptWrappable {
   String preview_;
   // A small picture of an image with no text, as a PNG `data:` URL, or empty.
   String thumbnail_;
+  // What the clipboard holds.
+  bool current_ = false;
 };
 
 }  // namespace blink

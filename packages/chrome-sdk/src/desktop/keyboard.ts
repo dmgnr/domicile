@@ -24,6 +24,11 @@ export type GrabOptions = {
    * to the desktop from a VM. Otherwise that window gets it as a key.
    */
   readonly whileInhibited?: boolean;
+  /**
+   * For a modifier alone, a tap of it: the longest it may be held, in
+   * milliseconds, and still be a tap. The engine's default, 300, unless set.
+   */
+  readonly longestTap?: number;
 };
 
 /**
@@ -92,9 +97,11 @@ export const keyboard = (
   host: KeyboardHost,
   calls: Pick<System, "keymaps" | "selectKeymap" | "switchShortcutsInhibitor">,
 ): Keyboard => ({
-  grab: (chord, { whileInhibited = false } = {}) => {
+  grab: (chord, { whileInhibited = false, longestTap } = {}) => {
     // Left off unless set, as a grab by an older shell is.
-    if (whileInhibited) {
+    if (longestTap !== undefined) {
+      host.grabShortcut(chord, whileInhibited, longestTap);
+    } else if (whileInhibited) {
       host.grabShortcut(chord, true);
     } else {
       host.grabShortcut(chord);

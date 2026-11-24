@@ -11,7 +11,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use tracing::{debug, warn};
 
-use domicile_host::clipboard::Contents;
+use domicile_host::clipboard::{Contents, Removed};
 use domicile_host::system::DisplayPower;
 use domicile_host::theme_turnover::{Turnover, CAPTURE_WITHIN};
 use domicile_host::white_point::WhitePoint;
@@ -61,6 +61,8 @@ pub enum ClientRequest {
         app_id: String,
         dx: f64,
         dy: f64,
+        dx_unaccel: f64,
+        dy_unaccel: f64,
     },
     /// See [`ChromeMessage::PointerConstrained`](domicile_protocol::ChromeMessage::PointerConstrained).
     PointerConstrained {
@@ -202,16 +204,25 @@ pub enum ClientRequest {
         /// One monitor's `wl_output` name, or `None` for every one.
         display: Option<String>,
     },
+    /// `domicile configure-display` asked to change a monitor's setup. See
+    /// [`DomicileCompositor::configure_display`].
+    ConfigureDisplay {
+        display: String,
+        change: domicile_protocol::DisplayChange,
+        answer: crate::configured_displays::Answer,
+    },
     /// The chrome asked the client of `app_id` to close its window.
     CloseApp {
         app_id: String,
     },
-    /// The chrome asked to start a program.
+    /// The chrome, or `domicile exec`, asked to start a program.
     ///
     /// Handled here because the lock state lives here, and a locked desktop
-    /// refuses spawns. See [`crate::lock::refused`].
+    /// refuses spawns. See [`crate::lock::refused`]. With an `answer` the
+    /// asker hears why it did not start; without one the person is told.
     Spawn {
         command: Vec<String>,
+        answer: Option<crate::configured_displays::Answer>,
     },
     /// A chrome's page said `hello`. It holds no pixels yet.
     ///
@@ -238,11 +249,23 @@ pub enum ClientRequest {
     CopyClipboardEntry {
         entry: u32,
     },
+    /// The shell removed a clipboard history entry. Removing the current one
+    /// empties the seat's clipboard.
+    RemoveClipboardEntry {
+        entry: u32,
+    },
     /// The shell clicked a tray icon. Routed through this thread so a locked
     /// desktop can refuse it. See [`crate::lock::refused`].
     ActivateTrayItem {
         id: String,
         action: TrayAction,
+    },
+    /// The shell's system call clicked an entry of the tray menu on `bus`,
+    /// such as "Show Slack". Gets the item a token, as an icon click does.
+    /// Sent before the call runs, so the token is minted before the app can
+    /// ask with it. Routed here so a locked desktop can refuse it.
+    TrayMenuClicked {
+        bus: String,
     },
     /// The shell dismissed notifications. Routed here so a locked desktop can
     /// refuse it.
@@ -295,6 +318,7 @@ pub enum ClientRequest {
 impl DomicileCompositor {
     /// Handle a request from a chrome on the Wayland thread.
     pub fn handle_client_request(&mut self, event: ClientRequest) {
+        crate::input_trace::trace(&event);
         // First, for every request: this is how the compositor knows someone is
         // present.
         self.keep_the_desktop_awake(&event);
@@ -378,8 +402,14 @@ impl DomicileCompositor {
                 );
                 pointer.frame(self);
             }
-            ClientRequest::PointerRelative { app_id, dx, dy } => {
-                self.move_relatively(&app_id, (dx, dy));
+            ClientRequest::PointerRelative {
+                app_id,
+                dx,
+                dy,
+                dx_unaccel,
+                dy_unaccel,
+            } => {
+                self.move_relatively(&app_id, (dx, dy), (dx_unaccel, dy_unaccel));
             }
             ClientRequest::PointerConstrained { app_id, active } => {
                 self.page_constrained(&app_id, active);
@@ -520,10 +550,18 @@ impl DomicileCompositor {
                 self.took_a_copy(clipboard, contents);
                 self.tell_the_engine_a_clipboard(clipboard);
             }
-            // Forward to the tray worker, which talks to the session bus.
+            // Forward to the tray worker, which talks to the session bus,
+            // with a token so the application can raise its window.
             ClientRequest::ActivateTrayItem { id, action } => {
                 if let Some(tray) = self.hub.tray.get() {
-                    tray.activate(id, action);
+                    let token = activation::mint(&mut self.xdg_activation_state, tray.pid(&id));
+                    tray.activate(id, action, token);
+                }
+            }
+            ClientRequest::TrayMenuClicked { bus } => {
+                if let Some(tray) = self.hub.tray.get() {
+                    let token = activation::mint(&mut self.xdg_activation_state, tray.pid_on(&bus));
+                    tray.provide(bus, token);
                 }
             }
             // Forward to the notification server's worker.
@@ -561,6 +599,17 @@ impl DomicileCompositor {
                 None => warn!(
                     entry,
                     "the shell asked for a clipboard entry this desktop no longer holds"
+                ),
+            },
+            ClientRequest::RemoveClipboardEntry { entry } => match self.clipboard.remove(entry) {
+                Some(Removed::Earlier) => self.tell_the_chromes_the_clipboard(),
+                Some(Removed::Current) => {
+                    self.tell_the_chromes_the_clipboard();
+                    self.empty_the_clipboard();
+                }
+                None => warn!(
+                    entry,
+                    "the shell removed a clipboard entry this desktop no longer holds"
                 ),
             },
             ClientRequest::Unlock { passphrase } => self.offered_the_passphrase(&passphrase),
@@ -692,22 +741,42 @@ impl DomicileCompositor {
                 output,
                 white_point,
             } => {
-                self.gamma.set_white_point(output.as_deref(), white_point);
-                self.restate_the_gamma();
+                self.night_light
+                    .set(output.as_deref(), white_point, Instant::now());
+                self.draw_the_night_light();
             }
             ClientRequest::PowerDisplays { power, display } => {
                 self.power_the_displays(power, display.as_deref());
             }
+            ClientRequest::ConfigureDisplay {
+                display,
+                change,
+                answer,
+            } => answer.give(self.configure_display(&display, &change)),
             // A launch from a key or the launcher, so it may raise the
             // window of an app already running.
-            ClientRequest::Spawn { command } => spawn_client(
-                &command,
-                &self.hub.wayland_display,
-                self.scope_clients,
-                self.hub.child_nice,
-                Some(&activation::mint(&mut self.xdg_activation_state, None)),
-                self.launched.as_ref(),
-            ),
+            ClientRequest::Spawn { command, answer } => {
+                let started = spawn_client(
+                    &command,
+                    &self.hub.wayland_display,
+                    self.scope_clients,
+                    self.hub.child_nice,
+                    Some(&activation::mint(&mut self.xdg_activation_state, None)),
+                    self.launched.as_ref(),
+                );
+                match (started, answer) {
+                    (started, Some(answer)) => answer.give(started),
+                    (Ok(()), None) => {}
+                    (Err(why), None) => {
+                        tracing::error!(why, ?command, "failed to spawn client");
+                        self.hub
+                            .notifications
+                            .get()
+                            .expect("the notification server is handed to the hub before chromes connect")
+                            .warn_that_a_program_did_not_start(&why);
+                    }
+                }
+            }
             ClientRequest::CloseApp { app_id } => match self.toplevel_for(&app_id) {
                 Some(toplevel) => {
                     debug!(%app_id, "close -> client");

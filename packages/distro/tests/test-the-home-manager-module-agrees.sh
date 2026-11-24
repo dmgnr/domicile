@@ -104,6 +104,7 @@ compare() { # what, rust file, rust struct, nix open pattern, nix indent
 compare "extensions" "$LIB" ExtensionsConfig '^          extensions = [{]$' '            '
 compare "idle" "$LIB" IdleConfig '^          idle = [{]$' '            '
 compare "lock" "$LIB" LockConfig '^          lock = [{]$' '            '
+compare "spellcheck" "$LIB" SpellcheckConfig '^          spellcheck = [{]$' '            '
 compare "lockdown" "$LIB" LockdownConfig '^          lockdown = [{]$' '            '
 compare "input.keyboard" "$LIB" KeyboardConfig '^          input[.]keyboard = [{]$' '            '
 compare "input.keyboard.repeat" "$LIB" KeyRepeat '^            repeat = [{]$' '              '

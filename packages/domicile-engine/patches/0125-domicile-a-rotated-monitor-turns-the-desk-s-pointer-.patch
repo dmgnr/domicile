@@ -76,10 +76,10 @@ index abcc292..55deef3 100644
    // `type`. If that cursor is not available or the extraction of the data
    // fails, return `std::nullopt`.
 diff --git a/ui/wm/core/cursor_loader.cc b/ui/wm/core/cursor_loader.cc
-index 929eece..97aedd9 100644
+index 3524601..52cc52d 100644
 --- a/ui/wm/core/cursor_loader.cc
 +++ b/ui/wm/core/cursor_loader.cc
-@@ -194,9 +194,26 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
+@@ -193,9 +193,26 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
    // into account the different ways of creating an invisible cursor.
    scoped_refptr<ui::PlatformCursor> cursor;
    if (use_platform_cursors_ || type == CursorType::kNone) {

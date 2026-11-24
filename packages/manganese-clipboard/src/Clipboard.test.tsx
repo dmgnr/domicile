@@ -4,28 +4,36 @@ import {
   SCREEN,
 } from "@domicile-desktop/manganese-window-management/screens/fixture";
 import type { ClipboardEntry } from "@domicile-desktop/sdk/desktop/clipboard";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Clipboard } from "./Clipboard";
 
-/** A row's text, with no picture. */
+/** An earlier copy's text, with no picture. */
 const text = (id: number, preview: string): ClipboardEntry => ({
+  current: false,
   id,
   image: false,
   preview,
   thumbnail: undefined,
 });
 
+/** What is on the clipboard. */
+const current = (id: number, preview: string): ClipboardEntry => ({
+  ...text(id, preview),
+  current: true,
+});
+
 const HISTORY = [
-  text(3, "https://example.invalid/a/long/address"),
+  current(3, "https://example.invalid/a/long/address"),
   text(2, "Thanks, see you\nTuesday"),
   text(1, "the first thing copied"),
 ];
 
-/** The panel open over that history, recording copy requests. */
+/** The panel open over that history, recording copy and remove requests. */
 const clipboard = (entries = HISTORY) => {
   const copied: number[] = [];
   const dismissed: true[] = [];
+  const removed: number[] = [];
   render(
     <Clipboard
       entries={entries}
@@ -35,17 +43,30 @@ const clipboard = (entries = HISTORY) => {
       onDismiss={() => {
         dismissed.push(true);
       }}
+      onRemove={(entry) => {
+        removed.push(entry);
+      }}
       open
       screen={SCREEN}
     />,
     { wrapper: OnOneScreen },
   );
-  return { copied, dismissed, user: userEvent.setup() };
+  return { copied, dismissed, removed, user: userEvent.setup() };
 };
 
-/** Each row's text. */
+/** Each row's text, without what is hidden from screen readers. */
 const rows = () =>
-  screen.getAllByRole("option").map((row) => row.textContent ?? "");
+  screen.getAllByRole("option").map((row) => {
+    const shown = row.cloneNode(true);
+    if (shown instanceof HTMLElement) {
+      for (const hidden of shown.querySelectorAll("[aria-hidden]")) {
+        hidden.remove();
+      }
+      return shown.textContent;
+    } else {
+      throw new Error("test: a row is not an element");
+    }
+  });
 
 describe("Clipboard", () => {
   it("shows nothing at all while it is shut", () => {
@@ -54,6 +75,7 @@ describe("Clipboard", () => {
         entries={HISTORY}
         onCopy={() => undefined}
         onDismiss={() => undefined}
+        onRemove={() => undefined}
         open={false}
         screen={SCREEN}
       />,
@@ -87,8 +109,14 @@ describe("Clipboard", () => {
     it("shows a copied image's thumbnail", () => {
       const thumbnail = "data:image/png;base64,iVBORw0KGgo=";
       clipboard([
-        text(5, "newer"),
-        { id: 4, image: true, preview: "Image, 3 × 2", thumbnail },
+        current(5, "newer"),
+        {
+          current: false,
+          id: 4,
+          image: true,
+          preview: "Image, 3 × 2",
+          thumbnail,
+        },
       ]);
 
       const row = screen.getByRole("option", { name: /^Image, 3 × 2/ });
@@ -99,6 +127,16 @@ describe("Clipboard", () => {
       clipboard();
 
       expect(screen.getByText("2 copied before")).toBeDefined();
+    });
+
+    it("lists every copy as a row when nothing is on the clipboard", () => {
+      // After the current copy was removed.
+      clipboard([text(2, "kept"), text(1, "older")]);
+
+      expect(
+        screen.queryByRole("group", { name: "On your clipboard" }),
+      ).toBeNull();
+      expect(rows()).toStrictEqual(["kept", "older"]);
     });
 
     it("says a desktop nothing was copied on is empty", () => {
@@ -123,7 +161,7 @@ describe("Clipboard", () => {
     });
 
     it("has nothing to choose with only the current copy", async () => {
-      const panel = clipboard([text(7, "alone")]);
+      const panel = clipboard([current(7, "alone")]);
 
       await panel.user.keyboard("{Enter}");
 
@@ -172,11 +210,83 @@ describe("Clipboard", () => {
     });
   });
 
+  describe("removing", () => {
+    it("removes the highlighted row with its button, and keeps the panel open", async () => {
+      const panel = clipboard();
+
+      await panel.user.click(
+        within(
+          screen.getByRole("option", { name: /^Thanks, see you/ }),
+        ).getByText("Remove"),
+      );
+
+      expect(panel.removed).toStrictEqual([2]);
+      expect(panel.copied).toStrictEqual([]);
+      expect(panel.dismissed).toStrictEqual([]);
+    });
+
+    it("shows Remove on the highlighted row only", async () => {
+      const panel = clipboard();
+
+      await panel.user.keyboard("{ArrowDown}");
+
+      expect(
+        within(
+          screen.getByRole("option", { name: /^the first thing copied/ }),
+        ).getByText("Remove"),
+      ).toBeDefined();
+      expect(
+        within(
+          screen.getByRole("option", { name: /^Thanks, see you/ }),
+        ).queryByText("Remove"),
+      ).toBeNull();
+    });
+
+    it("removes what is on the clipboard with its button", async () => {
+      const panel = clipboard();
+
+      await panel.user.click(
+        within(
+          screen.getByRole("group", { name: "On your clipboard" }),
+        ).getByRole("button", { name: "Remove" }),
+      );
+
+      expect(panel.removed).toStrictEqual([3]);
+      expect(panel.copied).toStrictEqual([]);
+    });
+
+    it("removes the highlighted row with Delete", async () => {
+      const panel = clipboard();
+
+      await panel.user.keyboard("{ArrowDown}{Delete}");
+
+      expect(panel.removed).toStrictEqual([1]);
+    });
+
+    it("leaves Delete to the box when there is text after the cursor", async () => {
+      const panel = clipboard();
+
+      await panel.user.keyboard("see{ArrowLeft}{Delete}");
+
+      expect(panel.removed).toStrictEqual([]);
+      expect(screen.getByRole("combobox")).toHaveProperty("value", "se");
+    });
+
+    it("removes the highlighted row with Delete at the end of a search", async () => {
+      const panel = clipboard();
+
+      await panel.user.keyboard("first{Delete}");
+
+      expect(panel.removed).toStrictEqual([1]);
+    });
+  });
+
   it("keeps its rows while it closes, though the history moves", () => {
     // Choosing an earlier copy moves it to the top while the panel fades.
     const props = {
       onCopy: () => undefined,
       onDismiss: () => undefined,
+      onRemove: () => undefined,
       screen: SCREEN,
     };
     const { rerender } = render(

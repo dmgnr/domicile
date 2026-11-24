@@ -176,7 +176,7 @@ awk '
   /^  removedSettings = \{$/ { inside = 1; next }
   inside && /^  \};$/ { exit }
   note { if (/'"''"';$/) { note = 0 }; next }
-  inside && match($0, /^    ("[a-z0-9_.\[\]]+"|[a-z0-9_]+) =/) {
+  inside && match($0, /^    ("[a-z0-9_.*\[\]]+"|[a-z0-9_]+) =/) {
     path = substr($0, RSTART + 4, RLENGTH - 6)
     gsub(/"/, "", path)
     print path
@@ -223,13 +223,16 @@ if [ -n "$unlisted" ]; then
   FAILED=1
 fi
 
-# A path in a list's elements needs its submodule to declare it, with
-# `removed.optionsUnder "<the path up to its last []>"`.
+# A path in a list's elements or a map's values needs its submodule to declare
+# it, with `removed.optionsUnder "<the path up to its last [] or *>"`.
 unwired=""
 while read -r path; do
   case "$path" in
-    *"[]"*)
-      prefix="${path%"[]"*}[]"
+    *"[]"* | *".*."*)
+      case "$path" in
+        *".*."*) prefix="${path%".*."*}.*" ;;
+        *) prefix="${path%"[]"*}[]" ;;
+      esac
       awk -v want="options = lib.recursiveUpdate (removed.optionsUnder \"$prefix\")" \
         '{ sub(/^ +/, "") } index($0, want) == 1 { found = 1 } END { exit !found }' "$MODULE" \
         || unwired="$unwired$prefix "

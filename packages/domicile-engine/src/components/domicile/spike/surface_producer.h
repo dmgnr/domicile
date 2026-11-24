@@ -90,10 +90,11 @@ class SurfaceProducer : public viz::mojom::CompositorFrameSinkClient,
 
  private:
   // mojom::SurfaceObserver:
-  // Ignores `scale`: the spike renders in the page's pixels.
+  // Ignores `scale` and `zoom`: the spike renders in the page's pixels.
   void OnSurfaceEmbedded(const viz::LocalSurfaceId& local_surface_id,
                          const gfx::Size& size,
-                         double scale) override;
+                         double scale,
+                         double zoom) override;
   // Sent only to producers whose sink the browser owns. This one holds its
   // own sink, so it is a no-op.
   void OnBufferReleased(uint64_t buffer_id) override;

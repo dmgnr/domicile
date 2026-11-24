@@ -21,8 +21,8 @@ Subject: [PATCH] domicile: preserve native scroll distances, sources and stops
  .../wayland/host/wayland_event_source.h       |  7 ++
  .../platform/wayland/host/wayland_pointer.cc  |  5 +-
  .../platform/wayland/host/wayland_pointer.h   |  3 +
- .../wayland/host/wayland_pointer_unittest.cc  | 74 ++++++++++++----
- 18 files changed, 294 insertions(+), 47 deletions(-)
+ .../wayland/host/wayland_pointer_unittest.cc  | 75 ++++++++++++-----
+ 18 files changed, 294 insertions(+), 48 deletions(-)
 
 diff --git a/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc b/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc
 index 0cd4983..d7c132d 100644
@@ -137,10 +137,10 @@ index 5174190..7de4407 100644
    float acceleration_ratio_y = 1.0f;
  
 diff --git a/third_party/blink/public/mojom/input/input_handler.mojom b/third_party/blink/public/mojom/input/input_handler.mojom
-index cf1a0b7..13022a9 100644
+index 32fd54f..7a3e074 100644
 --- a/third_party/blink/public/mojom/input/input_handler.mojom
 +++ b/third_party/blink/public/mojom/input/input_handler.mojom
-@@ -73,6 +73,12 @@ struct PointerData {
+@@ -74,6 +74,12 @@ struct PointerData {
  };
  
  struct WheelData {
@@ -257,7 +257,7 @@ index 47601b4..fef0117 100644
    webkit_event.tilt_y = event.pointer_details().tilt_y;
    webkit_event.force = event.pointer_details().force;
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index 6946a14..f17af24 100644
+index 9397196..023f96c 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -56,6 +56,7 @@ component("evdev") {
@@ -348,7 +348,7 @@ index f49f9b6..9236885 100644
  };
  
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
-index ac47ef3..d7107e2 100644
+index fb52c08..7d147d2 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.cc
 +++ b/ui/events/ozone/evdev/event_factory_evdev.cc
 @@ -3,6 +3,7 @@
@@ -357,9 +357,9 @@ index ac47ef3..d7107e2 100644
  #include "ui/events/ozone/evdev/event_factory_evdev.h"
 +#include "ui/events/domicile/scroll_metadata.h"
  
+ #include <optional>
  #include <utility>
- 
-@@ -373,6 +374,8 @@ void EventFactoryEvdev::DispatchMouseWheelEvent(
+@@ -396,6 +397,8 @@ void EventFactoryEvdev::DispatchMouseWheelEvent(
    event.set_location_f(params.location);
    event.set_root_location_f(params.location);
    event.set_source_device_id(params.device_id);
@@ -368,7 +368,7 @@ index ac47ef3..d7107e2 100644
    DispatchUiEvent(&event);
  }
  
-@@ -400,6 +403,8 @@ void EventFactoryEvdev::DispatchScrollEvent(const ScrollEventParams& params) {
+@@ -431,6 +434,8 @@ void EventFactoryEvdev::DispatchScrollEvent(const ScrollEventParams& params) {
    event.set_location_f(params.location);
    event.set_root_location_f(params.location);
    event.set_source_device_id(params.device_id);
@@ -538,7 +538,7 @@ index eb8ca5c..55d1b8f 100644
      "scroll_types.h",
    ]
 diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.cc b/ui/ozone/platform/wayland/host/wayland_event_source.cc
-index 916f96f..e55633f 100644
+index 12e8ff2..5486a04 100644
 --- a/ui/ozone/platform/wayland/host/wayland_event_source.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_event_source.cc
 @@ -20,6 +20,7 @@
@@ -549,7 +549,7 @@ index 916f96f..e55633f 100644
  #include "ui/events/event_utils.h"
  #include "ui/events/keycodes/dom/dom_code.h"
  #include "ui/events/keycodes/dom/dom_key.h"
-@@ -486,6 +487,20 @@ void WaylandEventSource::OnPointerMotionEvent(
+@@ -479,6 +480,20 @@ void WaylandEventSource::OnPointerMotionEvent(
    }
  }
  
@@ -570,7 +570,7 @@ index 916f96f..e55633f 100644
  void WaylandEventSource::OnPointerAxisEvent(
      const gfx::Vector2dF& offset,
      std::optional<base::TimeTicks> timestamp,
-@@ -601,8 +616,20 @@ void WaylandEventSource::OnPointerAxisStopEvent(uint32_t axis,
+@@ -594,8 +609,20 @@ void WaylandEventSource::OnPointerAxisStopEvent(uint32_t axis,
    EnsurePointerScrollData(timestamp);
    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
      pointer_scroll_data_->dy = 0;
@@ -591,7 +591,7 @@ index 916f96f..e55633f 100644
    }
    pointer_scroll_data_->is_axis_stop = true;
  }
-@@ -1196,6 +1223,23 @@ void WaylandEventSource::ProcessPointerScrollData() {
+@@ -1189,6 +1216,23 @@ void WaylandEventSource::ProcessPointerScrollData() {
    base::TimeTicks& timestamp = *pointer_scroll_data_->timestamp;
  
    int flags = pointer_flags_ | keyboard_modifiers_;
@@ -615,7 +615,7 @@ index 916f96f..e55633f 100644
    // Dispatch Fling event if pointer.axis_stop is notified and the recent
    // pointer.axis events meets the criteria to start fling scroll.
    if (pointer_scroll_data_->dx == 0 && pointer_scroll_data_->dy == 0 &&
-@@ -1232,6 +1276,13 @@ void WaylandEventSource::ProcessPointerScrollData() {
+@@ -1225,6 +1269,13 @@ void WaylandEventSource::ProcessPointerScrollData() {
        MouseWheelEvent event(
            gfx::ToRoundedVector2d(gfx::Vector2dF(dx, dy)),
            pointer_location_, pointer_location_, timestamp, flags, 0);
@@ -629,7 +629,7 @@ index 916f96f..e55633f 100644
        pointer_frames_.push_back(
            std::make_unique<FrameData>(event, base::NullCallback()));
      } else if (*pointer_scroll_data_->axis_source ==
-@@ -1260,6 +1311,9 @@ void WaylandEventSource::ProcessPointerScrollData() {
+@@ -1253,6 +1304,9 @@ void WaylandEventSource::ProcessPointerScrollData() {
                          pointer_location_, timestamp, flags, dx, dy,
                          dx, dy,
                          kGestureScrollFingerCount);
@@ -640,7 +640,7 @@ index 916f96f..e55633f 100644
            std::make_unique<FrameData>(event, base::NullCallback()));
      }
 diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.h b/ui/ozone/platform/wayland/host/wayland_event_source.h
-index d85cbf2..76eba10 100644
+index 2ae4b82..4740e41 100644
 --- a/ui/ozone/platform/wayland/host/wayland_event_source.h
 +++ b/ui/ozone/platform/wayland/host/wayland_event_source.h
 @@ -5,6 +5,7 @@
@@ -651,7 +651,7 @@ index d85cbf2..76eba10 100644
  #include <deque>
  #include <memory>
  #include <optional>
-@@ -124,6 +125,9 @@ class WaylandEventSource : public PlatformEventSource,
+@@ -125,6 +126,9 @@ class WaylandEventSource : public PlatformEventSource,
                              base::TimeTicks timestamp,
                              wl::EventDispatchPolicy dispatch_policy,
                              bool is_synthesized) override;
@@ -661,7 +661,7 @@ index d85cbf2..76eba10 100644
    void OnPointerAxisEvent(const gfx::Vector2dF& offset,
                            std::optional<base::TimeTicks> timestamp,
                            bool is_high_resolution) override;
-@@ -207,10 +211,13 @@ class WaylandEventSource : public PlatformEventSource,
+@@ -208,10 +212,13 @@ class WaylandEventSource : public PlatformEventSource,
      PointerScrollData& operator=(PointerScrollData&&);
  
      std::optional<uint32_t> axis_source;
@@ -676,10 +676,10 @@ index d85cbf2..76eba10 100644
      std::optional<base::TimeTicks> timestamp;
  
 diff --git a/ui/ozone/platform/wayland/host/wayland_pointer.cc b/ui/ozone/platform/wayland/host/wayland_pointer.cc
-index 06a9ae1..df39ab5 100644
+index 8dff9a4..a4f0be5 100644
 --- a/ui/ozone/platform/wayland/host/wayland_pointer.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_pointer.cc
-@@ -182,6 +182,9 @@ void WaylandPointer::OnAxis(void* data,
+@@ -199,6 +199,9 @@ void WaylandPointer::OnAxis(void* data,
                              uint32_t axis,
                              wl_fixed_t value) {
    double delta = -wl_fixed_to_double(value);
@@ -689,7 +689,7 @@ index 06a9ae1..df39ab5 100644
    if (!IsWaylandUnscaledTouchpadScrollingEnabled()) {
      // Wayland compositors send axis events with values in the surface
      // coordinate
-@@ -192,8 +195,6 @@ void WaylandPointer::OnAxis(void* data,
+@@ -209,8 +212,6 @@ void WaylandPointer::OnAxis(void* data,
      constexpr double kAxisValueScale = 10.0;
      delta = delta / kAxisValueScale * MouseWheelEvent::kWheelDelta;
    }
@@ -699,10 +699,10 @@ index 06a9ae1..df39ab5 100644
  }
  
 diff --git a/ui/ozone/platform/wayland/host/wayland_pointer.h b/ui/ozone/platform/wayland/host/wayland_pointer.h
-index 7b1b001..7f56639 100644
+index 536e54f..5019969 100644
 --- a/ui/ozone/platform/wayland/host/wayland_pointer.h
 +++ b/ui/ozone/platform/wayland/host/wayland_pointer.h
-@@ -133,6 +133,9 @@ class WaylandPointer::Delegate {
+@@ -141,6 +141,9 @@ class WaylandPointer::Delegate {
                                      base::TimeTicks timestamp,
                                      wl::EventDispatchPolicy dispatch_policy,
                                      bool is_synthesized) = 0;
@@ -713,10 +713,10 @@ index 7b1b001..7f56639 100644
                                    std::optional<base::TimeTicks> timestamp,
                                    bool is_high_resolution) = 0;
 diff --git a/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc b/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc
-index 383221a..8349dbf 100644
+index d6f04ec..589ebfb 100644
 --- a/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc
-@@ -18,6 +18,7 @@
+@@ -19,6 +19,7 @@
  #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
  #include "ui/base/cursor/platform_cursor.h"
  #include "ui/events/devices/device_data_manager.h"
@@ -724,7 +724,7 @@ index 383221a..8349dbf 100644
  #include "ui/events/event.h"
  #include "ui/ozone/common/bitmap_cursor_factory.h"
  #include "ui/ozone/common/features.h"
-@@ -157,6 +158,21 @@ ACTION_P(CloneEvent, ptr) {
+@@ -158,6 +159,21 @@ ACTION_P(CloneEvent, ptr) {
    *ptr = arg0->Clone();
  }
  
@@ -746,7 +746,7 @@ index 383221a..8349dbf 100644
  TEST_F(WaylandPointerTest, Enter) {
    std::unique_ptr<Event> event;
    EXPECT_CALL(delegate_, DispatchEvent(_)).WillOnce(CloneEvent(&event));
-@@ -275,8 +291,7 @@ TEST_F(WaylandPointerTest, MotionDragged) {
+@@ -276,8 +292,7 @@ TEST_F(WaylandPointerTest, MotionDragged) {
    EXPECT_EQ(gfx::PointF(400, 500), mouse_event->root_location_f());
  }
  
@@ -756,12 +756,13 @@ index 383221a..8349dbf 100644
  TEST_F(WaylandPointerTest, AxisSourceTypes) {
    SendEnter();
  
-@@ -295,8 +310,14 @@ TEST_F(WaylandPointerTest, AxisSourceTypes) {
+@@ -296,9 +311,14 @@ TEST_F(WaylandPointerTest, AxisSourceTypes) {
           {WL_POINTER_AXIS_SOURCE_WHEEL, WL_POINTER_AXIS_SOURCE_FINGER,
            WL_POINTER_AXIS_SOURCE_CONTINUOUS,
            WL_POINTER_AXIS_SOURCE_WHEEL_TILT}) {
 -      SendAxisEvents(pointer, server->GetNextTime(), source,
--                     WL_POINTER_AXIS_VERTICAL_SCROLL, rand() % 20);
+-                     WL_POINTER_AXIS_VERTICAL_SCROLL,
+-                     base::RandIntInclusive(0, 19));
 +      wl_pointer_send_axis_source(pointer, source);
 +      wl_pointer_send_axis(pointer, server->GetNextTime(),
 +                           WL_POINTER_AXIS_HORIZONTAL_SCROLL,
@@ -773,7 +774,7 @@ index 383221a..8349dbf 100644
      }
    });
  
-@@ -308,6 +329,17 @@ TEST_F(WaylandPointerTest, AxisSourceTypes) {
+@@ -310,6 +330,17 @@ TEST_F(WaylandPointerTest, AxisSourceTypes) {
    ASSERT_TRUE(event3->IsScrollEvent());
    ASSERT_TRUE(event4);
    ASSERT_TRUE(event4->IsMouseWheelEvent());
@@ -791,7 +792,7 @@ index 383221a..8349dbf 100644
  }
  
  TEST_F(WaylandPointerTest, Axis) {
-@@ -615,9 +647,10 @@ TEST_F(WaylandPointerTest, FlingVertical) {
+@@ -617,9 +648,10 @@ TEST_F(WaylandPointerTest, FlingVertical) {
  
    std::unique_ptr<Event> event1, event2, event3;
    EXPECT_CALL(delegate_, DispatchEvent(_))
@@ -803,7 +804,7 @@ index 383221a..8349dbf 100644
        .WillOnce(CloneEvent(&event3));
  
    // Send two axis events.
-@@ -644,7 +677,7 @@ TEST_F(WaylandPointerTest, FlingVertical) {
+@@ -646,7 +678,7 @@ TEST_F(WaylandPointerTest, FlingVertical) {
    ASSERT_TRUE(event2);
    ASSERT_TRUE(event2->IsScrollEvent());
  
@@ -812,7 +813,7 @@ index 383221a..8349dbf 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* scroll_event = event3->AsScrollEvent();
-@@ -666,9 +699,10 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
+@@ -668,9 +700,10 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
  
    std::unique_ptr<Event> event1, event2, event3;
    EXPECT_CALL(delegate_, DispatchEvent(_))
@@ -824,7 +825,7 @@ index 383221a..8349dbf 100644
        .WillOnce(CloneEvent(&event3));
  
    // Send two axis events.
-@@ -695,7 +729,7 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
+@@ -697,7 +730,7 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
    ASSERT_TRUE(event2);
    ASSERT_TRUE(event2->IsScrollEvent());
  
@@ -833,7 +834,7 @@ index 383221a..8349dbf 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* scroll_event = event3->AsScrollEvent();
-@@ -715,9 +749,10 @@ TEST_F(WaylandPointerTest, FlingCancel) {
+@@ -717,9 +750,10 @@ TEST_F(WaylandPointerTest, FlingCancel) {
    SendRightButtonPress();
    std::unique_ptr<Event> event1, event2, event3, event4, event5;
    EXPECT_CALL(delegate_, DispatchEvent(_))
@@ -845,7 +846,7 @@ index 383221a..8349dbf 100644
        .WillOnce(CloneEvent(&event3))
        .WillOnce(CloneEvent(&event4))
        .WillOnce(CloneEvent(&event5));
-@@ -760,7 +795,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
+@@ -762,7 +796,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
    ASSERT_TRUE(event2->IsScrollEvent());
    EXPECT_EQ(EventType::kScroll, event2->type());
  
@@ -854,7 +855,7 @@ index 383221a..8349dbf 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* fling_start_event = event3->AsScrollEvent();
-@@ -770,7 +805,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
+@@ -772,7 +806,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
    EXPECT_EQ(0.0f, fling_start_event->x_offset_ordinal());
    EXPECT_GT(0.0f, fling_start_event->y_offset_ordinal());
  
@@ -863,7 +864,7 @@ index 383221a..8349dbf 100644
    ASSERT_TRUE(event4);
    ASSERT_TRUE(event4->IsScrollEvent());
    auto* fling_cancel_event = event4->AsScrollEvent();
-@@ -781,7 +816,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
+@@ -783,7 +817,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
    EXPECT_EQ(0.0f, fling_cancel_event->x_offset_ordinal());
    EXPECT_EQ(0.0f, fling_cancel_event->y_offset_ordinal());
  
@@ -872,7 +873,7 @@ index 383221a..8349dbf 100644
    ASSERT_TRUE(event5);
    ASSERT_TRUE(event5);
    EXPECT_EQ(EventType::kScroll, event5->type());
-@@ -794,9 +829,10 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
+@@ -796,9 +830,10 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
  
    std::unique_ptr<Event> event1, event2, event3;
    EXPECT_CALL(delegate_, DispatchEvent(_))
@@ -884,7 +885,7 @@ index 383221a..8349dbf 100644
        .WillOnce(CloneEvent(&event3));
  
    // Send two axis events that notify scrolls both in vertical and horizontal.
-@@ -822,7 +858,7 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
+@@ -824,7 +859,7 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
    ASSERT_TRUE(event2);
    ASSERT_TRUE(event2->IsScrollEvent());
  
@@ -893,7 +894,7 @@ index 383221a..8349dbf 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* scroll_event = event3->AsScrollEvent();
-@@ -850,13 +886,14 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
+@@ -852,13 +887,14 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
  
    std::unique_ptr<Event> event;
    EXPECT_CALL(delegate_, DispatchEvent(_))
@@ -910,7 +911,7 @@ index 383221a..8349dbf 100644
    ASSERT_TRUE(event);
    ASSERT_TRUE(event->IsScrollEvent());
    auto* scroll_event = event->AsScrollEvent();
-@@ -872,7 +909,7 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
+@@ -874,7 +910,7 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
  TEST_F(WaylandPointerTest, FrameTargetUseAfterFreeOnSyncWindowClose) {
    SendEnter(50, 50);
  
@@ -919,7 +920,7 @@ index 383221a..8349dbf 100644
    // sets is_fling_active_=true so the next finger-scroll frame will queue 2
    // events (FlingCancel + Scroll).
    SendAxisStopEvents();
-@@ -911,8 +948,9 @@ TEST_F(WaylandPointerTest, FlingVelocityWithSingleLeadingAxis) {
+@@ -913,8 +949,9 @@ TEST_F(WaylandPointerTest, FlingVelocityWithSingleLeadingAxis) {
  
    std::unique_ptr<Event> event1, event2;
    EXPECT_CALL(delegate_, DispatchEvent(_))

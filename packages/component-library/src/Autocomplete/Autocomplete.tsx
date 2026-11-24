@@ -1,5 +1,6 @@
 import { Autocomplete as BaseAutocomplete } from "@base-ui/react/autocomplete";
 import type { ReactNode } from "react";
+import { useRef } from "react";
 import { css, cva, cx } from "../../styled-system/css";
 import type { ControlVariant } from "../../styled-system/recipes";
 import { control } from "../../styled-system/recipes";
@@ -9,6 +10,7 @@ import { PrefixIconStack } from "../_control/PrefixIconStack";
 import { wrapperBase } from "../_control/wrapperBase";
 import type { ExtendProps } from "../extend-props";
 import { usePopupBoundary } from "../PopupBoundary/PopupBoundary";
+import { useClosedWithScene } from "../PopupScene/PopupScene";
 import "../stylesheet";
 
 export { SIZES, type Size } from "../control-sizes";
@@ -94,8 +96,11 @@ export const Autocomplete = <V,>({
   ...inputProps
 }: Props<V>) => {
   const { attach, boundary } = usePopupBoundary(false);
+  const actions = useRef<BaseAutocomplete.Root.Actions | null>(null);
+  const heard = useClosedWithScene(actions, {});
   return (
     <BaseAutocomplete.Root<Suggestion<V>>
+      actionsRef={actions}
       autoHighlight={autoHighlight}
       disabled={disabled}
       items={suggestions}
@@ -103,6 +108,7 @@ export const Autocomplete = <V,>({
       // `inline` skips base-ui's filtering; the caller already filtered
       // `suggestions`.
       mode="inline"
+      onOpenChange={heard}
       onValueChange={(next) => {
         onValueChange?.(next);
       }}

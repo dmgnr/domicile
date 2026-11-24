@@ -37,4 +37,7 @@ export const options = defineOptions({
     to: option.choice("Custom end", HALF_HOURS, "07:00"),
     warmth: option.number("Warmth (0 to 100)", 50, { max: 100, min: 0 }),
   },
+  wallpaper: {
+    rotate: option.toggle("Change the wallpaper every minute", true),
+  },
 });

@@ -3,9 +3,13 @@
 
 #include "components/domicile/browser/context_menu.h"
 
+#include <string>
+#include <vector>
+
 #include "components/domicile/mojom/web_view_guest.mojom.h"
 #include "content/public/browser/context_menu_params.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/context_menu_data/context_menu_data.h"
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
 #include "ui/gfx/geometry/point.h"
@@ -40,6 +44,45 @@ TEST(ContextMenuTest, TheMenuSaysWhatWasUnderTheClick) {
   EXPECT_EQ(menu->src_url, GURL("https://example.test/picture.png"));
   EXPECT_EQ(menu->media_type, mojom::WebViewMediaType::kImage);
   EXPECT_TRUE(menu->has_image_contents);
+}
+
+TEST(ContextMenuTest, AnElectronAppHearsWhatWasUnderTheClick) {
+  content::ContextMenuParams params = OverAnImageInALink();
+  params.page_url = GURL("https://example.test/");
+  params.media_flags = blink::ContextMenuData::kMediaCanSave;
+  const ElectronContextMenu menu =
+      AsElectronContextMenu(params, gfx::Point(12, 34));
+
+  EXPECT_EQ(menu.x, 12);
+  EXPECT_EQ(menu.y, 34);
+  EXPECT_EQ(menu.link_url, "https://example.test/opened");
+  EXPECT_EQ(menu.link_text, "a picture");
+  EXPECT_EQ(menu.page_url, "https://example.test/");
+  EXPECT_EQ(menu.src_url, "https://example.test/picture.png");
+  EXPECT_EQ(menu.media_type, "image");
+  EXPECT_TRUE(menu.has_image_contents);
+  EXPECT_EQ(menu.media_flags,
+            ElectronContextMenu::MediaFlags{.can_save = true});
+}
+
+TEST(ContextMenuTest, AnElectronAppHearsTheMisspellingAndEditFlags) {
+  content::ContextMenuParams params;
+  params.is_editable = true;
+  params.spellcheck_enabled = true;
+  params.misspelled_word = u"teh";
+  params.dictionary_suggestions = {u"the", u"ten"};
+  params.edit_flags = blink::ContextMenuDataEditFlags::kCanPaste |
+                      blink::ContextMenuDataEditFlags::kCanSelectAll;
+  const ElectronContextMenu menu = AsElectronContextMenu(params, gfx::Point());
+
+  EXPECT_TRUE(menu.is_editable);
+  EXPECT_TRUE(menu.spellcheck_enabled);
+  EXPECT_EQ(menu.misspelled_word, "teh");
+  EXPECT_EQ(menu.dictionary_suggestions,
+            (std::vector<std::string>{"the", "ten"}));
+  EXPECT_EQ(menu.edit_flags, (ElectronContextMenu::EditFlags{
+                                 .can_paste = true, .can_select_all = true}));
+  EXPECT_EQ(menu.media_type, "none");
 }
 
 TEST(ContextMenuTest, TheLinkIsTheOneTheGuestMayAskFor) {
@@ -110,6 +153,33 @@ TEST(ContextMenuTest, EditingAndInspectingAreOfferedEverywhere) {
   }
 }
 
+TEST(ContextMenuTest, TheMenuOverAMisspellingSaysTheWordAndSuggestions) {
+  content::ContextMenuParams params;
+  params.is_editable = true;
+  params.misspelled_word = u"recieve";
+  params.dictionary_suggestions = {u"receive", u"relieve"};
+
+  const mojom::WebViewContextMenuPtr menu =
+      AsWebViewContextMenu(1, params, gfx::Point());
+  EXPECT_EQ(menu->misspelled_word, "recieve");
+  EXPECT_EQ(menu->spelling_suggestions,
+            (std::vector<std::string>{"receive", "relieve"}));
+  EXPECT_TRUE(Offers(params, Action::kAddToDictionary));
+  EXPECT_TRUE(OffersSpellingFixes(params));
+}
+
+TEST(ContextMenuTest, OnlyAMisspellingIsAddedToTheDictionaryOrReplaced) {
+  content::ContextMenuParams params;
+  params.is_editable = true;
+
+  const mojom::WebViewContextMenuPtr menu =
+      AsWebViewContextMenu(1, params, gfx::Point());
+  EXPECT_EQ(menu->misspelled_word, "");
+  EXPECT_TRUE(menu->spelling_suggestions.empty());
+  EXPECT_FALSE(Offers(params, Action::kAddToDictionary));
+  EXPECT_FALSE(OffersSpellingFixes(params));
+}
+
 TEST(ContextMenuTest, ALinksActionsNeedALink) {
   const content::ContextMenuParams nothing;
   EXPECT_FALSE(Offers(nothing, Action::kCopyLinkAddress));
@@ -161,6 +231,43 @@ TEST(ContextMenuTest, ACanvasHasPixelsAndNoAddress) {
   EXPECT_TRUE(Offers(params, Action::kCopyImage));
   EXPECT_FALSE(Offers(params, Action::kCopyMediaAddress));
   EXPECT_TRUE(Offers(params, Action::kSaveMediaAs));
+}
+
+TEST(ContextMenuTest, AVideoBlinkCanFloatGoesIntoPictureInPicture) {
+  content::ContextMenuParams params;
+  params.src_url = GURL("https://example.test/film.webm");
+  params.media_type = ContextMenuDataMediaType::kVideo;
+  params.media_flags = blink::ContextMenuData::kMediaCanPictureInPicture;
+
+  const mojom::WebViewContextMenuPtr menu =
+      AsWebViewContextMenu(1, params, gfx::Point());
+  EXPECT_TRUE(menu->can_picture_in_picture);
+  EXPECT_FALSE(menu->in_picture_in_picture);
+  EXPECT_TRUE(Offers(params, Action::kPictureInPicture));
+}
+
+TEST(ContextMenuTest, AVideoInPictureInPictureSaysSo) {
+  content::ContextMenuParams params;
+  params.media_type = ContextMenuDataMediaType::kVideo;
+  params.media_flags = blink::ContextMenuData::kMediaCanPictureInPicture |
+                       blink::ContextMenuData::kMediaPictureInPicture;
+
+  EXPECT_TRUE(
+      AsWebViewContextMenu(1, params, gfx::Point())->in_picture_in_picture);
+  EXPECT_TRUE(Offers(params, Action::kPictureInPicture));
+}
+
+TEST(ContextMenuTest, OnlyAVideoBlinkCanFloatGoesIntoPictureInPicture) {
+  content::ContextMenuParams video;
+  video.media_type = ContextMenuDataMediaType::kVideo;
+  // An image's flags are never a video's, whatever they say.
+  content::ContextMenuParams image = OverAnImageInALink();
+  image.media_flags = blink::ContextMenuData::kMediaCanPictureInPicture;
+
+  EXPECT_FALSE(
+      AsWebViewContextMenu(1, video, gfx::Point())->can_picture_in_picture);
+  EXPECT_FALSE(Offers(video, Action::kPictureInPicture));
+  EXPECT_FALSE(Offers(image, Action::kPictureInPicture));
 }
 
 }  // namespace

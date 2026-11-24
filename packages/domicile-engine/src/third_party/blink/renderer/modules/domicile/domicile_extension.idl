@@ -38,4 +38,8 @@
 
   // False after the extension's action.disable().
   readonly attribute boolean enabled;
+
+  // The id of the browser profile it is in: the one setExtensionsProfile()
+  // named, once that has loaded. Its popup opens in a <webview> in it.
+  readonly attribute DOMString profile;
 };

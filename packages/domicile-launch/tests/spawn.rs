@@ -2,10 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use domicile_launch::shell_path::Shell;
+use domicile_launch::shell_path::{Shell, ShellFiles};
 use domicile_launch::spawn::{
-    composite_on_the_cpu, compositor, engine, let_the_engine_take_input, send_frames_in_memory,
-    the_engine_takes_input, Runtime,
+    composite_on_the_cpu, compositor, engine, let_the_engine_open_links, let_the_engine_take_input,
+    send_frames_in_memory, the_engine_takes_input, Runtime,
 };
 
 /// A built shell, split as `shell_path` returns it: the directory the engine
@@ -15,6 +15,7 @@ use domicile_launch::spawn::{
 /// convention.
 fn shell() -> Shell {
     Shell {
+        files: ShellFiles::Directory,
         root: PathBuf::from("/d/dist"),
         module: PathBuf::from("main.js"),
     }
@@ -27,10 +28,12 @@ fn runtime() -> Runtime {
         broker: PathBuf::from("/run/d/broker"),
         chrome_socket: PathBuf::from("/run/d/chrome.sock"),
         command: PathBuf::from("/run/d/command.sock"),
+        electron: PathBuf::from("/run/d/electron.sock"),
         control: PathBuf::from("/run/d/domicile-ipc.4242.sock"),
         profile: PathBuf::from("/run/d/profile"),
         shims: PathBuf::from("/run/d/bin"),
         session: PathBuf::from("/run/d/session.json"),
+        electron_entries: PathBuf::from("/run/d/share"),
         launches: PathBuf::from("/run/d/launches.json"),
     }
 }
@@ -102,6 +105,76 @@ fn the_engine_takes_commands_on_a_socket_of_this_runs_own() {
     assert!(
         args.contains(&"--domicile-command-socket=/run/d/command.sock".to_string()),
         "{args:?}"
+    );
+}
+
+#[test]
+fn an_engine_restarted_under_domicile_dev_reads_the_shell_from_the_dev_server() {
+    // The supervisor restarts a crashed engine with the shell it was serving;
+    // without the switch it would read the socket's path as a directory.
+    let dev = Shell {
+        files: ShellFiles::DevServer,
+        ..shell()
+    };
+    let args = args_of(&engine(
+        Path::new("/l/engine"),
+        &dev,
+        "wayland",
+        &runtime(),
+        None,
+    ));
+    assert!(
+        args.contains(&"--domicile-shell-dev-server".to_string()),
+        "{args:?}"
+    );
+
+    let args = args_of(&engine(
+        Path::new("/l/engine"),
+        &shell(),
+        "wayland",
+        &runtime(),
+        None,
+    ));
+    assert!(
+        !args.contains(&"--domicile-shell-dev-server".to_string()),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn the_engine_takes_electron_apps_on_a_socket_of_this_runs_own() {
+    // Without it an Electron app's `electron-host` has nowhere to open its
+    // windows. See docs/architecture/ELECTRON-APPS.md.
+    let args = args_of(&engine(
+        Path::new("/l/engine"),
+        &shell(),
+        "wayland",
+        &runtime(),
+        None,
+    ));
+    assert!(
+        args.contains(&"--domicile-electron-socket=/run/d/electron.sock".to_string()),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn apps_find_the_electron_socket_in_their_environment() {
+    // The compositor starts apps, so an Electron app's `electron-host`
+    // inherits it from there.
+    let spawned = compositor(
+        Path::new("/b/domicile-compositor"),
+        Path::new("/l/engine"),
+        Path::new("/b/domicile-open-url"),
+        Path::new("/d/share"),
+        &runtime(),
+        None,
+        false,
+        &|_| None,
+    );
+    assert_eq!(
+        env_of(&spawned, "DOMICILE_ELECTRON_SOCK").unwrap(),
+        "/run/d/electron.sock"
     );
 }
 
@@ -354,6 +427,8 @@ fn the_compositor_is_a_producer_to_the_engine() {
             "/run/d/broker",
             "--launches",
             "/run/d/launches.json",
+            "--electron-entries",
+            "/run/d/share",
         ]
     );
     // The engine's own directory, so `libdomicile_engine.so` is loadable.
@@ -408,6 +483,32 @@ fn the_compositor_carries_this_desktops_control_socket_to_everything_it_starts()
     assert_eq!(
         env_of(&spawned, "DOMICILE_SOCK").unwrap(),
         "/run/d/domicile-ipc.4242.sock"
+    );
+}
+
+#[test]
+fn the_engine_reports_to_this_desktops_trace_socket_for_domicile_trace() {
+    let spawned = engine(
+        Path::new("/l/engine"),
+        &shell(),
+        "wayland",
+        &runtime(),
+        None,
+    );
+    assert_eq!(
+        env_of(&spawned, "PERFETTO_PRODUCER_SOCK_NAME").unwrap(),
+        "/run/d/domicile-ipc.4242.trace.sock"
+    );
+    let args = args_of(&spawned);
+    let features = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--enable-features="))
+        .unwrap();
+    assert!(
+        features
+            .split(',')
+            .any(|feature| feature == "EnablePerfettoSystemTracing"),
+        "{args:?}"
     );
 }
 
@@ -485,7 +586,7 @@ fn a_link_an_app_opens_through_gio_or_a_portal_opens_in_this_desktop_too() {
     );
     assert_eq!(
         env_of(&spawned, "XDG_DATA_DIRS").unwrap(),
-        "/d/share:/run/sw/share"
+        "/run/d/share:/d/share:/run/sw/share"
     );
 }
 
@@ -505,7 +606,47 @@ fn a_machine_with_no_data_directories_keeps_the_defaults_behind_this_desktops() 
     );
     assert_eq!(
         env_of(&spawned, "XDG_DATA_DIRS").unwrap(),
-        "/d/share:/usr/local/share:/usr/share"
+        "/run/d/share:/d/share:/usr/local/share:/usr/share"
+    );
+}
+
+#[test]
+fn a_link_a_page_opens_in_an_app_runs_this_desktops_xdg_open() {
+    // The engine hands `slack:` and other app links to `xdg-open`. It must be
+    // `domicile open`, which the shell's "Open Slack?" prompt names the app
+    // from, or the machine's `xdg-open` finds no app and nothing opens.
+    let inherited = |name: &str| (name == "PATH").then(|| "/usr/bin:/bin".to_string());
+    let mut spawned = engine(
+        Path::new("/l/engine"),
+        &shell(),
+        "wayland",
+        &runtime(),
+        None,
+    );
+    let_the_engine_open_links(&mut spawned, Path::new("/d/share"), &runtime(), &inherited);
+    assert_eq!(
+        env_of(&spawned, "PATH").unwrap(),
+        "/run/d/bin:/usr/bin:/bin"
+    );
+}
+
+#[test]
+fn a_link_a_page_opens_in_an_app_finds_the_apps_the_compositor_finds() {
+    // `domicile open` reads the data directories for the entries that run
+    // the config's Electron apps on the engine, as an app the compositor
+    // started does.
+    let inherited = |name: &str| (name == "XDG_DATA_DIRS").then(|| "/run/sw/share".to_string());
+    let mut spawned = engine(
+        Path::new("/l/engine"),
+        &shell(),
+        "wayland",
+        &runtime(),
+        None,
+    );
+    let_the_engine_open_links(&mut spawned, Path::new("/d/share"), &runtime(), &inherited);
+    assert_eq!(
+        env_of(&spawned, "XDG_DATA_DIRS").unwrap(),
+        "/run/d/share:/d/share:/run/sw/share"
     );
 }
 
@@ -532,8 +673,8 @@ fn the_engines_libraries_go_in_front_of_whatever_was_there() {
 
 #[test]
 fn the_compositor_is_quiet_unless_asked_otherwise() {
-    // The default shows warnings plus the compositor's few `INFO` lines a
-    // person acts on. An explicit `RUST_LOG` wins.
+    // The default shows errors alone; `domicile set-log-level` turns it up.
+    // An explicit `RUST_LOG` wins.
     let quiet = compositor(
         Path::new("/b/c"),
         Path::new("/l/engine"),
@@ -544,10 +685,7 @@ fn the_compositor_is_quiet_unless_asked_otherwise() {
         false,
         &|_| None,
     );
-    assert_eq!(
-        env_of(&quiet, "RUST_LOG").unwrap(),
-        "warn,domicile_compositor=info,domicile=info"
-    );
+    assert_eq!(env_of(&quiet, "RUST_LOG").unwrap(), "error");
 
     let asked = |name: &str| (name == "RUST_LOG").then(|| "warn".to_string());
     let spawned = compositor(
@@ -673,6 +811,7 @@ fn a_machine_that_enables_features_keeps_libinput() {
         [
             "LibinputHandleTouchpad",
             "LibinputHandleMouse",
+            "EnablePerfettoSystemTracing",
             "Vulkan",
             "DefaultANGLEVulkan",
         ]
@@ -695,7 +834,22 @@ fn a_machine_that_disables_features_gets_one_flag_for_them() {
         .collect();
     assert_eq!(
         lists,
-        ["--disable-features=Vulkan,LibinputHandleMouse"],
+        ["--disable-features=V8Flag_scavenger_direct_old_allocation,Vulkan,LibinputHandleMouse"],
+        "{args:?}"
+    );
+}
+
+#[test]
+fn the_engine_starts_without_the_v8_flag_its_v8_rejects() {
+    let args = args_of(&engine(
+        Path::new("/l/engine"),
+        &shell(),
+        "drm",
+        &runtime(),
+        None,
+    ));
+    assert!(
+        args.contains(&"--disable-features=V8Flag_scavenger_direct_old_allocation".to_string()),
         "{args:?}"
     );
 }
@@ -737,6 +891,8 @@ fn the_compositor_is_given_the_config_it_was_started_with() {
             "/run/d/broker",
             "--launches",
             "/run/d/launches.json",
+            "--electron-entries",
+            "/run/d/share",
             "--config",
             "/etc/domicile/desk.json",
         ]

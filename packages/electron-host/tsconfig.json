@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["bun"]
+  },
+  "extends": "@cprussin/tsconfig/base.json",
+  "include": ["src"]
+}

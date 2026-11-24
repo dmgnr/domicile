@@ -39,7 +39,7 @@ error.
  7 files changed, 62 insertions(+), 1 deletion(-)
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index f23aa3c..1cd9816 100644
+index 95d0bce..c76b455 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -51,6 +51,8 @@ component("evdev") {
@@ -182,7 +182,7 @@ index 54ffd05..3122771 100644
  
    const raw_ptr<DeviceEventDispatcherEvdev> dispatcher_;
 diff --git a/ui/events/ozone/features.cc b/ui/events/ozone/features.cc
-index 73dcbb7..7b4f70c 100644
+index 2ea790d..d8a0a30 100644
 --- a/ui/events/ozone/features.cc
 +++ b/ui/events/ozone/features.cc
 @@ -18,6 +18,9 @@ BASE_FEATURE(kEnableNeuralPalmDetectionFilter,
@@ -194,9 +194,9 @@ index 73dcbb7..7b4f70c 100644
 +
  BASE_FEATURE(kEnableFakeMouseHeuristic, base::FEATURE_ENABLED_BY_DEFAULT);
  
- extern const base::FeatureParam<std::string> kNeuralPalmRadiusPolynomial{
+ BASE_FEATURE(kExcludeEvdevDispatchFromSafetyChecks,
 diff --git a/ui/events/ozone/features.h b/ui/events/ozone/features.h
-index a25a686..ec49139 100644
+index b3bc2db..7d5cd43 100644
 --- a/ui/events/ozone/features.h
 +++ b/ui/events/ozone/features.h
 @@ -39,6 +39,8 @@ COMPONENT_EXPORT(EVENTS_OZONE) BASE_DECLARE_FEATURE(kEnableInputEventLogging);
@@ -209,10 +209,10 @@ index a25a686..ec49139 100644
  BASE_DECLARE_FEATURE(kEnableFakeMouseHeuristic);
  
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 76bd429..4b4eb3e 100644
+index c682ea6..5c0ba08 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -275,6 +275,7 @@ source_set("gbm_unittests") {
+@@ -277,6 +277,7 @@ source_set("gbm_unittests") {
      # linked only into `events_unittests`, which no job here builds, and the
      # console is the one platform whose touchpad goes through libinput.
      "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",

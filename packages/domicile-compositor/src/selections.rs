@@ -8,9 +8,9 @@ use std::thread;
 use smithay::input::Seat;
 use smithay::wayland::{
     selection::data_device::{
-        current_data_device_selection_userdata, request_data_device_client_selection,
-        set_data_device_selection, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
-        ServerDndGrabHandler,
+        clear_data_device_selection, current_data_device_selection_userdata,
+        request_data_device_client_selection, set_data_device_selection, ClientDndGrabHandler,
+        DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
     },
     selection::ext_data_control::{
         DataControlHandler as ExtDataControlHandler, DataControlState as ExtDataControlState,
@@ -270,6 +270,15 @@ impl DomicileCompositor {
         self.tell_the_engine_a_clipboard(Clipboard::Copy);
     }
 
+    /// Empty the clipboard, after the shell removed the copy on it, so nothing
+    /// pastes it again: not Wayland clients, portal sessions or the browser.
+    pub fn empty_the_clipboard(&mut self) {
+        self.holding[at(Clipboard::Copy)] = None;
+        clear_data_device_selection(&self.display_handle, &self.seat);
+        self.hub.portals.selection_changed(Vec::new(), None);
+        self.tell_the_engine_a_clipboard(Clipboard::Copy);
+    }
+
     /// Tell a newly connected browser what is on both clipboards, so earlier
     /// copies can be pasted into it.
     pub fn tell_the_engine_the_copies(&self) {
@@ -359,7 +368,7 @@ impl DomicileCompositor {
         let (ours, theirs) = match clipboard::pipe() {
             Ok(ends) => ends,
             Err(err) => {
-                warn!(%err, "no pipe to read a copy over, so nothing is told what was copied");
+                tracing::error!(%err, "no pipe to read a copy over, so nothing is told what was copied");
                 return None;
             }
         };

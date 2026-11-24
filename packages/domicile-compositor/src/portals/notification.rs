@@ -12,7 +12,6 @@ use std::io::Read;
 
 use domicile_host::notifications::{Icon, LARGEST_FILE};
 use domicile_host::portal_notifications::{Action, Button, Invoked, PortalNotification, Priority};
-use tracing::warn;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{Fd, OwnedValue, Value};
 
@@ -86,7 +85,7 @@ pub fn invoked(
             .collect(),
     ));
     if let Err(why) = said {
-        warn!(%why, id = invoked.id, "a portal notification's action could not be said");
+        tracing::error!(%why, id = invoked.id, "a portal notification's action could not be said");
     }
 }
 

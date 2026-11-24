@@ -57,14 +57,22 @@ impl KdeDecorationHandler for DomicileCompositor {
         &self.kde_decoration_state
     }
 
+    /// Say "server side" once, when the decoration is created, as the protocol
+    /// asks.
+    fn new_decoration(&mut self, _surface: &WlSurface, decoration: &OrgKdeKwinServerDecoration) {
+        decoration.mode(KdeMode::Server);
+    }
+
+    /// Record the ask without answering it. GTK3 and Firefox answer every
+    /// `mode(Server)` by asking for client side again, so answering each ask
+    /// loops forever (#2466).
     fn request_mode(
         &mut self,
         surface: &WlSurface,
-        decoration: &OrgKdeKwinServerDecoration,
+        _decoration: &OrgKdeKwinServerDecoration,
         mode: WEnum<KdeMode>,
     ) {
         ask_to_draw_its_frame(surface, mode == WEnum::Value(KdeMode::Client));
-        decoration.mode(KdeMode::Server);
     }
 }
 

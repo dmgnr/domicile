@@ -131,3 +131,58 @@ fn voluntary_switches() -> u64 {
         .parse()
         .expect("a count")
 }
+
+#[test]
+fn a_heard_components_stderr_reaches_its_listener_line_by_line() {
+    // The engine's lines become journal entries one at a time, and the last
+    // ones, which say why it died, must not be lost when the run ends.
+    let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let listening = std::sync::Arc::clone(&said);
+    let mut running = Running::new();
+    running
+        .start_heard(
+            "engine",
+            &sh("printf 'first\\nsecond\\n' >&2"),
+            Box::new(move |line: &str| listening.lock().unwrap().push(line.to_string())),
+        )
+        .expect("it starts");
+
+    while running.exited().is_none() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    drop(running);
+
+    assert_eq!(*said.lock().unwrap(), ["first", "second"]);
+}
+
+#[test]
+fn a_heard_component_ends_even_when_something_it_started_keeps_its_stderr() {
+    // An app the engine starts can leave its group, as `setsid` does here,
+    // and still hold the engine's stderr. Ending the run must not wait for
+    // it.
+    let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let listening = std::sync::Arc::clone(&said);
+    let mut running = Running::new();
+    running
+        .start_heard(
+            "engine",
+            &sh("setsid sleep 30 & echo \"$!\" >&2; echo last >&2"),
+            Box::new(move |line: &str| listening.lock().unwrap().push(line.to_string())),
+        )
+        .expect("it starts");
+    while running.exited().is_none() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let ending = std::time::Instant::now();
+    drop(running);
+    let took = ending.elapsed();
+
+    let said = said.lock().unwrap().clone();
+    let _ = std::process::Command::new("kill").arg(&said[0]).status();
+    assert!(
+        took < std::time::Duration::from_secs(10),
+        "ending took {took:?}"
+    );
+    assert_eq!(said[1], "last");
+}

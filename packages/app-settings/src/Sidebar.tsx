@@ -3,14 +3,17 @@ import { CookieIcon } from "@phosphor-icons/react/dist/ssr/Cookie";
 import { GearSixIcon } from "@phosphor-icons/react/dist/ssr/GearSix";
 import { HandPalmIcon } from "@phosphor-icons/react/dist/ssr/HandPalm";
 import { KeyboardIcon } from "@phosphor-icons/react/dist/ssr/Keyboard";
+import { LifebuoyIcon } from "@phosphor-icons/react/dist/ssr/Lifebuoy";
 import { LockIcon } from "@phosphor-icons/react/dist/ssr/Lock";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/ssr/MagnifyingGlass";
 import { MonitorIcon } from "@phosphor-icons/react/dist/ssr/Monitor";
 import { PaletteIcon } from "@phosphor-icons/react/dist/ssr/Palette";
 import { PuzzlePieceIcon } from "@phosphor-icons/react/dist/ssr/PuzzlePiece";
+import { RobotIcon } from "@phosphor-icons/react/dist/ssr/Robot";
 import { RocketLaunchIcon } from "@phosphor-icons/react/dist/ssr/RocketLaunch";
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/ssr/ShieldCheck";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/ssr/SlidersHorizontal";
+import { UserCircleIcon } from "@phosphor-icons/react/dist/ssr/UserCircle";
 
 import { css } from "../styled-system/css";
 import { flex, hstack } from "../styled-system/patterns";
@@ -70,12 +73,18 @@ const PageIcon = ({ page }: { page: PageId }) => {
       return <SlidersHorizontalIcon size={18} />;
     case PageId.Extensions:
       return <PuzzlePieceIcon size={18} />;
+    case PageId.Profiles:
+      return <UserCircleIcon size={18} />;
+    case PageId.Agents:
+      return <RobotIcon size={18} />;
     case PageId.Permissions:
       return <HandPalmIcon size={18} />;
     case PageId.SiteData:
       return <CookieIcon size={18} />;
     case PageId.Code:
       return <CodeIcon size={18} />;
+    case PageId.Troubleshooting:
+      return <LifebuoyIcon size={18} />;
   }
 };
 

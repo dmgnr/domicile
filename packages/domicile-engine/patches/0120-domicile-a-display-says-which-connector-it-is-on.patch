@@ -116,7 +116,7 @@ index 3415cf4..0f6e828 100644
  
  }  // namespace display
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index d5eded9..d9d59df 100644
+index b9d418a..9dbb280 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -120,6 +120,8 @@ source_set("gbm") {
@@ -128,7 +128,7 @@ index d5eded9..d9d59df 100644
      "domicile/drm_cursor_factory.cc",
      "domicile/drm_cursor_factory.h",
      "domicile/drm_fullscreen.cc",
-@@ -258,6 +260,7 @@ source_set("gbm_unittests") {
+@@ -260,6 +262,7 @@ source_set("gbm_unittests") {
      "gpu/mock_drm_modifiers_filter.cc",
      "gpu/mock_drm_modifiers_filter.h",
      "gpu/proxy_helpers_unittest.cc",
@@ -227,10 +227,10 @@ index e3dc6dc..572e759 100644
    // And after event_factory_ozone_ for the same kind of reason: it observes
    // that event source for as long as it lives. And after modeset_, which it
 diff --git a/ui/ozone/public/ozone_platform.cc b/ui/ozone/public/ozone_platform.cc
-index 1c49edd..3515f7c 100644
+index 8076779..0007ba2 100644
 --- a/ui/ozone/public/ozone_platform.cc
 +++ b/ui/ozone/public/ozone_platform.cc
-@@ -135,6 +135,11 @@ PlatformClipboard* OzonePlatform::GetPlatformClipboard() {
+@@ -131,6 +131,11 @@ PlatformClipboard* OzonePlatform::GetPlatformClipboard() {
    return nullptr;
  }
  
@@ -243,10 +243,10 @@ index 1c49edd..3515f7c 100644
    return nullptr;
  }
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 41f9803..15330b0 100644
+index c130c12..96a3e2a 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
-@@ -422,6 +422,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -409,6 +409,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    using DomicileCopied = base::RepeatingCallback<
        void(ClipboardBuffer, const DomicileClipboardContents&)>;
    virtual void SetDomicileCopiedCallback(DomicileCopied copied) {}

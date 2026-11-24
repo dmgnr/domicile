@@ -75,12 +75,14 @@ gn gen "$OUT" --args="
   use_libinput = true
   import(\"//build/args/domicile_codecs.gn\")
   import(\"//build/args/domicile_trim.gn\")
+  import(\"//build/args/domicile_node.gn\")
 $CACHE_ARG" || exit 1
 
 # guard-css-and-resize.sh needs `domicile_css_parity`,
 # guard-webview-framing.sh needs `domicile_color_probe`,
 # guard-display-capture.sh needs `domicile_capture_probe`, and
-# guard-headless-desk.sh needs `domicile_desk_probe`.
+# guard-headless-desk.sh needs `domicile_desk_probe`, and
+# guard-engine-node.sh needs Electron's Node.
 exec autoninja -C "$OUT" chrome domicile_solid_color_submitter \
   domicile_css_parity domicile_color_probe domicile_capture_probe \
-  domicile_desk_probe
+  domicile_desk_probe third_party/electron_node:node

@@ -23,10 +23,10 @@ job builds it on `crux`. guard-notification-server-late.sh covers it.
  1 file changed, 39 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/notifications/notification_platform_bridge_linux.cc b/chrome/browser/notifications/notification_platform_bridge_linux.cc
-index 6d82b7f..498acbc 100644
+index 1de62d5..5c20e20 100644
 --- a/chrome/browser/notifications/notification_platform_bridge_linux.cc
 +++ b/chrome/browser/notifications/notification_platform_bridge_linux.cc
-@@ -48,6 +48,7 @@
+@@ -49,6 +49,7 @@
  #include "base/task/thread_pool.h"
  #include "base/threading/sequence_bound.h"
  #include "base/time/time.h"
@@ -34,7 +34,7 @@ index 6d82b7f..498acbc 100644
  #include "base/types/expected.h"
  #include "base/version.h"
  #include "chrome/browser/browser_process.h"
-@@ -89,6 +90,11 @@ namespace {
+@@ -98,6 +99,11 @@ namespace {
  const char kFreedesktopNotificationsName[] = "org.freedesktop.Notifications";
  const char kFreedesktopNotificationsPath[] = "/org/freedesktop/Notifications";
  
@@ -46,7 +46,7 @@ index 6d82b7f..498acbc 100644
  // DBus name / path / interface for portal notifications.
  const char kPortalDesktopName[] = "org.freedesktop.portal.Desktop";
  const char kPortalDesktopPath[] = "/org/freedesktop/portal/desktop";
-@@ -431,12 +437,23 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
+@@ -478,12 +484,23 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
    }
  
    // Sets up the D-Bus connection.
@@ -73,7 +73,7 @@ index 6d82b7f..498acbc 100644
    }
  
    // Makes the "Notify" call to D-Bus.
-@@ -629,6 +646,20 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
+@@ -699,6 +716,20 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
      CleanUp();
    }
  
@@ -94,7 +94,7 @@ index 6d82b7f..498acbc 100644
    void OnServiceStarted(std::optional<bool> service_started) {
      CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
      if (!service_started.value_or(false)) {
-@@ -1623,6 +1654,11 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
+@@ -1773,6 +1804,11 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
    scoped_refptr<dbus::Bus> bus_;
    raw_ptr<dbus::ObjectProxy> notification_proxy_ = nullptr;
  

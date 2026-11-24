@@ -3,8 +3,7 @@
 //!
 //! The engine owns input, so the deltas come from the chrome on
 //! [`ChromeMessage::PointerRelative`](domicile_protocol::ChromeMessage::PointerRelative),
-//! after the motion that took the pointer there. They are the accelerated
-//! deltas; the engine has no other, so they go out as unaccelerated too.
+//! after the motion that took the pointer there, accelerated and not.
 
 use smithay::delegate_relative_pointer;
 use smithay::input::pointer::RelativeMotionEvent;
@@ -12,11 +11,17 @@ use smithay::input::pointer::RelativeMotionEvent;
 use crate::DomicileCompositor;
 
 impl DomicileCompositor {
-    /// The pointer over `app_id` moved by `delta`, in its surface-local units.
+    /// The pointer over `app_id` moved by `delta`, in its surface-local units,
+    /// and by `delta_unaccel` before pointer acceleration.
     ///
     /// Dropped unless the pointer is over that app: a delta for an app it has
     /// left would reach whatever it is over now.
-    pub(crate) fn move_relatively(&mut self, app_id: &str, delta: (f64, f64)) {
+    pub(crate) fn move_relatively(
+        &mut self,
+        app_id: &str,
+        delta: (f64, f64),
+        delta_unaccel: (f64, f64),
+    ) {
         if self.pointer_app.as_deref() != Some(app_id) {
             tracing::debug!(%app_id, "relative motion off the app under the pointer -> dropped");
             return;
@@ -31,7 +36,7 @@ impl DomicileCompositor {
             Some((surface, (0.0, 0.0).into())),
             &RelativeMotionEvent {
                 delta: delta.into(),
-                delta_unaccel: delta.into(),
+                delta_unaccel: delta_unaccel.into(),
                 utime,
             },
         );

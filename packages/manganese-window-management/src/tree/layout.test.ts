@@ -282,6 +282,57 @@ describe("laidOut", () => {
     expect(focusedNodeOf(merged)).toMatchObject({ layout: Layout.Tabbed });
   });
 
+  describe("on a group already in that layout", () => {
+    const SIDE_BY_SIDE = withFocusOn(
+      {
+        depth: 0,
+        root: LayoutNode.Container(Layout.SplitH, [
+          LayoutNode.Container(Layout.Tabbed, [LayoutNode.Window("a")]),
+          LayoutNode.Container(Layout.Tabbed, [
+            LayoutNode.Window("b"),
+            LayoutNode.Window("c"),
+          ]),
+        ]),
+      },
+      "b",
+    );
+
+    it("merges the split around it", () => {
+      const merged = laidOut(SIDE_BY_SIDE, Layout.Tabbed);
+
+      expect(merged.root).toMatchObject({
+        children: [{ id: "a" }, { id: "b" }, { id: "c" }],
+        focused: 1,
+        layout: Layout.Tabbed,
+      });
+      expect(focusedIdOf(merged)).toBe("b");
+    });
+
+    it("selects the merged group when the group was selected", () => {
+      const merged = laidOut(focusedParent(SIDE_BY_SIDE), Layout.Tabbed);
+
+      expect(focusedNodeOf(merged)).toMatchObject({
+        children: [{ id: "a" }, { id: "b" }, { id: "c" }],
+        layout: Layout.Tabbed,
+      });
+    });
+
+    it("leaves a group with no split around it", () => {
+      const group = {
+        depth: 1,
+        root: LayoutNode.Container(Layout.Tabbed, [
+          LayoutNode.Window("a"),
+          LayoutNode.Window("b"),
+        ]),
+      };
+
+      expect(laidOut(group, Layout.Tabbed).root).toMatchObject({
+        children: [{ id: "a" }, { id: "b" }],
+        layout: Layout.Tabbed,
+      });
+    });
+  });
+
   it("gives a workspace of one window the container it needs", () => {
     const tabbed = laidOut(ONLY, Layout.Tabbed);
 

@@ -10,6 +10,11 @@ selection. Source: `src/`.
 - The current copy is in its own group above the rows, not a row, since
   choosing it would change nothing. Searching hides it and narrows only the
   rows. The highlight starts on the copy before it.
+- **Remove** drops a copy: the lit row's button, Delete with nothing after the
+  caret, or the current copy's button on hover. Removing the current copy
+  empties the clipboard, and the group is gone until the next copy. The row
+  button is for the pointer only (`aria-hidden`, out of the tab order); the
+  keyboard has Delete.
 
 ## Why
 
@@ -25,8 +30,11 @@ so the copy outlives the client that copied it.
 - The compositor pushes the history to the page, so the panel is current when
   it opens.
 - A row is an id and a preview of up to 480 characters. The full copy stays in
-  the compositor; `copyClipboardEntry` takes the id. This limits how much of a
-  copied secret reaches the page.
+  the compositor; `copyClipboardEntry` and `removeClipboardEntry` take the id.
+  This limits how much of a copied secret reaches the page.
+- `current` marks the row on the clipboard: the newest, unless it was removed.
+  Removing it clears the seat's selection, so Wayland clients, portal sessions
+  and the browser paste nothing.
 - Text and images. A copy keeps its text and one image (PNG if offered, else
   the first `image/` type). An image-only row reads `Image, 1920 × 1080`, or
   `Image (image/webp)` when it is not a PNG. Its `image` is true, and a PNG's

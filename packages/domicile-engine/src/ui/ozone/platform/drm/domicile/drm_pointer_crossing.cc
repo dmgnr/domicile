@@ -202,6 +202,20 @@ std::optional<PointerHeard> PointerHeardAt(
                       location - on->bounds_in_screen.OffsetFromOrigin()};
 }
 
+std::optional<PointerCrossing> PointerStaysAt(
+    const std::vector<PointerScreen>& screens,
+    const gfx::PointF& location) {
+  const auto on =
+      std::ranges::find_if(screens, [&](const PointerScreen& screen) {
+        return screen.bounds_in_screen.Contains(gfx::ToFlooredPoint(location));
+      });
+  if (on == screens.end()) {
+    return std::nullopt;
+  }
+  return PointerCrossing{on->window,
+                         location - on->bounds_in_screen.OffsetFromOrigin()};
+}
+
 bool HasTheKeyboard(const gfx::Rect& bounds_in_screen,
                     const gfx::PointF& pointer) {
   return bounds_in_screen.Contains(gfx::ToFlooredPoint(pointer));

@@ -39,6 +39,11 @@ export type WebApp = {
   appId: string;
   name: string;
   url: string;
+  /**
+   * The id of the browser profile its window opens in, such as `work`. By
+   * default, the one its site opens in.
+   */
+  profile?: string | undefined;
 };
 
 /** What is installed, as read on an opening. */
@@ -124,6 +129,7 @@ const webAppEntry = (app: WebApp): InstalledEntry => ({
     app.appId,
     "--reuse",
     "focus",
+    ...(app.profile === undefined ? [] : ["--profile", app.profile]),
     app.url,
   ],
   comment: "",

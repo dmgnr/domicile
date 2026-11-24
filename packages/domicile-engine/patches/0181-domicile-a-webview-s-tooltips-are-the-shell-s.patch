@@ -57,10 +57,10 @@ index 9d7adba..dd040a0 100644
    // Get the offset for the current touch sequence. e.g. visible top controls or
    // side UI will result in a nonzero offset being added to touch events.
 diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
-index dac75ae..187461d 100644
+index 3b4536e..ac42a40d 100644
 --- a/content/browser/renderer_host/render_widget_host_impl.cc
 +++ b/content/browser/renderer_host/render_widget_host_impl.cc
-@@ -3058,6 +3058,11 @@ void RenderWidgetHostImpl::UpdateTooltipUnderCursor(
+@@ -3096,6 +3096,11 @@ void RenderWidgetHostImpl::UpdateTooltipUnderCursor(
      return;
    }
  
@@ -73,10 +73,10 @@ index dac75ae..187461d 100644
        GetWrappedTooltipText(tooltip_text, text_direction_hint));
  }
 diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
-index 9fa62ad..ba8a904 100644
+index 0a6167b..3a2ef76 100644
 --- a/content/browser/web_contents/web_contents_impl.cc
 +++ b/content/browser/web_contents/web_contents_impl.cc
-@@ -5515,6 +5515,11 @@ bool WebContentsImpl::IsFullscreen() {
+@@ -5524,6 +5524,11 @@ bool WebContentsImpl::IsFullscreen() {
    return delegate_ && delegate_->IsFullscreenForTabOrPending(this);
  }
  
@@ -89,10 +89,10 @@ index 9fa62ad..ba8a904 100644
    if (WasDiscarded()) {
      return false;
 diff --git a/content/browser/web_contents/web_contents_impl.h b/content/browser/web_contents/web_contents_impl.h
-index 31c5a06..577e0a5 100644
+index 3064c28..ca9bb41 100644
 --- a/content/browser/web_contents/web_contents_impl.h
 +++ b/content/browser/web_contents/web_contents_impl.h
-@@ -1168,6 +1168,8 @@ class CONTENT_EXPORT WebContentsImpl
+@@ -1166,6 +1166,8 @@ class CONTENT_EXPORT WebContentsImpl
                                  float ratio) override;
    void SetTopControlsGestureScrollInProgress(bool in_progress) override;
    void RenderWidgetCreated(RenderWidgetHostImpl* render_widget_host) override;
@@ -102,10 +102,10 @@ index 31c5a06..577e0a5 100644
    void RenderWidgetWasResized(RenderWidgetHostImpl* render_widget_host,
                                bool width_changed) override;
 diff --git a/content/public/browser/web_contents_delegate.cc b/content/public/browser/web_contents_delegate.cc
-index 0b44d8b..ec5d8d7 100644
+index dae35c9..be86d01 100644
 --- a/content/public/browser/web_contents_delegate.cc
 +++ b/content/public/browser/web_contents_delegate.cc
-@@ -211,6 +211,12 @@ bool WebContentsDelegate::IsFullscreenForTabOrPending(
+@@ -215,6 +215,12 @@ bool WebContentsDelegate::IsFullscreenForTabOrPending(
    return false;
  }
  
@@ -119,10 +119,10 @@ index 0b44d8b..ec5d8d7 100644
      const WebContents* web_contents) const {
    FullscreenState state;
 diff --git a/content/public/browser/web_contents_delegate.h b/content/public/browser/web_contents_delegate.h
-index b3c8934..2fadec5 100644
+index a5f7f87..40be833 100644
 --- a/content/public/browser/web_contents_delegate.h
 +++ b/content/public/browser/web_contents_delegate.h
-@@ -572,6 +572,13 @@ class CONTENT_EXPORT WebContentsDelegate {
+@@ -585,6 +585,13 @@ class CONTENT_EXPORT WebContentsDelegate {
    // can name the page that keeps the screens on.
    virtual void ScreenWakeLockChanged(WebContents* source, bool held) {}
  

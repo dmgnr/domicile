@@ -12,6 +12,7 @@ describe(QuickTile, () => {
         detail="Centar"
         icon={<span />}
         label="Wi-Fi"
+        lit
         onMore={() => {
           opened.resolve(true);
         }}
@@ -28,14 +29,39 @@ describe(QuickTile, () => {
 
   it("switches nothing", () => {
     render(
-      <QuickTile icon={<span />} label="Wi-Fi" onMore={() => undefined} />,
+      <QuickTile
+        icon={<span />}
+        label="Wi-Fi"
+        lit={false}
+        onMore={() => undefined}
+      />,
     );
 
     expect(screen.getByRole("button")).not.toHaveAttribute("aria-pressed");
   });
 
+  it("lights its icon only while lit", () => {
+    const { rerender } = render(
+      <QuickTile icon={<span />} label="Wi-Fi" lit onMore={() => undefined} />,
+    );
+    expect(screen.getByRole("button")).toHaveAttribute("data-lit");
+
+    rerender(
+      <QuickTile
+        icon={<span />}
+        label="Wi-Fi"
+        lit={false}
+        onMore={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button")).not.toHaveAttribute("data-lit");
+  });
+
   it("only shows its state without details", () => {
-    render(<QuickTile detail="On" icon={<span />} label="Bluetooth" />);
+    render(
+      <QuickTile detail="On" icon={<span />} label="Bluetooth" lit={false} />,
+    );
 
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("Bluetooth")).toBeVisible();

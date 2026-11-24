@@ -1,14 +1,15 @@
 import { ContextMenu } from "@domicile-desktop/component-library/ContextMenu";
 import { Fragment } from "react";
+import { css } from "../../styled-system/css";
 
-import type { PageMenuCommand, PageMenuItem } from "./page-menu";
+import type { PageMenuItem } from "./page-menu";
 
 type Props = {
   /** Where the click was, in the viewport's CSS pixels. */
   at: { x: number; y: number };
   /** The menu, in groups a line goes between — see `pageMenuFor`. */
   items: PageMenuItem[][];
-  onChoose: (command: PageMenuCommand) => void;
+  onChoose: (item: PageMenuItem) => void;
   /** It closed: chosen from, or put away with Escape or a press outside. */
   onClose: () => void;
 };
@@ -26,21 +27,34 @@ export const PageMenu = ({ at, items, onChoose, onClose }: Props) => (
     open
   >
     {items.map((group, index) => (
-      <Fragment key={group.map((item) => item.command).join()}>
+      <Fragment key={group.map(keyOf).join()}>
         {index > 0 && <ContextMenu.Separator />}
         {group.map((item) => (
           <ContextMenu.Item
             disabled={item.disabled}
-            key={item.command}
+            key={keyOf(item)}
             onClick={() => {
-              onChoose(item.command);
+              onChoose(item);
             }}
             shortcut={item.shortcut}
           >
-            {item.label}
+            {item.replacement === undefined ? (
+              item.label
+            ) : (
+              <span className={suggestionStyles}>{item.label}</span>
+            )}
           </ContextMenu.Item>
         ))}
       </Fragment>
     ))}
   </ContextMenu>
 );
+
+/** Spelling suggestions share a command, so their words tell them apart. */
+const keyOf = (item: PageMenuItem): string =>
+  item.replacement === undefined
+    ? item.command
+    : `${item.command}:${item.replacement}`;
+
+/** A misspelled word's suggestions stand out from the commands below them. */
+const suggestionStyles = css({ fontWeight: "semibold" });

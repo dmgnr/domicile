@@ -322,6 +322,67 @@ out="$(DOMICILE_TREE_WAIT=2 DOMICILE_TREE_POLL=1 DOMICILE_TREE_RECHECK=0 \
 contains "a check that cannot answer leaves the wait alone" "held after waiting 2s" "$out"
 
 echo
+echo "== a run waits for the tree at its pin rather than rebuilding another =="
+
+# A tree at another pin rebuilds from scratch, about four hours, while the run
+# holding this pin's tree is usually done within the hour. The nightly official
+# build of 2026-11-23 took the other tree a minute before this pin's came free.
+root="$(build_root 2)"
+carrying "$root" 0 aaaaaaa
+carrying "$root" 1 bbbbbbb
+DOMICILE_BUILD_ROOT="$root" "$LOCK_SH" take "$root/trees/tree-0/src" 'holder' >/dev/null 2>&1
+waiting_pick "$root" aaaaaaa 'pin waiter'
+waiter=$!
+# Until it waits: the pool takes seconds to start on a busy machine, and a
+# drop before then would let it take the tree without waiting.
+for _ in $(seq 60); do
+  [ -d "$root/.domicile-tree-waiter" ] && break
+  sleep 0.5
+done
+expect "it leaves the free tree at another pin alone while it waits" absent \
+  "$([ -d "$(lock_of "$root" tree-1)" ] && echo present || echo absent)"
+DOMICILE_BUILD_ROOT="$root" "$LOCK_SH" drop "$root/trees/tree-0/src" 'holder' >/dev/null
+wait "$waiter"
+expect "and takes the tree at its pin once it is dropped" "$root/trees/tree-0/src" \
+  "$(grep "^/" "$WORK/pin waiter" | tail -1)"
+contains "saying why it waited" "rather than rebuilding another" "$(cat "$WORK/pin waiter")"
+
+# The wait is bounded: past it, rebuilding beats waiting longer.
+root="$(build_root 2)"
+carrying "$root" 0 aaaaaaa
+carrying "$root" 1 bbbbbbb
+DOMICILE_BUILD_ROOT="$root" "$LOCK_SH" take "$root/trees/tree-0/src" 'holder' >/dev/null 2>&1
+out="$(DOMICILE_TREE_WAIT=2 DOMICILE_TREE_POLL=1 pick "$root" aaaaaaa 'impatient run')"
+expect "a run that waited its limit takes the tree at another pin" "$root/trees/tree-1/src" \
+  "$(printf '%s\n' "$out" | grep "^/" | tail -1)"
+contains "and warns that it rebuilds it" "took a tree at another pin" "$out"
+expect "and gives up the waiting place" absent \
+  "$([ -e "$root/.domicile-tree-waiter" ] && echo present || echo absent)"
+
+# Only one run waits (see above). A second run on the same pin rebuilds the
+# other tree rather than wait.
+root="$(build_root 2)"
+carrying "$root" 0 aaaaaaa
+carrying "$root" 1 bbbbbbb
+DOMICILE_BUILD_ROOT="$root" "$LOCK_SH" take "$root/trees/tree-0/src" 'holder' >/dev/null 2>&1
+mkdir "$root/.domicile-tree-waiter"
+echo 'first waiter' >"$root/.domicile-tree-waiter/owner"
+touch "$root/.domicile-tree-waiter/alive"
+out="$(DOMICILE_TREE_WAIT=20 DOMICILE_TREE_POLL=1 pick "$root" aaaaaaa 'second run')"
+expect "with a run already waiting, it takes the tree at another pin at once" \
+  "$root/trees/tree-1/src" "$(printf '%s\n' "$out" | grep "^/" | tail -1)"
+contains "naming the run that waits" "first waiter" "$out"
+
+# With no tree at the pin there is nothing to wait for.
+root="$(build_root 2)"
+carrying "$root" 0 bbbbbbb
+carrying "$root" 1 ccccccc
+DOMICILE_BUILD_ROOT="$root" "$LOCK_SH" take "$root/trees/tree-0/src" 'holder' >/dev/null 2>&1
+out="$(DOMICILE_TREE_WAIT=20 DOMICILE_TREE_POLL=1 pick "$root" aaaaaaa 'new pin')"
+expect "a run on a pin no tree carries takes a free tree at once" \
+  "$root/trees/tree-1/src" "$out"
+
+echo
 echo "== a tree held by a run that is over is cleared =="
 
 # A runner shut down mid-build never runs its drop step, and the tree stays

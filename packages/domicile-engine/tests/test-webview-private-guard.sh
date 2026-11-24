@@ -110,16 +110,16 @@ expect "a window not listed private is a failure" "fail" \
   "$(verdict 0 WINDOW_PRIVATE=0)"
 expect "a window without the cookie is a failure" "fail" \
   "$(verdict 0 WINDOW_HAS=0)"
-expect "and names DeskWindows::Make" "yes" \
-  "$(blames "DeskWindows::Make" 0 WINDOW_HAS=0)"
+expect "and names ContextFor" "yes" \
+  "$(blames "ContextFor picks the" 0 WINDOW_HAS=0)"
 expect "an unlisted window is a failure" "fail" "$(verdict 0 SAW_WINDOW=0)"
 expect "no reader after closing is a failure" "fail" "$(verdict 0 SAW_AFTER=0)"
 expect "the cookie outliving its pages is a failure" "fail" \
   "$(verdict 0 AFTER_HAS=1)"
 expect "and names PrivatePageClosed when nothing ended" "yes" \
   "$(blames "PrivatePageClosed" 0 AFTER_HAS=1 SAW_ENDED=0)"
-expect "and names PrivateProfile when it ended" "yes" \
-  "$(blames "DeskWindows::PrivateProfile" 0 AFTER_HAS=1)"
+expect "and names ContextOf when it ended" "yes" \
+  "$(blames "BrowserProfileRegistry::ContextOf" 0 AFTER_HAS=1)"
 
 echo
 echo "the control — the cookie set in an ordinary <webview>"

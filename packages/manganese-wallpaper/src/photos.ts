@@ -18,14 +18,19 @@ import fallbackDark from "./fallback-dark.jpg";
 import fallbackLight from "./fallback-light.jpg";
 
 /**
- * Requested width: 4K, for every screen.
- *
- * The page renders at one `devicePixelRatio` across all displays, so there is
- * no per-screen size (see `screens/host-displays`). Width only, because
- * `object-fit: cover` handles the crop. Commons does not upscale narrower
- * files.
+ * The widths Commons serves a scaled photograph at that a screen can use, up
+ * to 4K. Commons rounds any other width up to the next of these.
+ */
+const COMMONS_WIDTHS: readonly number[] = [1920, 3840];
+
+/**
+ * Requested width in `src`: 4K, the largest a screen uses. {@link sourceSet}
+ * offers the smaller ones.
  */
 const PHOTO_WIDTH = 3840;
+
+/** Where Commons serves its files by title. */
+const FILE_PATH = "https://commons.wikimedia.org/wiki/Special:FilePath/";
 
 /**
  * The Commons URL for the file `title` at {@link PHOTO_WIDTH}, such as
@@ -34,7 +39,51 @@ const PHOTO_WIDTH = 3840;
  * Defined before {@link DEFAULT_WALLPAPERS}, which calls it at module load.
  */
 export const commonsPhoto = (title: string): string =>
-  `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(title)}?width=${PHOTO_WIDTH.toString()}`;
+  commonsFile(encodeURIComponent(title), PHOTO_WIDTH);
+
+const commonsFile = (encodedTitle: string, width: number): string =>
+  `${FILE_PATH}${encodedTitle}?width=${width.toString()}`;
+
+/**
+ * An `<img srcset>` for `src` when it is a {@link commonsPhoto}: the
+ * photograph at each width Commons serves, so the engine fetches and decodes
+ * the smallest that covers the screen. A 4K photograph decoded for a 1080p
+ * screen holds four times the memory it shows. `undefined` for any other
+ * address, which has one file.
+ */
+export const sourceSet = (src: string): string | undefined => {
+  const match = COMMONS_PHOTO.exec(src);
+  const title = match?.[1];
+  return title === undefined
+    ? undefined
+    : COMMONS_WIDTHS.map(
+        (width) => `${commonsFile(title, width)} ${width.toString()}w`,
+      ).join(", ");
+};
+
+/** A {@link commonsPhoto} address; the group is the encoded title. */
+const COMMONS_PHOTO = new RegExp(
+  `^${FILE_PATH.replaceAll(".", "\\.")}([^?]+)\\?width=${PHOTO_WIDTH.toString()}$`,
+);
+
+/**
+ * The widest photographs are this shape. One covering a screen of another
+ * shape is cropped, so it shows wider than the screen when the screen is
+ * taller than this.
+ */
+const WIDEST_PHOTO = 16 / 9;
+
+/**
+ * An `<img sizes>` for a photograph covering a screen of `size`, in page
+ * pixels: wide enough to cover it at any shape the photographs come in. The
+ * whole page before the screens are known.
+ */
+export const photoSizes = (
+  size: readonly [width: number, height: number] | undefined,
+): string =>
+  size === undefined
+    ? "100vw"
+    : `${Math.ceil(Math.max(size[0], size[1] * WIDEST_PHOTO)).toString()}px`;
 
 /** Each theme's built-in photographs, used where the config sets none. */
 export const DEFAULT_WALLPAPERS: Readonly<Record<Theme, readonly string[]>> = {

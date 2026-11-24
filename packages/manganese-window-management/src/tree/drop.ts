@@ -109,7 +109,8 @@ const landed = (tiling: Tiling, node: LayoutNode, selected: boolean): Tiling =>
  *
  * Removes it first, like a keyed `move`, so the tree collapses as after a
  * close before the target is located. A tab moved beside another tab of its
- * strip only moves along it, so a strip of two keeps a nested group in it.
+ * strip only moves along it, so a strip of two keeps a nested group in it. A
+ * node dropped beside a group that holds only it takes the group's place.
  */
 const movedOnto = (
   root: LayoutNode,
@@ -137,6 +138,12 @@ const movedOnto = (
     return replacedAt(root, around, () =>
       movedAlong(parent, fromAt, toAt, isForward(edge)),
     );
+  } else if (
+    startsWith(from, to) &&
+    withoutAt(nodeAt(root, to), from.slice(to.length)) === undefined
+  ) {
+    // The group it is dropped beside holds only it, and goes with it.
+    return replacedAt(root, to, () => nodeAt(root, from));
   } else {
     const rest = withoutAt(root, from);
     if (rest === undefined) {

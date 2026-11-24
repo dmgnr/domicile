@@ -25,6 +25,16 @@ nix run github:cprussin/domicile/release#simple
   "How to switch" button opens the install docs.
 - With Nix, each desktop is its own app. Install one with
   `nix profile install`.
+- `/release` and `/stable` download from Domicile's binary cache instead of
+  building. `nix run` asks to trust it if you are in `trusted-users`; a NixOS
+  config trusts it for everyone with:
+
+  ```nix
+  nix.settings = {
+    substituters = [ "https://packages.domicile-desktop.com/nix" ];
+    trusted-public-keys = [ "packages.domicile-desktop.com-1:iAulr298MtC52WMi2GPI8bqPEvOXHoQtSRAGOo0ny90=" ];
+  };
+  ```
 - In a Wayland session the desktop opens in a window. On a console login it
   takes the screen; no setting is needed
   ([how](/docs/architecture/A-DESKTOP-ON-A-TTY.md)).
@@ -74,6 +84,9 @@ Settings live in `~/.config/domicile/domicile.json` (or `.ts`/`.js`). Reference:
   cgroup. A nested desktop leaves its apps to the host session.
 - An app's own children stay in its scope: `systemctl --user status` shows them
   under it.
+- Each scope is `PartOf=graphical-session.target`: when the desk's session
+  ends, its apps stop, daemons they left behind (such as `emacs --daemon`)
+  included.
 
 ### Links open on the desktop
 
@@ -373,6 +386,17 @@ It provides:
   services bound to `graphical-session.target` and `~/.config/autostart`
   entries start with it. The package is also on the system profile, so the
   portal finds `domicile-mimeapps.list`.
+- **A build check that Domicile loads your graphics driver**, when
+  `hardware.graphics.enable` is set. The compositor and the engine load the
+  driver in `/run/opengl-driver` with Domicile's own glibc, so a driver from a
+  newer nixpkgs does not load and the desktop draws without the graphics card.
+  The check fails the system build instead. Fix it by building Domicile from
+  your nixpkgs:
+
+  ```nix
+  inputs.domicile.inputs.nixpkgs.follows = "nixpkgs";
+  ```
+
 - **Portal routing**, when `xdg.portal.enable` is set. Domicile is the only
   backend and the shell draws every dialog. `domicile-portals.conf` sends
   `Secret` to `gnome-keyring`, which you install (`oo7-portal` works too).
@@ -445,18 +469,14 @@ Then [finish the install](#after-installing).
 
 ### A `stable` commit
 
-Each commit `stable` moves to is released as packages on GitHub:
-
-- **`packages-latest`** holds the newest packages under fixed names, so the
-  commands below always fetch them.
-- **`packages-<commit>`** holds each commit's packages, with the version in
-  their names:
-  [releases](https://github.com/cprussin/domicile/releases?q=packages-&expanded=true).
+Each commit `stable` moves to replaces the packages in
+[`packages-latest`](https://github.com/cprussin/domicile-builds/releases/tag/packages-latest),
+under fixed names, so the commands below always fetch the newest.
 
 Download your distribution's package and `SHA256SUMS`, and check the package:
 
 ```sh
-base=https://github.com/cprussin/domicile/releases/download/packages-latest
+base=https://github.com/cprussin/domicile-builds/releases/download/packages-latest
 pkg=domicile_amd64.deb   # your package from the table below
 curl -fL -O "$base/$pkg" -O "$base/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS

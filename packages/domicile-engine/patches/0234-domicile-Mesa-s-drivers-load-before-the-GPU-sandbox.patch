@@ -1,0 +1,205 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Tue, 17 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: Mesa's drivers load before the GPU sandbox
+
+A card the browser hands the GPU process after its sandbox is up opens
+Mesa's GBM backend inside the sandbox. The loader then looks up each
+library the backend links by path through the broker, which refuses
+those outside Mesa's directories. On NixOS each library is in its own
+store path, so LLVM was refused and the card showed only software
+output (#2225):
+
+  MESA-LOADER: failed to open dri: libLLVM.so.21.1: cannot open shared
+  object file: Permission denied
+
+LoadDomicileMesaDrivers loads every `*_gbm.so` and `*_dri.so` in Mesa's
+directories (beside libgbm, /run/opengl-driver/lib, GBM_BACKENDS_PATH,
+LIBGL_DRIVERS_PATH) before the sandbox, as Chromium does for AMD on
+ChromeOS. Inside the sandbox the loader finds the linked libraries
+already loaded, by name. A driver that does not load logs the loader's
+reason as an error, such as a glibc it needs that the engine lacks.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ content/common/gpu_pre_sandbox_hook_linux.cc | 133 +++++++++++++++----
+ 1 file changed, 104 insertions(+), 29 deletions(-)
+
+diff --git a/content/common/gpu_pre_sandbox_hook_linux.cc b/content/common/gpu_pre_sandbox_hook_linux.cc
+index cb0f0a6..db56824 100644
+--- a/content/common/gpu_pre_sandbox_hook_linux.cc
++++ b/content/common/gpu_pre_sandbox_hook_linux.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/common/gpu_pre_sandbox_hook_linux.h"
+ 
++#include <dirent.h>
+ #include <dlfcn.h>
+ #include <errno.h>
+ #include <stdlib.h>
+@@ -12,6 +13,8 @@
+ #include <array>
+ #include <memory>
+ #include <sstream>
++#include <string>
++#include <string_view>
+ #include <utility>
+ #include <vector>
+ 
+@@ -451,47 +454,118 @@ void AddVulkanICDPermissions(std::vector<BrokerFilePermission>* permissions) {
+   }
+ }
+ 
+-// DOMICILE: what Mesa opens for a card the browser hands the GPU process
+-// after the sandbox is up: on a tty every card arrives that way, so GBM on
+-// it (gbm_create_device) runs inside the sandbox. Without these, Mesa's
+-// GBM backend (`gbm/dri_gbm.so` since Mesa 25), the libraries it links, the
+-// card's render node and its sysfs entry are refused with EACCES, and the
+-// card shows only software output. Read-only, except the render nodes.
+-void AddDomicileMesaGpuPermissions(
+-    std::vector<BrokerFilePermission>* permissions) {
+-  permissions->push_back(BrokerFilePermission::ReadOnly("/etc/ld.so.cache"));
+-  permissions->push_back(
+-      BrokerFilePermission::ReadOnlyRecursive("/usr/share/drirc.d/"));
++// DOMICILE: where Mesa's GBM backends and DRI drivers are. The directory
++// libgbm came from holds `gbm/`, `dri/` and the libraries they link on
++// Debian, Fedora and Arch. NixOS puts the drivers under /run/opengl-driver.
++// GBM_BACKENDS_PATH and LIBGL_DRIVERS_PATH move them.
++struct DomicileMesaDirs {
++  // Each holds `gbm/` and `dri/`.
++  std::vector<std::string> libraries;
++  // From GBM_BACKENDS_PATH: each holds `*_gbm.so`.
++  std::vector<std::string> backends;
++  // From LIBGL_DRIVERS_PATH: each holds `*_dri.so`.
++  std::vector<std::string> drivers;
++};
++
++// DOMICILE: the directories `variable` lists, each ending in a separator.
++std::vector<std::string> DomicilePathsIn(const char* variable) {
++  std::vector<std::string> dirs;
++  const char* value = getenv(variable);
++  if (!value) {
++    return dirs;
++  }
++  std::stringstream paths(value);
++  std::string path;
++  while (std::getline(paths, path, ':')) {
++    if (!path.empty()) {
++      dirs.push_back(base::FilePath(path).AsEndingWithSeparator().value());
++    }
++  }
++  return dirs;
++}
+ 
+-  // The directory libgbm came from holds `gbm/`, `dri/` and the libraries
+-  // they link on Debian, Fedora and Arch. NixOS puts the drivers under
+-  // /run/opengl-driver. GBM_BACKENDS_PATH and LIBGL_DRIVERS_PATH move them.
+-  std::vector<std::string> library_dirs = {"/run/opengl-driver/lib/"};
++DomicileMesaDirs FindDomicileMesaDirs() {
++  DomicileMesaDirs dirs;
++  dirs.libraries.push_back("/run/opengl-driver/lib/");
+   void* gbm = dlopen("libgbm.so.1", RTLD_NOW);
+   Dl_info info;
+   if (gbm && dladdr(dlsym(gbm, "gbm_create_device"), &info)) {
+-    library_dirs.push_back(base::FilePath(info.dli_fname)
+-                               .DirName()
+-                               .AsEndingWithSeparator()
+-                               .value());
++    dirs.libraries.push_back(base::FilePath(info.dli_fname)
++                                 .DirName()
++                                 .AsEndingWithSeparator()
++                                 .value());
+   } else {
+     LOG(ERROR) << "domicile: no libgbm to find Mesa's drivers by; GBM may "
+                   "be refused in the GPU sandbox";
+   }
+-  for (const char* variable : {"GBM_BACKENDS_PATH", "LIBGL_DRIVERS_PATH"}) {
+-    const char* value = getenv(variable);
+-    if (!value) {
++  dirs.backends = DomicilePathsIn("GBM_BACKENDS_PATH");
++  dirs.drivers = DomicilePathsIn("LIBGL_DRIVERS_PATH");
++  return dirs;
++}
++
++// DOMICILE: loads every `*<suffix>` in `dir`, which may not exist. A file
++// that does not load is an error: GBM on a card that needs it fails too.
++void LoadDomicileMesaDriversIn(const std::string& dir,
++                               std::string_view suffix) {
++  DIR* listing = opendir(dir.c_str());
++  if (!listing) {
++    return;
++  }
++  while (const dirent* entry = readdir(listing)) {
++    std::string_view name(entry->d_name);
++    if (!name.ends_with(suffix)) {
+       continue;
+     }
+-    std::stringstream paths(value);
+-    std::string path;
+-    while (std::getline(paths, path, ':')) {
+-      if (!path.empty()) {
+-        library_dirs.push_back(
+-            base::FilePath(path).AsEndingWithSeparator().value());
+-      }
++    std::string path = dir + entry->d_name;
++    if (!dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE)) {
++      LOG(ERROR) << "domicile: cannot load " << path
++                 << " before the GPU sandbox, so GBM on a card that needs "
++                    "it fails: "
++                 << dlerror();
+     }
+   }
++  closedir(listing);
++}
++
++// DOMICILE: loads Mesa's GBM backends and DRI drivers, and so the libraries
++// they link, before the sandbox is up. A card the browser hands the GPU
++// process later opens its backend inside the sandbox, and the loader then
++// looks each linked library up by path through the broker. The broker refuses
++// the ones outside Mesa's directories, such as LLVM in its own Nix store path
++// ("libLLVM.so.21.1: Permission denied"). Loaded now, they are found by name.
++void LoadDomicileMesaDrivers() {
++  DomicileMesaDirs dirs = FindDomicileMesaDirs();
++  for (const std::string& dir : dirs.libraries) {
++    LoadDomicileMesaDriversIn(dir + "gbm/", "_gbm.so");
++    LoadDomicileMesaDriversIn(dir + "dri/", "_dri.so");
++  }
++  for (const std::string& dir : dirs.backends) {
++    LoadDomicileMesaDriversIn(dir, "_gbm.so");
++  }
++  for (const std::string& dir : dirs.drivers) {
++    LoadDomicileMesaDriversIn(dir, "_dri.so");
++  }
++}
++
++// DOMICILE: what Mesa opens for a card the browser hands the GPU process
++// after the sandbox is up: on a tty every card arrives that way, so GBM on
++// it (gbm_create_device) runs inside the sandbox. Without these, Mesa's
++// GBM backend (`gbm/dri_gbm.so` since Mesa 25), the card's render node and
++// its sysfs entry are refused with EACCES, and the card shows only software
++// output. Read-only, except the render nodes. The libraries the backend
++// links are loaded before the sandbox (LoadDomicileMesaDrivers).
++void AddDomicileMesaGpuPermissions(
++    std::vector<BrokerFilePermission>* permissions) {
++  permissions->push_back(BrokerFilePermission::ReadOnly("/etc/ld.so.cache"));
++  permissions->push_back(
++      BrokerFilePermission::ReadOnlyRecursive("/usr/share/drirc.d/"));
++
++  DomicileMesaDirs dirs = FindDomicileMesaDirs();
++  std::vector<std::string> library_dirs = dirs.libraries;
++  library_dirs.insert(library_dirs.end(), dirs.backends.begin(),
++                      dirs.backends.end());
++  library_dirs.insert(library_dirs.end(), dirs.drivers.begin(),
++                      dirs.drivers.end());
+   for (const std::string& dir : library_dirs) {
+     permissions->push_back(BrokerFilePermission::ReadOnlyRecursive(dir));
+   }
+@@ -761,6 +835,7 @@ bool LoadLibrariesForGpu(
+         LoadChromecastV4L2Libraries();
+       }
+     }
++    LoadDomicileMesaDrivers();
+   }
+   if (options.use_nvidia_specific_policies)
+     return LoadNvidiaLibraries();

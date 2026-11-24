@@ -152,10 +152,10 @@ index 0000000..8cccbe0
 +   // If the local frame root is an OOPIF itself, then we use the root's
 +   // intersection rect. This represents a conservative maximum for the area
 diff --git a/third_party/blink/renderer/core/frame/remote_frame.cc b/third_party/blink/renderer/core/frame/remote_frame.cc
-index bd6da8c..5c917bf 100644
+index 1c0f81a..5d1bd5b 100644
 --- a/third_party/blink/renderer/core/frame/remote_frame.cc
 +++ b/third_party/blink/renderer/core/frame/remote_frame.cc
-@@ -990,7 +990,17 @@ bool RemoteFrame::SynchronizeVisualProperties(
+@@ -1034,7 +1034,17 @@ bool RemoteFrame::SynchronizeVisualProperties(
          view_->GetCompositingScaleFactor();
    }
  
@@ -174,7 +174,7 @@ index bd6da8c..5c917bf 100644
        !sent_visual_properties_ ||
        sent_visual_properties_->auto_resize_enabled !=
            pending_visual_properties_.auto_resize_enabled ||
-@@ -1000,8 +1010,6 @@ bool RemoteFrame::SynchronizeVisualProperties(
+@@ -1044,8 +1054,6 @@ bool RemoteFrame::SynchronizeVisualProperties(
            pending_visual_properties_.max_size_for_auto_resize ||
        sent_visual_properties_->local_frame_size !=
            pending_visual_properties_.local_frame_size ||
@@ -183,7 +183,7 @@ index bd6da8c..5c917bf 100644
        sent_visual_properties_->screen_infos !=
            pending_visual_properties_.screen_infos ||
        sent_visual_properties_->zoom_level !=
-@@ -1010,8 +1018,6 @@ bool RemoteFrame::SynchronizeVisualProperties(
+@@ -1054,8 +1062,6 @@ bool RemoteFrame::SynchronizeVisualProperties(
            pending_visual_properties_.css_zoom_factor ||
        sent_visual_properties_->page_scale_factor !=
            pending_visual_properties_.page_scale_factor ||
@@ -192,7 +192,7 @@ index bd6da8c..5c917bf 100644
        sent_visual_properties_->cursor_accessibility_scale_factor !=
            pending_visual_properties_.cursor_accessibility_scale_factor ||
        sent_visual_properties_->is_pinch_gesture_active !=
-@@ -1022,6 +1028,7 @@ bool RemoteFrame::SynchronizeVisualProperties(
+@@ -1066,6 +1072,7 @@ bool RemoteFrame::SynchronizeVisualProperties(
            pending_visual_properties_.compositor_viewport ||
        sent_visual_properties_->root_widget_viewport_segments !=
            pending_visual_properties_.root_widget_viewport_segments;
@@ -200,7 +200,7 @@ index bd6da8c..5c917bf 100644
    if (synchronized_props_changed)
      parent_local_surface_id_allocator_->GenerateId();
    pending_visual_properties_.local_surface_id = GetLocalSurfaceId();
-@@ -1032,15 +1039,20 @@ bool RemoteFrame::SynchronizeVisualProperties(
+@@ -1076,15 +1083,20 @@ bool RemoteFrame::SynchronizeVisualProperties(
    DCHECK(surface_id.is_valid());
    DCHECK(!remote_process_gone_);
  
@@ -227,7 +227,7 @@ index bd6da8c..5c917bf 100644
    bool rect_changed = !sent_visual_properties_ ||
                        sent_visual_properties_->rect_in_local_root !=
 diff --git a/third_party/blink/renderer/core/frame/remote_frame_view.cc b/third_party/blink/renderer/core/frame/remote_frame_view.cc
-index ce4ff7f..5ebc498 100644
+index 2e0b1bb..0c955f1 100644
 --- a/third_party/blink/renderer/core/frame/remote_frame_view.cc
 +++ b/third_party/blink/renderer/core/frame/remote_frame_view.cc
 @@ -19,6 +19,7 @@

@@ -2,13 +2,13 @@ import type { Option, Result } from "@cprussin/option-result";
 import { Button } from "@domicile-desktop/component-library/Button";
 import type { Detail } from "@domicile-desktop/component-library/DetailList";
 import { DetailList } from "@domicile-desktop/component-library/DetailList";
+import { DrilldownPage } from "@domicile-desktop/component-library/Drilldown";
 import { EmptyState } from "@domicile-desktop/component-library/EmptyState";
 import { IconButton } from "@domicile-desktop/component-library/IconButton";
 import { Input } from "@domicile-desktop/component-library/Input";
 import { List, ListRow } from "@domicile-desktop/component-library/ListRow";
 import { Loading } from "@domicile-desktop/component-library/Loading";
 import { PanelFooter } from "@domicile-desktop/component-library/PanelFooter";
-import { PanelNote } from "@domicile-desktop/component-library/PanelNote";
 import { PanelSection } from "@domicile-desktop/component-library/PanelSection";
 import { Switch } from "@domicile-desktop/component-library/Switch";
 import { Tooltip } from "@domicile-desktop/component-library/Tooltip";
@@ -22,15 +22,17 @@ import type {
   WifiNetwork,
 } from "@domicile-desktop/system-network/wifi";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/ssr/ArrowClockwise";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/ssr/CaretRight";
 import { LockSimpleIcon } from "@phosphor-icons/react/dist/ssr/LockSimple";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/ssr/MagnifyingGlass";
 import { WifiHighIcon } from "@phosphor-icons/react/dist/ssr/WifiHigh";
 import { WifiSlashIcon } from "@phosphor-icons/react/dist/ssr/WifiSlash";
-import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { hstack } from "../styled-system/patterns";
 import type { Addresses } from "./addressing";
 import { addressRowsOf, COPYABLE } from "./addressing";
+import { Failure } from "./Failure";
+import { SavedNetworks } from "./SavedNetworks";
 import { signalOf } from "./signal";
 import { speedOf } from "./speed";
 import { WifiSignalIcon } from "./WifiSignalIcon";
@@ -49,7 +51,9 @@ type Props = {
 /**
  * The Wi-Fi section: a switch for the radio on its heading, the connection
  * with its details folded away, then the other networks in range, each
- * joined with a click. Nothing without a Wi-Fi device.
+ * joined with a click. A button on the heading opens a page of the saved
+ * networks, radio on or off. Nothing without a Wi-Fi device. Goes in a
+ * `Drilldown`, which shows the page.
  *
  * Scans when shown. A refusal shows plainly where it was asked, with the
  * service's words in its tooltip; the service's state shows the rest.
@@ -65,9 +69,12 @@ export const WifiPanel = ({ actions, addresses, host, wifi }: Props) => {
     return wifi.match({
       Err: (error) => (
         <PanelSection label="Wi-Fi">
-          <PanelNote detail={error.message} tone="warning">
-            Couldn't read Wi-Fi
-          </PanelNote>
+          <EmptyState
+            detail={error.message}
+            hint="Close this and open it again in a moment."
+            title="Couldn't read Wi-Fi"
+            tone="warning"
+          />
         </PanelSection>
       ),
       Ok: (found) =>
@@ -96,6 +103,7 @@ type ControlsProps = {
 const Controls = ({ actions, addresses, host, wifi }: ControlsProps) => {
   const requests = useRequests();
   const [asking, setAsking] = useState<string | undefined>(undefined);
+  const [savedOpen, setSavedOpen] = useState(false);
   const { backend, device, interface: name } = wifi;
   const scanning = wifi.scanning || requests.pending("scan");
   const join = (network: WifiNetwork, passphrase: string | undefined) => {
@@ -113,6 +121,19 @@ const Controls = ({ actions, addresses, host, wifi }: ControlsProps) => {
     <PanelSection
       action={
         <span className={headStyles}>
+          {wifi.saved.length > 0 && (
+            <Button
+              afterIcon={<CaretRightIcon aria-hidden size={10} weight="bold" />}
+              onClick={() => {
+                setSavedOpen(true);
+              }}
+              rounded
+              size="xs"
+              variant="ghost"
+            >
+              {`${wifi.saved.length} saved`}
+            </Button>
+          )}
           {wifi.enabled && (scanning || !empty) && (
             <Tooltip
               content="Scan"
@@ -209,7 +230,7 @@ const Controls = ({ actions, addresses, host, wifi }: ControlsProps) => {
           {!scanning &&
             others.length === 0 &&
             wifi.connection !== undefined && (
-              <PanelNote>No other networks nearby</PanelNote>
+              <EmptyState layout="inline" title="No other networks nearby" />
             )}
           <Failure error={requests.failed("disconnect")}>
             Couldn't disconnect
@@ -224,6 +245,16 @@ const Controls = ({ actions, addresses, host, wifi }: ControlsProps) => {
           icon={WifiSlashIcon}
           title="Wi-Fi is off"
         />
+      )}
+      {savedOpen && (
+        <DrilldownPage
+          onBack={() => {
+            setSavedOpen(false);
+          }}
+          title="Saved networks"
+        >
+          <SavedNetworks actions={actions} host={host} wifi={wifi} />
+        </DrilldownPage>
       )}
     </PanelSection>
   );
@@ -294,7 +325,7 @@ const Connection = ({
           onClick={onDisconnect}
           rounded
           size="xs"
-          variant="ghost"
+          variant="dangerGhost"
         >
           Disconnect
         </Button>
@@ -385,20 +416,6 @@ const Passphrase = ({
     </form>
   );
 };
-
-/** What failed, in plain words, with the service's in its tooltip. */
-const Failure = ({
-  children,
-  error,
-}: {
-  children: ReactNode;
-  error: SystemError | undefined;
-}) =>
-  error !== undefined && (
-    <PanelNote detail={error.message} tone="warning">
-      {children}
-    </PanelNote>
-  );
 
 /** A new secured network, whose passphrase the service does not know. */
 const needsPassphrase = (network: WifiNetwork): boolean =>

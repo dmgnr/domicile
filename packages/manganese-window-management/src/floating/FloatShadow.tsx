@@ -1,14 +1,16 @@
-import { useRef } from "react";
+import { useContext, useRef } from "react";
 
 import { cva, cx } from "../../styled-system/css";
 import type { Rect } from "../rect";
 import type { Restack } from "../restacking";
+import { SlidingScreen } from "../sliding-screen";
 import { useLowered } from "../useLowered";
 import type { Settler } from "../useSettling";
 import { useSettling } from "../useSettling";
 import type { WindowMotion } from "../window-motion";
 import { isMoving } from "../window-motion";
 import {
+  clippedAlong,
   heldStyles,
   movingStyles,
   originOf,
@@ -58,6 +60,7 @@ export const FloatShadow = ({
 }: Props) => {
   const element = useRef<HTMLDivElement>(null);
   const lowered = useLowered(depth);
+  const sliding = useContext(SlidingScreen);
   useSettling({
     element,
     origin: originOf(frame, frame),
@@ -77,6 +80,7 @@ export const FloatShadow = ({
       ref={element}
       style={{
         ...placedAt(frame, depth),
+        ...clippedAlong(sliding, frame),
         ...scaledAbout(frame, frame),
         ...shuffledBy(restack),
       }}

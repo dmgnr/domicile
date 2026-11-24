@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/check.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 
@@ -35,9 +36,16 @@ ShortcutRegistry::ChannelId ShortcutRegistry::AddChannel(
 
 void ShortcutRegistry::RemoveChannel(ChannelId channel) {
   base::AutoLock held(lock_);
-  std::erase_if(channels_, [channel](const Channel& registered) {
-    return registered.id == channel;
-  });
+  auto found = std::ranges::find(channels_, channel, &Channel::id);
+  CHECK(found != channels_.end());
+  const bool outgoing = found->outgoing;
+  channels_.erase(found);
+  if (outgoing) {
+    std::erase_if(grabbed_, [channel](const Claim& claim) {
+      return claim.channel == channel;
+    });
+    return;
+  }
   std::vector<Claim> kept;
   for (const Claim& claim : grabbed_) {
     const Claim left_over{claim.chord,
@@ -47,6 +55,15 @@ void ShortcutRegistry::RemoveChannel(ChannelId channel) {
     }
   }
   grabbed_ = std::move(kept);
+}
+
+void ShortcutRegistry::ShellChanged() {
+  base::AutoLock held(lock_);
+  std::erase_if(grabbed_,
+                [](const Claim& claim) { return claim.channel == kLeftOver; });
+  for (Channel& channel : channels_) {
+    channel.outgoing = true;
+  }
 }
 
 void ShortcutRegistry::Grab(ChannelId channel, const Chord& chord) {

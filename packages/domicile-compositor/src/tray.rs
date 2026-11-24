@@ -13,7 +13,11 @@
 //!   application must not stall the others. An item has at most one read in
 //!   flight (see [`Reads`]).
 //! - Clicks arrive through the Wayland thread, which refuses them while
-//!   locked (see [`crate::lock::refused`]).
+//!   locked (see [`crate::lock::refused`]). Each carries an `xdg-activation`
+//!   token, given to the item with `ProvideXdgActivationToken`, which also
+//!   lets the item's process raise its window with a token of its own (see
+//!   [`crate::activation::invites`]). A window in a hidden tab or on another
+//!   workspace is then shown.
 //! - Failure leaves the tray empty and logs once. A bare tty may have no
 //!   session bus, and a nested desktop may find the watcher name taken.
 
@@ -21,6 +25,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -51,6 +56,10 @@ const ITEM_INTERFACE: &str = "org.kde.StatusNotifierItem";
 /// hung item would hold its read, and its thread, forever.
 const ANSWER_WITHIN: Duration = Duration::from_secs(3);
 
+/// The longest wait before reading an item that timed out again. The waits
+/// double from [`ANSWER_WITHIN`] up to this.
+const RETRY_AT_MOST: Duration = Duration::from_secs(60);
+
 /// Work for the worker thread.
 enum Event {
     /// `RegisterStatusNotifierItem(service)`, from `sender`.
@@ -66,10 +75,19 @@ enum Event {
         sequence: u64,
         properties: zbus::Result<HashMap<String, OwnedValue>>,
     },
-    /// A shell clicked an icon.
-    Activate { id: String, action: TrayAction },
+    /// A shell clicked an entry of the menu on `bus`, with a `token` to raise
+    /// a window with. The click itself is the shell's own D-Bus call.
+    Provide { bus: String, token: String },
+    /// A shell clicked an icon, with a `token` to raise a window with.
+    Activate {
+        id: String,
+        action: TrayAction,
+        token: String,
+    },
     /// The config's icon theme changed.
     Rethemed { theme: Option<String> },
+    /// Time to read item `id` again, after a read that timed out.
+    Retry { id: String },
 }
 
 /// A handle that forwards clicks to tray items.
@@ -79,13 +97,40 @@ enum Event {
 #[derive(Debug, Clone)]
 pub struct Tray {
     told: Sender<Event>,
+    /// The process behind each item, by its name for shells and by its bus.
+    pids: Arc<Mutex<Pids>>,
+}
+
+/// The process behind each item, as [`Registry::pids`] and
+/// [`Registry::pids_on_buses`] give them.
+#[derive(Debug, Default)]
+struct Pids {
+    by_name: HashMap<String, u32>,
+    by_bus: HashMap<String, u32>,
 }
 
 impl Tray {
-    /// Sends a click with `action` to the item `id`.
-    pub fn activate(&self, id: String, action: TrayAction) {
+    /// The process behind item `id`, if known.
+    pub fn pid(&self, id: &str) -> Option<u32> {
+        self.pids.lock().unwrap().by_name.get(id).copied()
+    }
+
+    /// The process behind the item answering on `bus`, if known.
+    pub fn pid_on(&self, bus: &str) -> Option<u32> {
+        self.pids.lock().unwrap().by_bus.get(bus).copied()
+    }
+
+    /// Hands the item on `bus`, whose menu was clicked, `token`.
+    pub fn provide(&self, bus: String, token: String) {
         // A closed channel means the worker stopped and already logged why.
-        let _ = self.told.send(Event::Activate { id, action });
+        let _ = self.told.send(Event::Provide { bus, token });
+    }
+
+    /// Sends a click with `action` to the item `id`, with `token` to raise a
+    /// window with.
+    pub fn activate(&self, id: String, action: TrayAction, token: String) {
+        // A closed channel means the worker stopped and already logged why.
+        let _ = self.told.send(Event::Activate { id, action, token });
     }
 
     /// Redraws every icon in the icon theme `theme`.
@@ -107,17 +152,19 @@ pub fn serve(
 ) -> Tray {
     let (told, events) = channel();
     let heard = told.clone();
+    let pids = Arc::default();
+    let traced = Arc::clone(&pids);
     thread::spawn(move || {
         let icons = TrayIcons::new(data_dirs, theme);
-        if let Err(why) = answer(heard, &events, icons, in_a_window, &publish) {
-            warn!(
+        if let Err(why) = answer(heard, &events, icons, in_a_window, &traced, &publish) {
+            tracing::error!(
                 %why,
                 "the system tray is not being hosted; this desktop's applications \
                  will show no tray icons"
             );
         }
     });
-    Tray { told }
+    Tray { told, pids }
 }
 
 /// Takes the bus names, serves the watcher and handles events in turn.
@@ -127,6 +174,7 @@ fn answer(
     events: &Receiver<Event>,
     mut icons: TrayIcons,
     in_a_window: bool,
+    pids: &Mutex<Pids>,
     publish: &dyn Fn(Vec<TrayItem>),
 ) -> zbus::Result<()> {
     let connection = answering_within(Builder::session()?).build()?;
@@ -169,6 +217,8 @@ fn answer(
         .interface::<_, Watcher>(WATCHER_PATH)?;
     let mut registry = Registry::default();
     let mut reads = Reads::default();
+    // Reads in a row that timed out, by item, for the wait before the next.
+    let mut timeouts: HashMap<String, u32> = HashMap::new();
     // Ends when every sender is dropped, when the compositor exits.
     for event in events {
         match event {
@@ -177,7 +227,8 @@ fn answer(
                 // well-known name that later changes hands is tracked by
                 // `Owner`.
                 let (bus, path) = address(&service, &sender);
-                if let Some(id) = registry.register(&bus, &sender, &path) {
+                let pid = pid(&connection, &sender);
+                if let Some(id) = registry.register(&bus, &sender, &path, pid) {
                     debug!(%id, "a tray icon registered");
                     listed(&watcher, &registry, Some(&id), None);
                     read(&connection, &told, &mut reads, &registry, &id);
@@ -192,10 +243,14 @@ fn answer(
                 for id in registry.vanished(&name) {
                     debug!(%id, "a tray icon went away");
                     reads.forget(&id);
+                    timeouts.remove(&id);
                     listed(&watcher, &registry, None, Some(&id));
                 }
             }
-            Event::Owner { name, owner } => registry.moved(&name, &owner),
+            Event::Owner { name, owner } => {
+                let pid = pid(&connection, &owner);
+                registry.moved(&name, &owner, pid);
+            }
             Event::Read {
                 id,
                 sequence,
@@ -204,6 +259,7 @@ fn answer(
                 if let Landed::Current { again } = reads.landed(&id, sequence) {
                     match properties {
                         Ok(properties) => {
+                            timeouts.remove(&id);
                             let properties = parse(properties);
                             let name = registry.named(&id, &properties.id);
                             let (bus, _) = registry
@@ -212,14 +268,25 @@ fn answer(
                             registry.show(&id, item(&name, &bus, properties, &mut icons));
                         }
                         // Kept registered but hidden: there is nothing to
-                        // draw. Its next signal reads it again.
+                        // draw. Its next signal reads it again, and so does
+                        // a wait after a timeout: an application busy
+                        // starting up, as many are at login, answers late
+                        // and may never signal.
                         Err(why) => {
-                            if timed_out(&why) && reads.hung(&id) {
-                                warn!(
-                                    %id,
-                                    "a tray icon did not answer within {ANSWER_WITHIN:?}; \
-                                     it is hidden until it signals a change"
-                                );
+                            if timed_out(&why) {
+                                let wait = retry_after(timeouts.entry(id.clone()).or_default());
+                                if reads.hung(&id) {
+                                    warn!(
+                                        %id,
+                                        "a tray icon did not answer within {ANSWER_WITHIN:?}; \
+                                         it is hidden until it answers, asked again in {wait:?}"
+                                    );
+                                } else {
+                                    debug!(%id, ?wait, "a tray icon timed out again");
+                                }
+                                if again.is_none() {
+                                    retry(&told, &id, wait);
+                                }
                             } else {
                                 debug!(%id, %why, "a tray icon could not be read");
                             }
@@ -231,8 +298,19 @@ fn answer(
                     }
                 }
             }
-            Event::Activate { id, action } => {
-                activate(&connection, &registry, &id, action);
+            Event::Provide { bus, token } => {
+                for path in registry.paths_on(&bus) {
+                    provide(&connection, &bus, &path, &token);
+                }
+            }
+            Event::Activate { id, action, token } => {
+                activate(&connection, &registry, &id, action, &token);
+            }
+            Event::Retry { id } => {
+                // Unless it went away meanwhile.
+                if registry.address(&id).is_some() {
+                    read(&connection, &told, &mut reads, &registry, &id);
+                }
             }
             // Read every item again: the registry keeps what it drew, not the
             // names it drew from.
@@ -243,6 +321,10 @@ fn answer(
                 }
             }
         }
+        *pids.lock().unwrap() = Pids {
+            by_name: registry.pids(),
+            by_bus: registry.pids_on_buses(),
+        };
         publish(registry.items());
     }
     Ok(())
@@ -274,7 +356,7 @@ fn listed(
         zbus::Result::Ok(())
     });
     if let Err(why) = said {
-        warn!(%why, "the tray could not say its items changed");
+        tracing::error!(%why, "the tray could not say its items changed");
     }
 }
 
@@ -314,6 +396,26 @@ fn start(
     });
 }
 
+/// The wait before reading an item again after its `timeouts`-th read in a
+/// row timed out, counting this one: [`ANSWER_WITHIN`], doubling up to
+/// [`RETRY_AT_MOST`].
+fn retry_after(timeouts: &mut u32) -> Duration {
+    *timeouts = timeouts.saturating_add(1);
+    ANSWER_WITHIN
+        .saturating_mul(1 << (*timeouts - 1).min(16))
+        .min(RETRY_AT_MOST)
+}
+
+/// Sends [`Event::Retry`] for `id` after `wait`.
+fn retry(told: &Sender<Event>, id: &str, wait: Duration) {
+    let (told, id) = (told.clone(), id.to_string());
+    thread::spawn(move || {
+        thread::sleep(wait);
+        // A closed channel means the worker stopped and already logged why.
+        let _ = told.send(Event::Retry { id });
+    });
+}
+
 /// `builder` with calls that fail after [`ANSWER_WITHIN`].
 fn answering_within(builder: Builder<'_>) -> Builder<'_> {
     builder.method_timeout(ANSWER_WITHIN)
@@ -334,22 +436,55 @@ fn get_all(
         .and_then(|proxy| proxy.call("GetAll", &(ITEM_INTERFACE,)))
 }
 
-/// Calls the method for `action` on item `id`.
+/// Calls the method for `action` on item `id`, after handing it `token`.
 ///
 /// Does not wait for a reply: an error (such as `Activate` on a menu-only
-/// item) changes nothing, and a slow application must not stall the tray.
-fn activate(connection: &Connection, registry: &Registry, id: &str, action: TrayAction) {
+/// item, or `ProvideXdgActivationToken` on an item without it) changes
+/// nothing, and a slow application must not stall the tray.
+fn activate(
+    connection: &Connection,
+    registry: &Registry,
+    id: &str,
+    action: TrayAction,
+    token: &str,
+) {
     let Some((bus, path)) = registry.clicked(id) else {
         debug!(%id, "a click on a tray icon that has gone");
         return;
     };
-    // Screen coordinates, used only by X11 items to place a window. Wayland
-    // clients cannot place windows, so send the origin.
-    let called = Proxy::new(connection, bus.as_str(), path.as_str(), ITEM_INTERFACE)
-        .and_then(|proxy| proxy.call_noreply(method(action), &(0i32, 0i32)));
+    let called =
+        Proxy::new(connection, bus.as_str(), path.as_str(), ITEM_INTERFACE).and_then(|proxy| {
+            proxy.call_noreply("ProvideXdgActivationToken", &(token,))?;
+            // Screen coordinates, used only by X11 items to place a window.
+            // Wayland clients cannot place windows, so send the origin.
+            proxy.call_noreply(method(action), &(0i32, 0i32))
+        });
     if let Err(why) = called {
         debug!(%id, %why, "a tray icon could not be clicked");
     }
+}
+
+/// Hands the item at `path` on `bus` `token`, for a click on its menu.
+fn provide(connection: &Connection, bus: &str, path: &str, token: &str) {
+    let called = Proxy::new(connection, bus, path, ITEM_INTERFACE)
+        .and_then(|proxy| proxy.call_noreply("ProvideXdgActivationToken", &(token,)));
+    if let Err(why) = called {
+        debug!(%bus, %why, "a tray icon could not be handed a token");
+    }
+}
+
+/// The process behind connection `name`, as the bus knows it. `None` if the
+/// bus will not say, which is logged: a click on its icon then cannot let it
+/// raise its window with a token of its own.
+fn pid(connection: &Connection, name: &str) -> Option<u32> {
+    zbus::blocking::fdo::DBusProxy::new(connection)
+        .and_then(|bus| {
+            let name = zbus::names::BusName::try_from(name).map_err(zbus::Error::from)?;
+            bus.get_connection_unix_process_id(name)
+                .map_err(zbus::Error::from)
+        })
+        .inspect_err(|why| warn!(%why, %name, "a tray icon's process could not be asked"))
+        .ok()
 }
 
 /// Converts an item's `GetAll` reply to [`Properties`]. A missing or
@@ -521,6 +656,17 @@ mod tests {
     use crate::portals::socket_pair::connected_both;
     use std::time::Instant;
     use zbus::zvariant::{ObjectPath, Value};
+
+    #[test]
+    fn a_hung_item_is_asked_again_ever_more_slowly() {
+        let mut timeouts = 0;
+        let waits: Vec<Duration> = (0..7).map(|_| retry_after(&mut timeouts)).collect();
+        assert_eq!(
+            waits,
+            [3, 6, 12, 24, 48, 60, 60].map(Duration::from_secs),
+            "doubling from the answer timeout, capped"
+        );
+    }
 
     #[test]
     fn a_read_of_an_item_that_never_answers_times_out() {

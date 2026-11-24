@@ -52,8 +52,7 @@ std::optional<double> DeskZoomFactor(double asked,
 }
 
 bool DeskTakesZoomSettings(std::string_view mode, std::string_view scope) {
-  return (mode.empty() || mode == "automatic") &&
-         (scope.empty() || scope == "per-origin");
+  return scope != "per-origin" || mode.empty() || mode == "automatic";
 }
 
 bool TakesActiveOnFocus(std::string_view scheme) {

@@ -5,7 +5,7 @@
 //! `WAYLAND_DISPLAY`.
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
 
@@ -13,7 +13,7 @@ use crate::ConfigError;
 ///
 /// Run once, when the compositor starts. A reload does not rerun them, which
 /// would start duplicates, or stop them, which would kill programs in use.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct StartupConfig {
     /// Each an argv, run without a shell. For shell syntax, use

@@ -6,7 +6,8 @@
 use std::ffi::OsString;
 
 use domicile_test_client::arguments::{
-    arguments, ArgumentError, Arguments, AskForFocus, AskTo, HoldTheScreensOn, TakeTheShortcuts,
+    arguments, ArgumentError, Arguments, AskForFocus, AskTo, DeepFormat, HoldTheScreensOn,
+    TakeTheShortcuts,
 };
 use wayland_client::protocol::wl_output::Transform;
 
@@ -284,6 +285,12 @@ fn asking_for_the_keyboard_twice_is_refused_like_any_other_repeat() {
 }
 
 #[test]
+fn a_client_can_be_asked_to_show_a_tray_icon() {
+    assert!(!given(&[]).expect("nothing").tray);
+    assert!(given(&["--tray"]).expect("a client in the tray").tray);
+}
+
+#[test]
 fn a_client_can_be_given_something_to_copy() {
     let asked = given(&["--copy", "hello"]).expect("a client with something to copy");
 
@@ -342,6 +349,15 @@ fn a_client_can_be_asked_to_scroll_its_window_under_a_bubble() {
     assert!(asked.scrolling_bubble);
     assert!(!asked.bubble, "the bubble that grows is another flag");
     assert!(!given(&[]).unwrap().scrolling_bubble);
+}
+
+#[test]
+fn a_client_can_be_asked_to_move_its_scrolling_bubble_a_frame_late() {
+    let asked = given(&["--scrolling-bubble", "--late-bubble"])
+        .expect("a client whose bubble scrolls a frame late");
+    assert!(asked.scrolling_bubble);
+    assert!(asked.late_bubble);
+    assert!(!given(&["--scrolling-bubble"]).unwrap().late_bubble);
 }
 
 #[test]
@@ -436,6 +452,33 @@ fn a_turn_wl_output_has_no_name_for_is_refused() {
         given(&["--buffer-transform", "45"]),
         Err(ArgumentError::NotATransform {
             value: "45".to_string(),
+        })
+    );
+}
+
+#[test]
+fn a_client_can_be_asked_to_draw_in_a_deep_format() {
+    for (value, format) in [
+        ("abgr2101010", DeepFormat::Abgr2101010),
+        ("xbgr2101010", DeepFormat::Xbgr2101010),
+        ("abgr16161616f", DeepFormat::Abgr16161616f),
+        ("xbgr16161616f", DeepFormat::Xbgr16161616f),
+    ] {
+        assert_eq!(given(&["--format", value]).unwrap().format, Some(format));
+    }
+    assert_eq!(
+        given(&[]).unwrap().format,
+        None,
+        "and in 8 bits unless asked"
+    );
+}
+
+#[test]
+fn a_format_without_more_than_8_bits_is_refused() {
+    assert_eq!(
+        given(&["--format", "argb8888"]),
+        Err(ArgumentError::NotADeepFormat {
+            value: "argb8888".to_string(),
         })
     );
 }

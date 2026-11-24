@@ -247,6 +247,19 @@ describe("Mixer", () => {
       ]);
     });
 
+    it("leaves the hardware behind a filter out of an app's outputs", async () => {
+      mixer(heldSound(), {
+        ...laptop,
+        outputs: laptop.outputs.map((output) =>
+          output.id === "output:hdmi" ? { ...output, filtered: true } : output,
+        ),
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /^Firefox/ }));
+
+      expect(await options("Plays on")).toStrictEqual(["Speakers"]);
+    });
+
     it("can record from what an output plays", async () => {
       const sound = heldSound();
       mixer(sound);

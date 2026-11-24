@@ -4,12 +4,15 @@ import { desktop } from "./desktop";
 
 const display = {
   adaptiveSync: "unsupported" as const,
+  hdr: "unsupported" as const,
   height: 1080,
   modeHeight: 1080,
   modeWidth: 1920,
   name: "left",
+  peakLuminance: 0,
   refreshMhz: 60_000,
   scale: 1,
+  sdrWhite: 0,
   transform: "rotate-90" as const,
   width: 1920,
   x: 0,
@@ -44,6 +47,27 @@ describe("displays", () => {
     expect(
       desktop(fake.host).displays.list?.map(({ adaptiveSync }) => adaptiveSync),
     ).toStrictEqual(["on", "off", "unsupported"]);
+  });
+
+  it("says whether each screen is in HDR, with an unknown state read as unsupported", () => {
+    const fake = new FakeDomicileHost();
+    fake.set({
+      displays: [
+        { ...display, hdr: "on", peakLuminance: 1000, sdrWhite: 203 },
+        { ...display, hdr: "off", peakLuminance: 600 },
+        { ...display, hdr: "dolby-vision" },
+      ],
+    });
+
+    expect(
+      desktop(fake.host).displays.list?.map(
+        ({ hdr, peakLuminance, sdrWhite }) => [hdr, peakLuminance, sdrWhite],
+      ),
+    ).toStrictEqual([
+      ["on", 1000, 203],
+      ["off", 600, 0],
+      ["unsupported", 0, 0],
+    ]);
   });
 
   it("says the screens changed", async () => {

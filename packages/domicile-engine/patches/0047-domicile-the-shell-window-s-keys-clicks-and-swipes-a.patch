@@ -29,10 +29,10 @@ windows are <webview> guests, whose delegate is WebViewGuest.
  2 files changed, 22 insertions(+), 17 deletions(-)
 
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-index b89a449..2f8a419 100644
+index 5b0f5bb..a5a82af 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-@@ -385,23 +385,29 @@ content::KeyboardEventProcessingResult
+@@ -386,23 +386,29 @@ content::KeyboardEventProcessingResult
  BrowserWebContentsDelegate::PreHandleKeyboardEvent(
      content::WebContents* source,
      const input::NativeWebKeyboardEvent& event) {
@@ -74,7 +74,7 @@ index b89a449..2f8a419 100644
  }
  
  void BrowserWebContentsDelegate::RequestPointerLock(
-@@ -465,11 +471,8 @@ void BrowserWebContentsDelegate::SetTopControlsGestureScrollInProgress(
+@@ -466,11 +472,8 @@ void BrowserWebContentsDelegate::SetTopControlsGestureScrollInProgress(
  }
  
  bool BrowserWebContentsDelegate::CanOverscrollContent() {
@@ -87,7 +87,7 @@ index b89a449..2f8a419 100644
  }
  
  bool BrowserWebContentsDelegate::ShouldPreserveAbortedURLs(
-@@ -913,7 +916,7 @@ void BrowserWebContentsDelegate::ContentsMouseEvent(
+@@ -914,7 +917,7 @@ void BrowserWebContentsDelegate::ContentsMouseEvent(
  }
  
  void BrowserWebContentsDelegate::ContentsZoomChange(bool zoom_in) {
@@ -97,7 +97,7 @@ index b89a449..2f8a419 100644
  
  bool BrowserWebContentsDelegate::TakeFocus(content::WebContents* source,
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h
-index e472bcf..2b71b82 100644
+index 958984d..0423e08 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h
 @@ -60,6 +60,8 @@ class BrowserWebContentsDelegate : public content::WebContentsDelegate {

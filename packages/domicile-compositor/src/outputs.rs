@@ -11,12 +11,14 @@ use smithay::wayland::{
     compositor::with_states,
     fractional_scale::{with_fractional_scale, FractionalScaleHandler},
     output::OutputHandler,
+    shell::xdg::ToplevelSurface,
 };
 use smithay::{delegate_fractional_scale, delegate_output};
-use tracing::debug;
+use tracing::{debug, info};
 
 use domicile_config::Config;
 
+use crate::color_management::Description;
 use crate::eis::barriers::Zone;
 use crate::screens::{pointer_targets, Advertised, Screens, Slot};
 use crate::{grepped, CalloopData, DomicileCompositor};
@@ -247,6 +249,7 @@ impl DomicileCompositor {
         let desktop = {
             let mut host = self.hub.host.lock().unwrap();
             host.describe_displays(self.screens.outputs().map(Advertised::described).collect());
+            host.describe_monitors(self.screens.outputs().map(Advertised::monitor).collect());
             host.describe_desktop()
         };
         self.hub.broadcast(desktop);
@@ -287,11 +290,27 @@ impl DomicileCompositor {
             return;
         }
         let plan = self.screens.rearranged_into(&screens);
-        debug!(
+        info!(
             displays = screens.outputs().count(),
             retired = plan.retired.len(),
             "taking up a reloaded desktop"
         );
+        for advertised in screens.outputs() {
+            debug!(
+                name = %advertised.name,
+                connector = %advertised.connector,
+                display = ?advertised.display,
+                position = ?advertised.position,
+                logical = ?advertised.logical,
+                mode = ?advertised.mode,
+                scale = advertised.scale,
+                transform = ?advertised.transform,
+                refresh_mhz = advertised.refresh_mhz,
+                adaptive_sync = ?advertised.adaptive_sync,
+                hdr = ?advertised.hdr,
+                "a display of the new desktop"
+            );
+        }
         // Move all old outputs out first; the new list takes those it keeps,
         // and the rest are retired.
         let mut had: Vec<Option<LiveOutput>> = self.outputs.drain(..).map(Some).collect();
@@ -324,6 +343,7 @@ impl DomicileCompositor {
         }
         self.outputs = outputs;
         self.screens = screens;
+        self.display_colors.restate(&self.screens);
         self.tell_the_casts_the_screens();
         // Tell the engine, which holds DRM master, which connectors to light. A
         // profile that turns a panel off needs the panel actually turned off.
@@ -358,6 +378,7 @@ impl DomicileCompositor {
         let desktop = {
             let mut host = self.hub.host.lock().unwrap();
             host.describe_displays(self.screens.outputs().map(Advertised::described).collect());
+            host.describe_monitors(self.screens.outputs().map(Advertised::monitor).collect());
             host.describe_desktop()
         };
         self.hub.broadcast(desktop);
@@ -421,12 +442,29 @@ impl DomicileCompositor {
     pub fn place_window(&self, surface: &WlSurface, bounds: Option<domicile_scene::Bounds>) {
         self.enter_only(surface, bounds);
         self.prefer_scale(surface, bounds);
+        crate::color_management::prefer(
+            surface,
+            Description::of_display(&self.screens.hdr_for(bounds)),
+        );
     }
 
-    /// Send `wp_fractional_scale_v1.preferred_scale` for a window in `bounds`.
-    /// See [`Screens::scale_for`].
+    /// Record window `app_id`'s new CSS `zoom` and tell it, and its popups,
+    /// the scale that makes.
+    pub fn zoom_window(&mut self, app_id: &str, toplevel: &ToplevelSurface, zoom: f64) {
+        if zoom == 1.0 {
+            self.app_zoom.remove(app_id);
+        } else {
+            self.app_zoom.insert(app_id.to_owned(), zoom);
+        }
+        self.place_window(toplevel.wl_surface(), self.app_bounds.get(app_id).copied());
+        self.place_the_popups_over(toplevel.wl_surface());
+    }
+
+    /// Send `wp_fractional_scale_v1.preferred_scale` for a window in `bounds`:
+    /// the display's scale ([`Screens::scale_for`]) times the window's CSS
+    /// `zoom` ([`crate::scale::zoomed`]).
     fn prefer_scale(&self, surface: &WlSurface, bounds: Option<domicile_scene::Bounds>) {
-        let scale = self.screens.scale_for(bounds);
+        let scale = crate::scale::zoomed(self.screens.scale_for(bounds), self.zoom_of(surface));
         with_states(surface, |states| {
             with_fractional_scale(states, |fractional| fractional.set_preferred_scale(scale));
         });

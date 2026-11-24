@@ -74,6 +74,8 @@ for arg in "$@"; do
   esac
 done
 : >"$broker"
+# One error, as Chromium formats it, for `domicile logs` to find.
+echo "[1:1:1121/000000.000000:ERROR:fake.cc:1] the fake engine started" >&2
 # Keep this path on bash for cleanup; a multicall sleep uses its program name.
 # Forward cleanup's signal to the child that holds stdout and stderr.
 exec -a "$0" bash -c 'sleep 60 & trap "kill $!" TERM; wait'
@@ -90,6 +92,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 printf '%s' "${DOMICILE_SOCK-}" >"$session.sock-it-was-given"
+# One error, as its tracing formats it off the journal, naming a site that
+# `domicile export-logs` hides.
+echo "2026-11-21T00:00:00.000000Z ERROR domicile_compositor::fake: opened https://private.example/inbox"
 : >"$session"
 # Keeps its name across the exec, as the engine does; see `cleanup`.
 exec -a "$0" bash -c 'sleep 60 & trap "kill $!" TERM; wait'
@@ -131,7 +136,7 @@ start_desktop() {
     sleep 0.1
     waited=$((waited + 1))
   done
-  UP_SOCK="$(sed -n 's/^DOMICILE_SOCK=//p' "$log")"
+  UP_SOCK="$(sed -n 's/^domicile is up..*DOMICILE_SOCK=//p' "$log")"
   if [ -z "$UP_SOCK" ]; then
     echo "FAIL: the desktop on $shell came up without saying where it answers."
     echo "      A socket nothing names is a socket nothing can reach:"
@@ -172,6 +177,39 @@ if [ "$GIVEN" = "$FIRST_SOCK" ]; then
 else
   echo "FAIL: the compositor was handed '$GIVEN', and the desktop answers at"
   echo "      $FIRST_SOCK"
+  FAILED=1
+fi
+
+echo "== domicile logs prints what the parts said off the journal =="
+# The desktop's stderr is a file, not the journal, so it kept the lines.
+LOGS="$(env DOMICILE_SOCK="$FIRST_SOCK" "$DOMICILE" logs 2>&1)"
+if printf '%s' "$LOGS" | grep -q "domicile-engine err: the fake engine started" &&
+   printf '%s' "$LOGS" | grep -q "domicile-compositor err: domicile_compositor::fake: opened"; then
+  echo "PASS: the engine's and the compositor's errors are there"
+else
+  echo "FAIL: domicile logs missed the engine's or the compositor's error:"
+  printf '%s\n' "$LOGS" | sed 's/^/    /'
+  FAILED=1
+fi
+# The compositor's tracing still reaches the desktop's own stdout.
+if grep -q "domicile_compositor::fake: opened" "$WORK/first.log"; then
+  echo "PASS: the compositor's line still reached the desktop's output"
+else
+  echo "FAIL: the compositor's line was kept but not passed on:"
+  sed 's/^/    /' "$WORK/first.log"
+  FAILED=1
+fi
+
+echo "== domicile export-logs writes them with web addresses hidden =="
+( cd "$WORK" && env DOMICILE_SOCK="$FIRST_SOCK" "$DOMICILE" export-logs bug.txt \
+    >"$WORK/export.log" 2>&1 )
+if grep -q "domicile_compositor::fake: opened <url>" "$WORK/bug.txt" 2>/dev/null &&
+   ! grep -q "private.example" "$WORK/bug.txt" &&
+   grep -q "domicile is up." "$WORK/bug.txt"; then
+  echo "PASS: $(head -1 "$WORK/export.log")"
+else
+  echo "FAIL: the export is missing, says the site, or lacks the up line:"
+  sed 's/^/    /' "$WORK/export.log" "$WORK/bug.txt" 2>&1
   FAILED=1
 fi
 

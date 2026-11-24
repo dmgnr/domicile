@@ -1,0 +1,186 @@
+name: Benchmarks
+
+# Measures Domicile against other desktops in identical VMs: memory and CPU at
+# rest, with Slack and a browser, and with an editor too. Started by hand only,
+# as it signs in to the Slack test workspace with this repository's secrets.
+# See packages/benchmarks/README.md.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Boots per desktop and workload
+        default: "3"
+      host:
+        description: >-
+          github: GitHub's runners, every desktop drawn in software. crux: one
+          desktop at a time on crux, drawn on its GPU through virgl, with
+          QEMU's CPU and GPU share read on the host. Holds both crux runners
+          for the whole run.
+        type: choice
+        options: [github, crux]
+        default: github
+      desktops:
+        description: The desktops to run, as a JSON list
+        default: '["console", "domicile", "sway", "hyprland", "gnome", "plasma"]'
+
+permissions:
+  contents: read
+
+# One run at a time per host and ref: two on crux would share its CPU and GPU
+# and measure each other. Runs from different refs still take turns on crux,
+# as each needs both of its runners.
+concurrency:
+  group: benchmarks-${{ inputs.host }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  github:
+    if: inputs.host == 'github'
+    runs-on: ubuntu-latest
+    # 3 workloads x 3 boots x ~10 minutes, plus building the VM.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        desktop: ${{ fromJSON(inputs.desktops) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # A VM image of a full desktop's closure doesn't fit beside the
+      # runner's preinstalled toolchains.
+      - name: Make room for the VM image
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+
+      - name: Let the VM use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            system-features = nixos-test benchmark big-parallel kvm
+            accept-flake-config = true
+
+      - run: nix build --print-build-logs .#benchmarks.drivers.${{ matrix.desktop }} -o driver
+
+      - run: nix run .#benchmarks.run -- ${{ matrix.desktop }} ./driver results ${{ inputs.runs }}
+        env:
+          BENCH_SLACK_WORKSPACE: ${{ secrets.BENCH_SLACK_WORKSPACE }}
+          BENCH_SLACK_COOKIE: ${{ secrets.BENCH_SLACK_COOKIE }}
+          BENCH_SLACK_DEBUG: results/slack-debug
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-${{ matrix.desktop }}
+          path: results
+
+  # Every desktop in one job, on one crux runner, while `hold` keeps the other
+  # busy: CI on the other runner would share crux's CPU and GPU and land in
+  # the measurements. One job, as a runner freed between jobs could be taken
+  # by CI before the next desktop.
+  crux:
+    if: inputs.host == 'crux'
+    # `crux` is a label set in cprussin/dotfiles:
+    # config/machines/crux/domicile-ci.nix. Safe only while fork pull
+    # requests need approval, and this workflow is started by hand anyway.
+    runs-on: [self-hosted, crux]
+    # 6 desktops x ~90 minutes.
+    timeout-minutes: 720
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      JOBS: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Wait for the other runner to be held
+        run: |
+          nix shell --inputs-from . nixpkgs#gh -c bash -euo pipefail -c '
+            until [ "$(gh api "$JOBS" --jq ".jobs[] | select(.name == \"hold\") | .status")" = in_progress ]; do
+              sleep 30
+            done'
+
+      # The NVIDIA card's render node, not vkms's, for virgl to draw on.
+      - name: Find the GPU
+        run: |
+          set -euo pipefail
+          for node in /sys/class/drm/renderD*; do
+            if [ "$(basename "$(readlink -f "$node/device/driver")")" = nvidia ]; then
+              echo "BENCH_RENDER_NODE=/dev/dri/$(basename "$node")" >>"$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no NVIDIA render node under /sys/class/drm" >&2
+          exit 1
+
+      # A failed desktop is reported at the end, so the others still run.
+      - name: Run every desktop
+        run: |
+          set -uo pipefail
+          failed=()
+          for desktop in $(nix shell --inputs-from . nixpkgs#jq -c jq -r '.[]' <<<"$DESKTOPS"); do
+            if ! nix build --print-build-logs ".#benchmarks.gpuDrivers.$desktop" -o "driver-$desktop" ||
+              ! nix run .#benchmarks.run -- "$desktop" "./driver-$desktop" "results/$desktop" "$RUNS"; then
+              failed+=("$desktop")
+            fi
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "failed: ${failed[*]}" >&2
+            exit 1
+          fi
+        env:
+          DESKTOPS: ${{ inputs.desktops }}
+          RUNS: ${{ inputs.runs }}
+          BENCH_SLACK_WORKSPACE: ${{ secrets.BENCH_SLACK_WORKSPACE }}
+          BENCH_SLACK_COOKIE: ${{ secrets.BENCH_SLACK_COOKIE }}
+          BENCH_SLACK_DEBUG: results/slack-debug
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-crux
+          path: results
+
+  # Occupies crux's other runner until `crux` ends, however it ends.
+  hold:
+    if: inputs.host == 'crux'
+    runs-on: [self-hosted, crux]
+    timeout-minutes: 780
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      JOBS: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          nix shell --inputs-from . nixpkgs#gh -c bash -euo pipefail -c '
+            until [ "$(gh api "$JOBS" --jq ".jobs[] | select(.name == \"crux\") | .status")" = completed ]; do
+              sleep 60
+            done'
+
+  summary:
+    needs: [github, crux]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: benchmark-*
+          path: results
+      - run: bun packages/benchmarks/src/main.ts results | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-summary
+          path: results/summary.json

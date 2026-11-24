@@ -1,5 +1,5 @@
-// What the desk says to the shell itself: its options from the config, and
-// commands from `domicile send-shell`.
+// What the desk says to the shell itself: its options from the config,
+// commands from `domicile send-shell`, and the links it claims.
 
 import { z } from "zod";
 
@@ -19,8 +19,24 @@ export type ShellNamespace = {
    * says. Check them against the shell's declaration with `watchShellOptions`.
    */
   readonly options: Readonly<Record<string, unknown>> | undefined;
-  /** Hear each command `domicile send-shell` sends, as its words. */
+  /**
+   * Hear each command `domicile send-shell` sends, describing the commands
+   * this page runs and the keys that run them. Answer each with `answer`.
+   */
   commands: System["shellCommands"];
+  /**
+   * Say this page ran the command numbered `sent`, with what it printed if
+   * anything, or why not.
+   */
+  answer: System["answerShellCommand"];
+  /**
+   * Open links of these schemes, such as `mailto`, for the desktop, instead
+   * of the application that opens the scheme: hear each one `domicile open`
+   * (and so `xdg-open` and applications' links) and the Email portal hand
+   * over. The page that claimed a scheme last gets its links. Links a page
+   * in a browser window opens arrive as `WEBVIEW_EXTERNAL_APP_EVENT` instead.
+   */
+  links: System["claimLinks"];
   on: On<ShellListeners>;
 };
 
@@ -31,13 +47,15 @@ export type ShellHost = Pick<
 
 export const shell = (
   host: ShellHost,
-  calls: Pick<System, "shellCommands">,
+  calls: Pick<System, "shellCommands" | "answerShellCommand" | "claimLinks">,
 ): ShellNamespace => {
   const optionsOf = memoizeLast((text: string | null) =>
     text === null ? undefined : optionsSchema.parse(JSON.parse(text)),
   );
   return {
-    commands: () => calls.shellCommands(),
+    answer: (sent, ran) => calls.answerShellCommand(sent, ran),
+    commands: (help, bindings) => calls.shellCommands(help, bindings),
+    links: (schemes) => calls.claimLinks(schemes),
     on: on<ShellListeners>({
       optionschange: (listener) =>
         hostEvent(host, "shelloptionschanged", () => listener()),

@@ -9,7 +9,6 @@ The compositor tells native windows how held keys repeat from
 
 - `SetDomicileInputConfig`: sets the auto-repeat delay and interval from
   the input settings' keyboard, and turns repeat off for a rate of 0.
-
 ---
  ui/events/ozone/evdev/input_controller_evdev.cc | 6 ++++++
  1 file changed, 6 insertions(+)
@@ -31,6 +30,3 @@ index 4a022b9..c828c70 100644
    input_device_settings_.domicile_input = std::move(settings);
    ++input_device_settings_.domicile_input_generation;
    ScheduleUpdateDeviceSettings();
--- 
-2.43.0
-

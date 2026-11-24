@@ -3,6 +3,7 @@ import { act, fireEvent, render } from "@testing-library/react";
 
 import { Layer } from "./layer";
 import { Photo } from "./Photo";
+import { commonsPhoto, sourceSet } from "./photos";
 
 /** Longest wait between attempts to load a photograph, in ms. */
 const MAX_RETRY_MS = 60_000;
@@ -37,11 +38,27 @@ const wait = (ms: number) => {
 };
 
 describe("Photo", () => {
+  it("lets the engine pick the smallest file that covers `sizes`", () => {
+    const { container } = render(
+      <Photo
+        layer={Layer.Current}
+        onError={ignore}
+        sizes="1920px"
+        src={commonsPhoto("Sky.jpg")}
+      />,
+    );
+
+    expect(image(container).getAttribute("srcset")).toBe(
+      sourceSet(commonsPhoto("Sky.jpg")) ?? "test: not a Commons photograph",
+    );
+    expect(image(container).getAttribute("sizes")).toBe("1920px");
+  });
+
   it("stays transparent until it has loaded", () => {
     // A photograph that has not loaded would draw nothing over the one from
     // the repository.
     const { container } = render(
-      <Photo layer={Layer.Current} onError={ignore} src={SRC} />,
+      <Photo layer={Layer.Current} onError={ignore} sizes="100vw" src={SRC} />,
     );
 
     expect(image(container).getAttribute("data-wallpaper")).toBe(Layer.Waiting);
@@ -55,7 +72,12 @@ describe("Photo", () => {
     // The wallpaper shows the photograph from the repository on a failure.
     await new Promise<void>((resolve) => {
       const { container } = render(
-        <Photo layer={Layer.Current} onError={resolve} src={SRC} />,
+        <Photo
+          layer={Layer.Current}
+          onError={resolve}
+          sizes="100vw"
+          src={SRC}
+        />,
       );
       fail(container);
     });
@@ -68,7 +90,12 @@ describe("Photo", () => {
     it("retries after a second, then waits twice as long each time", () => {
       jest.useFakeTimers();
       const { container } = render(
-        <Photo layer={Layer.Current} onError={ignore} src={SRC} />,
+        <Photo
+          layer={Layer.Current}
+          onError={ignore}
+          sizes="100vw"
+          src={SRC}
+        />,
       );
 
       const first = fail(container);
@@ -88,7 +115,12 @@ describe("Photo", () => {
     it("waits at most a minute between attempts", () => {
       jest.useFakeTimers();
       const { container } = render(
-        <Photo layer={Layer.Current} onError={ignore} src={SRC} />,
+        <Photo
+          layer={Layer.Current}
+          onError={ignore}
+          sizes="100vw"
+          src={SRC}
+        />,
       );
 
       for (let attempt = 0; attempt < 10; attempt++) {
@@ -105,7 +137,12 @@ describe("Photo", () => {
     it("shows the photograph once a retry loads it", () => {
       jest.useFakeTimers();
       const { container } = render(
-        <Photo layer={Layer.Current} onError={ignore} src={SRC} />,
+        <Photo
+          layer={Layer.Current}
+          onError={ignore}
+          sizes="100vw"
+          src={SRC}
+        />,
       );
 
       fail(container);

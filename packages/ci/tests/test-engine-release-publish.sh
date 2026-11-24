@@ -203,7 +203,7 @@ publish() {
   # `env`, not a bare prefix: assignments that come from `"$@"` expansion are
   # parsed as a command name, not as assignments.
   ( cd "$ROOT" && env PATH="$BIN:$PATH" FAKE_STATE="$state" \
-      GITHUB_TOKEN=fake GITHUB_REPOSITORY=cprussin/domicile \
+      DOMICILE_BUILDS_TOKEN=fake GITHUB_REPOSITORY=cprussin/domicile \
       GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
       "$@" bash "$PUBLISH" "$STAGE" "$TARBALL" ) > "$state/out" 2>&1
 }
@@ -238,6 +238,23 @@ case "$body" in
   (*"series identity: \`$IDENTITY\`"*) ;;
   (*) fail "engine-nightly's body does not state the series identity" ;;
 esac
+
+echo "builds go to the builds repository, so this one's watchers are not notified"
+grep -v -q '/repos/cprussin/domicile-builds/' "$state/calls" &&
+  fail "a call went somewhere other than the builds repository: $(grep -v '/repos/cprussin/domicile-builds/' "$state/calls" | head -1)"
+# This repository's commits are not in the builds repository.
+jq -e 'has("target_commitish")' "$state/created-engine-nightly.json" >/dev/null &&
+  fail "the release targets a commit the builds repository does not have"
+case "$body" in
+  (*"domicile commit: \`0123456789abcdef0123456789abcdef01234567\`"*) ;;
+  (*) fail "engine-nightly's body does not name the commit it was built from" ;;
+esac
+
+echo "without the builds token the publisher fails before calling GitHub"
+notoken="$WORK/notoken"
+publish "$notoken" DOMICILE_BUILDS_TOKEN= &&
+  fail "the publisher exited 0 without DOMICILE_BUILDS_TOKEN"
+[ -s "$notoken/calls" ] && fail "the publisher called GitHub without a token"
 
 echo "publishing again leaves an already published commit alone"
 # Something may already be pinned to the immutable release. A re-run for the

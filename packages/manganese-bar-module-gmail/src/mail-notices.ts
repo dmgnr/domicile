@@ -1,8 +1,6 @@
 // New mail as desktop notifications, sent to the notification server the
 // compositor runs. See docs/architecture/NOTIFICATIONS.md.
 
-import type { Browser } from "@domicile-desktop/sdk/desktop/browser";
-import { AppReuse } from "@domicile-desktop/sdk/desktop/browser";
 import type { Dbus } from "@domicile-desktop/sdk/desktop/dbus";
 import type {
   DbusSignal,
@@ -13,8 +11,10 @@ import { Bus, ListenedKind } from "@domicile-desktop/sdk/system";
 import type { Favicons } from "@domicile-desktop/system-apps/favicons";
 import { z } from "zod";
 
-import { gmailAppId, inboxAddress } from "./addresses";
+import { inboxAddress } from "./addresses";
 import type { Mail, MailNews } from "./gmail-api";
+import type { MailBrowser } from "./open-mail";
+import { openMail } from "./open-mail";
 
 /** The notification server's address on the session bus. */
 const SERVER = {
@@ -33,11 +33,19 @@ const MOST_NAMED = 3;
 /** What notifies: the bus, and the browser a press opens Gmail in. */
 export type NoticeDesk = {
   readonly dbus: Pick<Dbus, "call" | "match">;
-  readonly browser: Pick<Browser, "openApp">;
+  readonly browser: MailBrowser;
 };
 
 /** The account mail arrived for. */
-export type MailAccount = { email: string; nickname: string };
+/**
+ * An account whose mail is notified, and the browser profile its Gmail
+ * window opens in: its site's, as the engine routes it, when `undefined`.
+ */
+export type MailAccount = {
+  email: string;
+  nickname: string;
+  profile?: string | undefined;
+};
 
 /**
  * Notifies the desk of mail that arrived, under the account's nickname: a
@@ -48,7 +56,11 @@ export type MailAccount = { email: string; nickname: string };
  * is. A notification closes once all its messages are read. Rejects when the
  * server refuses.
  */
-export const mailNotices = (desk: NoticeDesk, icons: Favicons) => {
+export const mailNotices = (
+  desk: NoticeDesk,
+  icons: Favicons,
+  open: typeof openMail = openMail,
+) => {
   // Each notification still up, by id.
   const shown = new Map<number, Shown>();
   const presses: { listening: Promise<void> | undefined } = {
@@ -58,7 +70,7 @@ export const mailNotices = (desk: NoticeDesk, icons: Favicons) => {
     account: MailAccount,
     { arrived, read }: MailNews,
   ): Promise<void> => {
-    presses.listening ??= listen(desk, shown);
+    presses.listening ??= listen(desk, shown, open);
     await presses.listening;
     const site = inboxAddress(account.email);
     if (arrived.length > 0) {
@@ -66,11 +78,12 @@ export const mailNotices = (desk: NoticeDesk, icons: Favicons) => {
     }
     // The theme's Gmail icon until the site's is found.
     const picture = icons.icon(site).unwrapOr("gmail");
-    for (const notice of notices(account.email, arrived)) {
+    for (const notice of notices(arrived)) {
       const id = await notify(desk, account.nickname, picture, notice);
       shown.set(id, {
         email: account.email,
-        opens: notice.opens,
+        profile: account.profile,
+        thread: notice.thread,
         unread: notice.messages,
       });
     }
@@ -87,35 +100,42 @@ export const mailNotices = (desk: NoticeDesk, icons: Favicons) => {
 };
 
 /**
- * One notification still up: its account, what a press opens, and its unread
- * messages.
+ * One notification still up: its account, the thread a press opens, and its
+ * unread messages.
  */
-type Shown = { email: string; opens: string; unread: readonly string[] };
+type Shown = {
+  email: string;
+  profile: string | undefined;
+  /** The thread a press opens; the inbox for `undefined`. */
+  thread: string | undefined;
+  unread: readonly string[];
+};
 
 type Notice = {
   summary: string;
   body: string;
-  opens: string;
+  /** The thread a press opens, by its hex id; the inbox for `undefined`. */
+  thread: string | undefined;
   /** The ids of the messages it tells of. */
   messages: readonly string[];
 };
 
 /** `mail`'s notifications, oldest first, so the newest shows on top. */
-const notices = (email: string, mail: readonly Mail[]): Notice[] =>
+const notices = (mail: readonly Mail[]): Notice[] =>
   mail.length > MOST_APART
     ? [
         {
           body: senders(mail),
           messages: mail.map(({ id }) => id),
-          opens: inboxAddress(email),
           summary: `${mail.length.toString()} new emails`,
+          thread: undefined,
         },
       ]
     : mail.toReversed().map(({ from, id, subject, threadId }) => ({
         body: subject,
         messages: [id],
-        opens: `${inboxAddress(email)}#inbox/${threadId}`,
         summary: from,
+        thread: threadId,
       }));
 
 /** Who sent `mail`, each once, newest first. */
@@ -181,12 +201,13 @@ const close = async (desk: NoticeDesk, id: number): Promise<void> =>
   });
 
 /**
- * Opens each press of one of `shown` from now on. Resolves once listening, or
- * rejects when the bus refuses.
+ * Opens each press of one of `shown` from now on with `open`. Resolves once
+ * listening, or rejects when the bus refuses.
  */
 const listen = async (
   desk: NoticeDesk,
   shown: Map<number, Shown>,
+  open: typeof openMail,
 ): Promise<void> =>
   (
     await desk.dbus.match({
@@ -200,7 +221,7 @@ const listen = async (
       throw new Error(`could not hear presses of mail: ${error.message}`);
     },
     Ok: (listening) => {
-      follow(desk, shown, listening).catch((error: unknown) => {
+      follow(desk, shown, listening, open).catch((error: unknown) => {
         // biome-ignore lint/suspicious/noConsole: a broken listener leaves presses unanswered, with nothing else to tell
         console.error("Stopped hearing presses of mail", error);
       });
@@ -211,7 +232,10 @@ const follow = async (
   desk: NoticeDesk,
   shown: Map<number, Shown>,
   listening: Listening<Listened<DbusSignal>>,
+  open: typeof openMail,
 ): Promise<void> => {
+  // Each account's press still waiting for Gmail to start, as its stop.
+  const waiting = new Map<string, () => void>();
   const reader = listening.items.getReader();
   for (let next = await reader.read(); !next.done; next = await reader.read()) {
     switch (next.value.kind) {
@@ -221,10 +245,11 @@ const follow = async (
         const pressed = shown.get(id);
         if (pressed !== undefined) {
           shown.delete(id);
-          desk.browser.openApp(pressed.opens, {
-            id: gmailAppId(pressed.email),
-            reuse: AppReuse.Navigate,
-          });
+          waiting.get(pressed.email)?.();
+          waiting.set(
+            pressed.email,
+            open(desk.browser, pressed.email, pressed.thread, pressed.profile),
+          );
         }
         break;
       }

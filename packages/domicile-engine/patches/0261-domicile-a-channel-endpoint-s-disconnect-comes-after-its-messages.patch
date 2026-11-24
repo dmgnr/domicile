@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a channel endpoint's disconnect comes after its
+ messages
+
+ChannelAssociatedGroupController queues a channel-associated endpoint's
+messages on the channel's proxy task runner, but posted the endpoint's
+disconnect to the endpoint's own task runner. A renderer binds
+blink.mojom.Widget to a frame's task runner, so when the browser called
+a Widget and closed it, the disconnect could run first. The call then
+reached a disconnected client and was dropped, logging "message N to
+blink.mojom.Widget came after the interface disconnected" and "Message
+N rejected by interface blink.mojom.Widget".
+
+- The disconnect is posted where Accept() dispatches the endpoint's
+  messages, so it runs after them: the proxy task runner, or the
+  endpoint's own for one bound to the IO thread or off-sequence.
+- From the proxy task runner, an endpoint bound to another sequence is
+  notified on it, as before. Such an endpoint now hears a disconnect
+  only once the proxy task runner has run.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux. ChannelDisconnectOrderTest in domicile_unittests
+covers it.
+---
+ ipc/ipc_mojo_bootstrap.cc | 52 +++++++++++++++++++++++++++++++++------
+ 1 file changed, 45 insertions(+), 7 deletions(-)
+
+diff --git a/ipc/ipc_mojo_bootstrap.cc b/ipc/ipc_mojo_bootstrap.cc
+index 9fa3071..a02b9c2 100644
+--- a/ipc/ipc_mojo_bootstrap.cc
++++ b/ipc/ipc_mojo_bootstrap.cc
+@@ -996,20 +996,48 @@ class ChannelAssociatedGroupController
+       base::AutoUnlock unlocker(lock_);
+       client->NotifyError(reason);
+     } else {
+-      endpoint->task_runner()->PostTask(
++      // DOMICILE: post the error behind the endpoint's messages, to the task
++      // runner Accept() queues them on. Posted straight to the endpoint's own
++      // task runner, it can overtake them, and they then reach a disconnected
++      // client and are dropped ("message N to blink.mojom.Widget came after
++      // the interface disconnected").
++      DispatchTaskRunner(endpoint)->PostTask(
+           FROM_HERE,
+           base::BindOnce(&ChannelAssociatedGroupController::
+                              NotifyEndpointOfErrorOnEndpointThread,
+                          this, endpoint->id(),
+                          // This is safe as `endpoint` is verified to be in
+                          // `endpoints_` (a map with ownership) before use.
+-                         base::UnsafeDangling(endpoint)));
++                         base::UnsafeDangling(endpoint),
++                         /*behind_queued_messages=*/true));
++    }
++  }
++
++  // DOMICILE: where Accept() dispatches messages for `endpoint`: in place on
++  // the IO task runner for an endpoint bound there, otherwise where it queues
++  // them.
++  base::SequencedTaskRunner* DispatchTaskRunner(Endpoint* endpoint)
++      EXCLUSIVE_LOCKS_REQUIRED(lock_) {
++    if (!endpoint->client()) {
++      return proxy_task_runner_.get();
++    }
++    if (endpoint->was_bound_off_sequence() ||
++        endpoint->task_runner() == task_runner_.get()) {
++      return endpoint->task_runner();
+     }
++    return proxy_task_runner_.get();
+   }
+ 
+   // `endpoint` might be a dangling ptr and must be checked before dereference.
++  //
++  // DOMICILE: `behind_queued_messages` is true on the task runner from
++  // DispatchTaskRunner(), where every message queued before the error has
++  // run. An endpoint bound to another sequence is then notified there, as
++  // upstream does. If it was rebound to yet another sequence meanwhile, the
++  // rebind posted its own error there (AttachEndpointClient()).
+   void NotifyEndpointOfErrorOnEndpointThread(mojo::InterfaceId id,
+-                                             MayBeDangling<Endpoint> endpoint) {
++                                             MayBeDangling<Endpoint> endpoint,
++                                             bool behind_queued_messages) {
+     base::AutoLock locker(lock_);
+     auto iter = endpoints_.find(id);
+     if (iter == endpoints_.end() || iter->second.get() != endpoint)
+@@ -1017,7 +1045,19 @@ class ChannelAssociatedGroupController
+     if (!endpoint->client())
+       return;
+ 
+-    DCHECK(endpoint->task_runner()->RunsTasksInCurrentSequence());
++    if (!endpoint->task_runner()->RunsTasksInCurrentSequence()) {
++      if (!behind_queued_messages) {
++        return;
++      }
++      endpoint->task_runner()->PostTask(
++          FROM_HERE,
++          base::BindOnce(&ChannelAssociatedGroupController::
++                             NotifyEndpointOfErrorOnEndpointThread,
++                         this, id, base::UnsafeDangling(endpoint.get()),
++                         /*behind_queued_messages=*/false));
++      return;
++    }
++
+     NotifyEndpointOfError(endpoint, false /* force_async */);
+   }
+ 
+@@ -1115,9 +1155,7 @@ class ChannelAssociatedGroupController
+       // dispatch there. In that case `was_bound_off_sequence()` will be true to
+       // signal that we should really use that task runner.
+       const scoped_refptr<base::SequencedTaskRunner> task_runner =
+-          client && endpoint->was_bound_off_sequence()
+-              ? endpoint->task_runner()
+-              : proxy_task_runner_.get();
++          DispatchTaskRunner(endpoint);
+ 
+       ScopedUrgentMessageNotification scoped_urgent_message_notification(
+           message->has_flag(mojo::Message::kFlagIsUrgent)

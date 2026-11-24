@@ -3,6 +3,7 @@
 
 #include "components/domicile/browser/control_channel.h"
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,9 +22,11 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "components/domicile/browser/desk_faults.h"
 #include "components/domicile/browser/desk_pointer_hiding.h"
 #include "components/domicile/browser/line_framer.h"
 #include "components/domicile/browser/shell_swap.h"
@@ -141,13 +144,21 @@ class FakeClient : public mojom::ControlChannelClient {
   }
   void AppPointerConstraint(
       const std::string& app_id,
-      std::optional<mojom::PointerConstraint> constraint) override {
+      std::optional<mojom::PointerConstraint> constraint,
+      const std::optional<std::vector<gfx::RectF>>& region) override {
     const char* name = "none";
     if (constraint) {
       name =
           *constraint == mojom::PointerConstraint::kLock ? "lock" : "confine";
     }
-    heard_.push_back("constraint " + app_id + " " + name);
+    std::string heard = "constraint " + app_id + " " + name;
+    if (region) {
+      heard += " in";
+      for (const gfx::RectF& box : *region) {
+        heard += " " + box.ToString();
+      }
+    }
+    heard_.push_back(heard);
   }
   void AppSuspended(const std::string& app_id, bool suspended) override {
     heard_.push_back((suspended ? "suspended " : "resumed ") + app_id);
@@ -181,14 +192,26 @@ class FakeClient : public mojom::ControlChannelClient {
   void ShortcutPressed(mojom::ShortcutPtr) override {}
   void ShortcutReleased(mojom::ShortcutPtr) override {}
   void GesturePerformed(mojom::GesturePtr) override {}
-  void ModifierTapped(mojom::TapModifier) override {}
+  void ModifierTapped(mojom::TapModifier, base::TimeDelta) override {}
   void Modifiers(bool, bool, bool, bool) override {}
-  void Displays(std::vector<mojom::DisplayInfoPtr>) override {}
+  void Displays(std::vector<mojom::DisplayInfoPtr> displays) override {
+    for (const auto& display : displays) {
+      heard_.push_back(base::StringPrintf(
+          "display %s hdr %s peak %u white %u", display->name.c_str(),
+          display->hdr.c_str(), display->peak_luminance, display->sdr_white));
+    }
+  }
   void Files(const std::string&,
              const std::vector<std::string>&,
              uint32_t,
              bool) override {}
-  void Clipboard(std::vector<mojom::ClipboardEntryPtr>) override {}
+  void Clipboard(std::vector<mojom::ClipboardEntryPtr> entries) override {
+    for (const auto& entry : entries) {
+      heard_.push_back(base::StringPrintf("clipboard %u '%s'%s", entry->id,
+                                          entry->preview.c_str(),
+                                          entry->current ? " current" : ""));
+    }
+  }
   void Tray(std::vector<mojom::TrayItemPtr>) override {}
   void Notifications(std::vector<mojom::NotificationPtr> items) override {
     for (const auto& item : items) {
@@ -237,7 +260,14 @@ class ControlChannelTest : public testing::Test {
     // Self-owned, like every channel: dropping `control_` deletes it.
     new ControlChannel(path, control_.BindNewPipeAndPassReceiver(),
                        keymap_.GetRepeatingCallback<const std::string&>(),
-                       base::DoNothing(), base::DoNothing(), base::DoNothing(),
+                       base::DoNothing(),
+                       base::BindLambdaForTesting(
+                           [this](const std::vector<gfx::RectF>& boxes,
+                                  base::OnceCallback<void(bool)> confined) {
+                             confined_to_ = boxes;
+                             std::move(confined).Run(true);
+                           }),
+                       base::DoNothing(), base::DoNothing(),
                        cursor_theme_.GetRepeatingCallback(),
                        force_dark_.GetRepeatingCallback(), Page{});
 
@@ -306,6 +336,7 @@ class ControlChannelTest : public testing::Test {
   base::test::TestFuture<std::string> keymap_;
   base::test::TestFuture<std::optional<ui::DeskCursorTheme>> cursor_theme_;
   base::test::TestFuture<std::vector<std::string>> force_dark_;
+  std::vector<gfx::RectF> confined_to_;
   FakeClient client_;
   LineFramer framer_;
   std::vector<std::string> lines_;
@@ -544,6 +575,34 @@ TEST_F(ControlChannelTest, AWindowInhibitingShortcutsReachesThePage) {
                                       "inhibits app-1 false", "locked false"}));
 }
 
+// Each display says whether it is driven in HDR, so a shell can offer HDR
+// only where a panel takes it. A state this browser has no name for, or a
+// host that predates the fields, is `unsupported`.
+TEST_F(ControlChannelTest, EachDisplaysHdrReachesThePage) {
+  control_->SetClient(client_.BindRemote());
+  control_.FlushForTesting();
+  Say("{\"type\":\"displays\",\"displays\":["
+      "{\"name\":\"lit\",\"position\":[0,0],\"size\":[1920,1080],"
+      "\"scale\":1,\"hdr\":\"on\",\"peak_luminance\":1000,"
+      "\"sdr_white\":203},"
+      "{\"name\":\"able\",\"position\":[1920,0],\"size\":[1920,1080],"
+      "\"scale\":1,\"hdr\":\"off\",\"peak_luminance\":600,"
+      "\"sdr_white\":0},"
+      "{\"name\":\"odd\",\"position\":[3840,0],\"size\":[1920,1080],"
+      "\"scale\":1,\"hdr\":\"dolby\"},"
+      "{\"name\":\"old\",\"position\":[5760,0],\"size\":[1920,1080],"
+      "\"scale\":1}]}\n"
+      "{\"type\":\"locked\",\"locked\":false}\n");
+  EXPECT_TRUE(client_.locked_.Wait());
+
+  EXPECT_EQ(client_.heard_,
+            (std::vector<std::string>{
+                "display lit hdr on peak 1000 white 203",
+                "display able hdr off peak 600 white 0",
+                "display odd hdr unsupported peak 0 white 0",
+                "display old hdr unsupported peak 0 white 0", "locked false"}));
+}
+
 // The browser process draws the pointer on a tty, so the theme stops there.
 TEST_F(ControlChannelTest, TheDesksPointerThemeReachesTheBrowser) {
   control_->SetClient(client_.BindRemote());
@@ -607,6 +666,54 @@ TEST_F(ControlChannelTest, TheSitesToForceDarkReachTheBrowser) {
 
   EXPECT_EQ(force_dark_.Take(),
             (std::vector<std::string>{"mail.google.com"}));
+}
+
+// How to check spelling is this process's too. One whose languages are not
+// strings is dropped.
+TEST_F(ControlChannelTest, SpellCheckingReachesTheBrowser) {
+  base::test::TestFuture<SpellcheckSettings> heard;
+  SetSpellcheckSink(heard.GetRepeatingCallback<const SpellcheckSettings&>());
+
+  Say("{\"type\":\"spellcheck\",\"enabled\":true,\"languages\":[1]}\n"
+      "{\"type\":\"spellcheck\",\"enabled\":false,"
+      "\"languages\":[\"de-DE\"]}\n");
+
+  EXPECT_EQ(heard.Take(),
+            (SpellcheckSettings{.enabled = false, .languages = {"de-DE"}}));
+  SetSpellcheckSink(SpellcheckSink());
+}
+
+// The desk's browser profiles are this process's too, and reach it with the
+// page whose channel heard them. Ones that name a profile they do not list are
+// dropped.
+TEST_F(ControlChannelTest, TheBrowserProfilesReachTheBrowserWithThePage) {
+  base::test::TestFuture<Page, BrowserProfiles> heard;
+  SetBrowserProfilesSink(
+      heard.GetRepeatingCallback<const Page&, const BrowserProfiles&>());
+
+  Say("{\"type\":\"browser_profiles\",\"profiles\":[{\"id\":\"default\","
+      "\"name\":\"Personal\",\"color\":\"#0d9488\",\"private\":false}],"
+      "\"default_profile\":\"work\",\"default_private_profile\":\"work\","
+      "\"sites\":{}}\n"
+      "{\"type\":\"browser_profiles\",\"profiles\":[{\"id\":\"default\","
+      "\"name\":\"Personal\",\"color\":\"#0d9488\",\"private\":false},"
+      "{\"id\":\"private\",\"name\":\"Private\",\"color\":\"#a78bfa\","
+      "\"private\":true},{\"id\":\"work\",\"name\":\"Work\","
+      "\"color\":\"#2563eb\",\"private\":false,"
+      "\"extensions\":[\"aeblfdkhhhdcdjpifhhbdiojplfjncoa\"]}],"
+      "\"default_profile\":\"default\",\"default_private_profile\":"
+      "\"private\",\"sites\":{\"github.com/acme\":\"work\"}}\n");
+
+  const auto [page, profiles] = heard.Take();
+  EXPECT_EQ(page, Page{});
+  EXPECT_EQ(profiles.default_profile, "default");
+  EXPECT_EQ(profiles.default_private_profile, "private");
+  ASSERT_NE(profiles.Find("work"), nullptr);
+  EXPECT_EQ(profiles.Find("work")->extensions,
+            (std::vector<std::string>{"aeblfdkhhhdcdjpifhhbdiojplfjncoa"}));
+  EXPECT_EQ(profiles.sites,
+            (std::map<std::string, std::string>{{"github.com/acme", "work"}}));
+  SetBrowserProfilesSink(BrowserProfilesSink());
 }
 
 // A compositor that exits takes its windows and the page's system calls with
@@ -752,15 +859,33 @@ TEST_F(ControlChannelTest, ScrollSourcesAndAxisStopsReachTheCompositor) {
   }
 }
 
-// A hand's relative motion reaches the compositor as its deltas.
+// A hand's relative motion reaches the compositor as its deltas, accelerated
+// and not.
 TEST_F(ControlChannelTest, RelativeMotionReachesTheCompositor) {
   control_->SetClient(client_.BindRemote());
   control_.FlushForTesting();
   EXPECT_EQ(Heard(), kHello);
-  control_->PointerRelative("app", 3.5, -2);
+  control_->PointerRelative("app", 3.5, -2, 1.25, -0.5);
   control_.FlushForTesting();
-  EXPECT_EQ(Heard(),
-            R"({"app_id":"app","dx":3.5,"dy":-2.0,"type":"pointer_relative"})");
+  EXPECT_EQ(Heard(), R"({"app_id":"app","dx":3.5,"dx_unaccel":1.25,"dy":-2.0,)"
+                     R"("dy_unaccel":-0.5,"type":"pointer_relative"})");
+}
+
+// A page confining the pointer stops in the browser, which draws the pointer,
+// and hears whether the platform holds it.
+TEST_F(ControlChannelTest, ConfiningThePointerStopsInTheBrowser) {
+  control_->SetClient(client_.BindRemote());
+  control_.FlushForTesting();
+  EXPECT_EQ(Heard(), kHello);
+  base::test::TestFuture<bool> confined;
+  control_->ConfinePointer({gfx::RectF(10, 20, 300, 200)},
+                           confined.GetCallback());
+  EXPECT_TRUE(confined.Get());
+  ASSERT_EQ(confined_to_.size(), 1u);
+  EXPECT_EQ(confined_to_[0].x(), 10);
+  EXPECT_EQ(confined_to_[0].y(), 20);
+  EXPECT_EQ(confined_to_[0].width(), 300);
+  EXPECT_EQ(confined_to_[0].height(), 200);
 }
 
 // A window's ask to lock or confine the pointer reaches the page, `null`
@@ -783,6 +908,53 @@ TEST_F(ControlChannelTest, APointerConstraintReachesThePage) {
             (std::vector<std::string>{"constraint game lock",
                                       "constraint game confine",
                                       "constraint game none", "locked false"}));
+}
+
+// A confinement's region reaches the page as boxes, and a box that is not one
+// drops the message.
+TEST_F(ControlChannelTest, APointerRegionReachesThePage) {
+  control_->SetClient(client_.BindRemote());
+  control_.FlushForTesting();
+  Say("{\"type\":\"app_pointer_constraint\",\"app_id\":\"game\","
+      "\"constraint\":\"confine\",\"region\":[{\"x\":10,\"y\":20,"
+      "\"width\":300,\"height\":200},{\"x\":0,\"y\":220,\"width\":40,"
+      "\"height\":10}]}\n"
+      "{\"type\":\"app_pointer_constraint\",\"app_id\":\"game\","
+      "\"constraint\":\"confine\",\"region\":[{\"x\":10}]}\n"
+      "{\"type\":\"locked\",\"locked\":false}\n");
+  EXPECT_TRUE(client_.locked_.Wait());
+
+  EXPECT_EQ(client_.heard_,
+            (std::vector<std::string>{
+                "constraint game confine in 10,20 300x200 0,220 40x10",
+                "locked false"}));
+}
+
+// Which clipboard row is current reaches the page, and a row that does not
+// say is dropped.
+TEST_F(ControlChannelTest, TheCurrentClipboardRowReachesThePage) {
+  control_->SetClient(client_.BindRemote());
+  control_.FlushForTesting();
+  Say("{\"type\":\"clipboard\",\"entries\":["
+      "{\"id\":3,\"image\":false,\"preview\":\"now\",\"current\":true},"
+      "{\"id\":2,\"image\":false,\"preview\":\"before\",\"current\":false},"
+      "{\"id\":1,\"image\":false,\"preview\":\"unsaid\"}]}\n"
+      "{\"type\":\"locked\",\"locked\":false}\n");
+  EXPECT_TRUE(client_.locked_.Wait());
+
+  EXPECT_EQ(client_.heard_,
+            (std::vector<std::string>{"clipboard 3 'now' current",
+                                      "clipboard 2 'before'", "locked false"}));
+}
+
+// Removing a clipboard row reaches the compositor as its id.
+TEST_F(ControlChannelTest, RemovingAClipboardRowReachesTheCompositor) {
+  control_->SetClient(client_.BindRemote());
+  control_.FlushForTesting();
+  EXPECT_EQ(Heard(), kHello);
+  control_->RemoveClipboardEntry(7);
+  control_.FlushForTesting();
+  EXPECT_EQ(Heard(), R"({"entry":7,"type":"remove_clipboard_entry"})");
 }
 
 // The page taking and letting go of the pointer reaches the compositor.
@@ -899,6 +1071,19 @@ TEST_F(ControlChannelTest, UnboundSwipesAndHoldsReachTheCompositor) {
   EXPECT_EQ(Heard(), R"({"fingers":3,"phase":"begin","type":"pointer_hold"})");
   EXPECT_EQ(Heard(),
             R"({"canceled":true,"phase":"end","type":"pointer_hold"})");
+}
+
+// A bug the engine caught in itself reaches the compositor, which tells the
+// person.
+TEST_F(ControlChannelTest, AnEngineFaultReachesTheCompositor) {
+  control_->SetClient(client_.BindRemote());
+  control_.FlushForTesting();
+  EXPECT_EQ(Heard(), kHello);
+
+  DeskFaults::Get().Report("A page stayed in fullscreen.");
+
+  EXPECT_EQ(Heard(),
+            R"({"type":"engine_fault","what":"A page stayed in fullscreen."})");
 }
 
 }  // namespace

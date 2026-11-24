@@ -16,22 +16,24 @@ import type { NetworkDesktop } from "./network-state";
 import { strengthOfDbm } from "./signal-strength";
 import { variant } from "./variant";
 import type {
+  SavedWifi,
   Wifi,
   WifiConnection,
   WifiDesktop,
   WifiDevice,
   WifiNetwork,
 } from "./wifi-state";
-import { WifiBackend } from "./wifi-state";
+import { WifiBackend, WifiSecurity } from "./wifi-state";
 
 const SERVICE = "net.connman.iwd";
 const DEVICE = `${SERVICE}.Device`;
 const STATION = `${SERVICE}.Station`;
 const NETWORK = `${SERVICE}.Network`;
 const DIAGNOSTIC = `${SERVICE}.StationDiagnostic`;
+const KNOWN = `${SERVICE}.KnownNetwork`;
 
 /** The interfaces whose property changes alter a {@link Wifi}. */
-const WATCHED = [DEVICE, STATION, NETWORK];
+const WATCHED = [DEVICE, STATION, NETWORK, KNOWN];
 
 type Found = z.infer<typeof managedObjectsSchema>[0];
 
@@ -119,6 +121,29 @@ export const disconnectIwdWifi = async (
 ): Promise<Result<"done", SystemError>> =>
   done(await domicile.dbus.call(request(wifi.device, STATION, "Disconnect")));
 
+/** Forget a saved network. */
+export const forgetIwdWifi = async (
+  domicile: NetworkDesktop,
+  _wifi: WifiDevice,
+  saved: SavedWifi,
+): Promise<Result<"done", SystemError>> =>
+  done(await domicile.dbus.call(request(saved.profile, KNOWN, "Forget")));
+
+/** Whether iwd joins a saved network by itself. */
+export const setIwdWifiAutoJoin = async (
+  domicile: NetworkDesktop,
+  _wifi: WifiDevice,
+  saved: SavedWifi,
+  autoJoin: boolean,
+): Promise<Result<"done", SystemError>> =>
+  done(
+    await domicile.dbus.call({
+      ...request(saved.profile, "org.freedesktop.DBus.Properties", "Set"),
+      body: [KNOWN, "AutoConnect", { signature: "b", value: autoJoin }],
+      signature: "ssv",
+    }),
+  );
+
 const request = (path: string, iface: string, member: string): DbusCall => ({
   bus: Bus.System,
   destination: SERVICE,
@@ -193,6 +218,7 @@ const wifiOf = async (
     hardwareAddress: device.Address,
     interface: device.Name,
     networks: [],
+    saved: savedOf(objects),
     scanning: false,
   };
   const station = held[STATION];
@@ -261,6 +287,46 @@ const networkOf = (
   }
 };
 
+/** iwd's known networks, which it keeps whatever the device's state. */
+const savedOf = (objects: Found): SavedWifi[] =>
+  Object.entries(objects).flatMap(([path, held]) => {
+    const known = held[KNOWN];
+    return known === undefined
+      ? []
+      : [
+          {
+            autoJoin: known.AutoConnect,
+            lastUsed:
+              known.LastConnectedTime === undefined
+                ? undefined
+                : new Date(known.LastConnectedTime),
+            profile: path,
+            security: securityOf(known.Type),
+            ssid: known.Name,
+          },
+        ];
+  });
+
+/** What a known network's `Type` asks of a person. */
+const securityOf = (type: string): WifiSecurity => {
+  switch (type) {
+    case "open": {
+      return WifiSecurity.Open;
+    }
+    case "psk":
+    case "wep": {
+      return WifiSecurity.Password;
+    }
+    case "8021x":
+    case "hotspot": {
+      return WifiSecurity.Enterprise;
+    }
+    default: {
+      throw new Error(`iwd network type ${type} is unknown`);
+    }
+  }
+};
+
 type Diagnostics = Pick<WifiConnection, "bitrate" | "frequency">;
 
 /** The link's frequency and bitrate, when iwd offers diagnostics. */
@@ -295,6 +361,15 @@ const managedObjectsSchema = z.tuple([
         })
         .optional(),
       [DIAGNOSTIC]: z.object({}).optional(),
+      [KNOWN]: z
+        .object({
+          AutoConnect: variant(z.boolean()),
+          /** ISO 8601; left out for a network never joined. */
+          LastConnectedTime: variant(z.string()).optional(),
+          Name: variant(z.string()),
+          Type: variant(z.string()),
+        })
+        .optional(),
       [NETWORK]: z
         .object({
           Connected: variant(z.boolean()),

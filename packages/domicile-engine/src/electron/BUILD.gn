@@ -1,0 +1,25 @@
+# Copyright 2026 Connor Prussin
+# SPDX-License-Identifier: MIT
+
+# What Electron's Node, at //third_party/electron_node, reads from //electron.
+# Electron's Node patches name these targets and scripts; the scripts are
+# Electron's. See "Phase 2" in docs/architecture/ELECTRON-APPS.md and
+# .github/scripts/engine-node.sh.
+
+# The embedder's JavaScript, compiled into libnode as Electron compiles its
+# `electron/js2c/*` bundles. Node's `LoadEmbedderJavaScriptSource()` and its
+# external references come from here, so there is always at least one.
+action("electron_js2c") {
+  deps = [ "//third_party/electron_node:node_js2c($host_toolchain)" ]
+  sources = [ "js2c/node_init.js" ]
+  inputs = sources
+  outputs = [ "$root_gen_dir/electron_natives.cc" ]
+  script = "build/js2c.py"
+  js2c_dir = get_label_info(":anything($host_toolchain)", "root_out_dir")
+  # `node_js2c` runs in `--root`, so the rest are relative to it.
+  args = [
+           rebase_path("$js2c_dir/node_js2c"),
+           rebase_path("//electron"),
+         ] + rebase_path(outputs, "//electron") +
+         rebase_path(sources, "//electron")
+}

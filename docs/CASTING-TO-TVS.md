@@ -115,7 +115,9 @@ bar item ──casting(host).start(target, Extend | Pick)──▶ backend (engi
 ### Miracast, `domicile-miracast`
 
 - `packages/domicile-miracast`: a Rust D-Bus service, `net.domicile.Miracast`
-  on the session bus, which D-Bus starts on the shell's first call. The SDK's
+  on the session bus, which D-Bus starts on the shell's first call as the
+  user unit `domicile-miracast.service`. That unit is `PartOf=` and
+  `Requisite=graphical-session.target`, so it ends with the desk. The SDK's
   `miracastCast(domicile)` reaches it through `domicile.dbus`, so it needs no
   protocol frames.
 - **API** (`net.domicile.Miracast1` at `/net/domicile/Miracast`): `Sinks()`

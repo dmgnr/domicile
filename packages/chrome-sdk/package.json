@@ -23,6 +23,10 @@
       "types": "./dist/app-element.d.ts",
       "default": "./dist/app-element.js"
     },
+    "./app-menu": {
+      "types": "./dist/app-menu.d.ts",
+      "default": "./dist/app-menu.js"
+    },
     "./bind-keys": {
       "types": "./dist/bind-keys.d.ts",
       "default": "./dist/bind-keys.js"
@@ -34,6 +38,10 @@
     "./config": {
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
+    },
+    "./config-schema": {
+      "types": "./dist/config-schema.d.ts",
+      "default": "./dist/config-schema.js"
     },
     "./config.schema.json": {
       "default": "./config.schema.json"
@@ -101,6 +109,10 @@
     "./desktop/notifications": {
       "types": "./dist/desktop/notifications.d.ts",
       "default": "./dist/desktop/notifications.js"
+    },
+    "./desktop/picture-in-picture": {
+      "types": "./dist/desktop/picture-in-picture.d.ts",
+      "default": "./dist/desktop/picture-in-picture.js"
     },
     "./desktop/pointer": {
       "types": "./dist/desktop/pointer.d.ts",
@@ -170,6 +182,10 @@
       "types": "./dist/key-action.d.ts",
       "default": "./dist/key-action.js"
     },
+    "./shell-command": {
+      "types": "./dist/shell-command.d.ts",
+      "default": "./dist/shell-command.js"
+    },
     "./inhibitor-action": {
       "types": "./dist/inhibitor-action.d.ts",
       "default": "./dist/inhibitor-action.js"
@@ -178,6 +194,10 @@
       "types": "./dist/keymap-choice.d.ts",
       "default": "./dist/keymap-choice.js"
     },
+    "./message-box": {
+      "types": "./dist/message-box.d.ts",
+      "default": "./dist/message-box.js"
+    },
     "./miracast": {
       "types": "./dist/miracast.d.ts",
       "default": "./dist/miracast.js"
@@ -185,6 +205,10 @@
     "./notification": {
       "types": "./dist/notification.d.ts",
       "default": "./dist/notification.js"
+    },
+    "./logger": {
+      "types": "./dist/logger.d.ts",
+      "default": "./dist/logger.js"
     },
     "./options": {
       "types": "./dist/options.d.ts",

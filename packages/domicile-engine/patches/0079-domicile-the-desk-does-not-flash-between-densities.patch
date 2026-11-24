@@ -32,7 +32,7 @@ scripts/test-the-desk-does-not-flash-between-densities.sh.
  6 files changed, 139 insertions(+), 37 deletions(-)
 
 diff --git a/cc/layers/picture_layer_impl.cc b/cc/layers/picture_layer_impl.cc
-index b2ab517..b17dd80 100644
+index c2e169b..951545c 100644
 --- a/cc/layers/picture_layer_impl.cc
 +++ b/cc/layers/picture_layer_impl.cc
 @@ -134,7 +134,8 @@ void PictureLayerImpl::CopyPropertiesTo(LayerImpl* base_layer) const {
@@ -45,7 +45,7 @@ index b2ab517..b17dd80 100644
  
      layer_impl->set_gpu_raster_max_texture_size(gpu_raster_max_texture_size_);
  
-@@ -1560,15 +1561,33 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
+@@ -1551,15 +1552,33 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
    }
  }
  
@@ -85,7 +85,7 @@ index b2ab517..b17dd80 100644
  }
  
  void PictureLayerImpl::UpdateDomicileDisplayTilings() {
-@@ -1576,27 +1595,41 @@ void PictureLayerImpl::UpdateDomicileDisplayTilings() {
+@@ -1567,27 +1586,41 @@ void PictureLayerImpl::UpdateDomicileDisplayTilings() {
        layer_tree_impl()->domicile_display_regions();
    const PictureLayerTiling* high_res =
        tilings_->FindTilingWithResolution(HIGH_RESOLUTION);
@@ -136,7 +136,7 @@ index b2ab517..b17dd80 100644
    }
  
    for (const float ratio : ratios) {
-@@ -1615,9 +1648,8 @@ void PictureLayerImpl::UpdateDomicileDisplayTilings() {
+@@ -1606,9 +1639,8 @@ void PictureLayerImpl::UpdateDomicileDisplayTilings() {
        tiling = AddTiling(raster);
        tiling->set_resolution(NON_IDEAL_RESOLUTION);
      }
@@ -149,7 +149,7 @@ index b2ab517..b17dd80 100644
  }
  
 diff --git a/cc/layers/picture_layer_impl.h b/cc/layers/picture_layer_impl.h
-index a6d17ec..aea5cb5 100644
+index 357791b..b97d869 100644
 --- a/cc/layers/picture_layer_impl.h
 +++ b/cc/layers/picture_layer_impl.h
 @@ -20,6 +20,7 @@

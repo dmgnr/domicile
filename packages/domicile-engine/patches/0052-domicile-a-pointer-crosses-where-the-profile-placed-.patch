@@ -98,7 +98,7 @@ index b808407..f8ab219 100644
  
    // DOMICILE: the desktop's clipboards, which without this the browser does
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index ed30405..3ec0067 100644
+index bf09ed2..cb87d74 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -21,6 +21,7 @@

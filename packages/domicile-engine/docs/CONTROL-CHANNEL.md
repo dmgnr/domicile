@@ -22,8 +22,8 @@ The engine has two channels to the rest of Domicile:
 ### Members
 
 - **Outbound:** `spawn`, `search_files`, `call_system`,
-  `answer_portal_request`, `copy_clipboard_entry`, `activate_tray_item`,
-  `dismiss_notifications`, `invoke_notification_action`,
+  `answer_portal_request`, `copy_clipboard_entry`, `remove_clipboard_entry`,
+  `activate_tray_item`, `dismiss_notifications`, `invoke_notification_action`,
   `reply_to_notification`, `focus_app`,
   `focus_chrome`, `sync_frames`, `close_app`, `set_app_bounds`, `set_desktop_size`,
   `set_device_pixel_ratio`, `set_theme`, `theme_captured`, `unlock`, `lock`,
@@ -34,7 +34,10 @@ The engine has two channels to the rest of Domicile:
   input, at most every 200 ms, for the idle clock, `desk_pointer` for
   each pointer move, `desk_cursor` for each change of the pointer's
   image, for screen casts, and `pointer_swipe` and `pointer_hold` for each
-  touchpad swipe or hold the shell did not grab.
+  touchpad swipe or hold the shell did not grab, and `engine_fault` for a
+  bug the engine caught in itself (`DeskFaults`), which the compositor logs
+  as an error and shows as an urgent notification with a "Report it"
+  button.
 - **Inbound:** `welcome`, `app_appeared`, `app_titled`, `app_desktop_id`,
   `app_resized`, `app_min_size`, `app_max_size`, `popup_placed`, `app_closed`,
   `app_cursor`, `app_presented`, `app_suspended`, `app_transient_for`,
@@ -42,10 +45,11 @@ The engine has two channels to the rest of Domicile:
   `found_files`,
   `clipboard`, `theme`,
   `windows_theme`, `appearance`, `focus_changed`, `focus_requested`,
-  `displays`, `keymap`, `extensions`, `force_dark`, `tray`, `notifications`, `shell_config`,
+  `displays`, `keymap`, `extensions`, `force_dark`, `spellcheck`, `tray`, `notifications`, `shell_config`,
   `idle`, `locked`, `system`, `portal_requests`.
 - **Handled in the browser, never sent to the compositor:** `grab_shortcut`,
-  `ungrab_shortcut`, `warp_pointer`, and `ShellRan`/`ShellFailed`, which
+  `ungrab_shortcut`, `warp_pointer`, `confine_pointer`, and
+  `ShellRan`/`ShellFailed`, which
   `DomicileShell` sends once the shell's module ran or did not, for
   `load_shell` (below).
 - **Not from the compositor:** `browserwindowschanged`, the desk's browser
@@ -109,6 +113,11 @@ The engine has two channels to the rest of Domicile:
 - **`force_dark`** stops in the browser process. It is the desk's
   `theme.force_dark`: hosts whose pages Chromium's auto dark mode draws dark
   while the theme is dark. See `components/domicile/browser/force_dark.h`.
+- **`spellcheck`** stops in the browser process. It is the desk's
+  `spellcheck`: whether pages check spelling, and in which languages. Every
+  profile takes it (`chrome/browser/domicile/domicile_spellcheck.h`). The
+  dictionaries ship in the engine's `dictionaries/` folder and are never
+  downloaded (patch 0246).
 - **`grab_shortcut`**: the browser holds the grabbed set and matches it in
   `WebViewGuest::PreHandleKeyboardEvent`. The compositor cannot do this: keys
   typed into a `<webview>` guest never reach it. A match comes back as a
@@ -135,6 +144,29 @@ The engine has two channels to the rest of Domicile:
     pointer over a browser window's page.
   - Logic and tests: `components/domicile/browser/pointer_warp.h`. Execution:
     `chrome/browser/domicile/domicile_pointer_warp.cc`.
+  - The move that lands a warp reaches no client as relative motion: nobody
+    moved the mouse. See `components/domicile/common/warp_landing.h`.
+- **`confine_pointer`**: holds the pointer inside boxes in the page's
+  coordinates, for a game or VM viewer whose `zwp_pointer_constraints_v1`
+  confinement the shell took. An empty list lets go, as does the page going
+  away.
+  - Boxes are clipped to the page's own box. Only the DRM cursor is held,
+    through `OzonePlatform::SetDomicilePointerConfinement`; nested or
+    headless it answers false.
+  - The DRM cursor clamps each mouse and tablet move in the confining
+    window's pixels, so a box across a seam holds on both monitors. Warps
+    are not held.
+  - Logic and tests: `components/domicile/browser/pointer_warp.h` and
+    `ui/ozone/platform/drm/domicile/drm_pointer_confinement.h`. Execution:
+    `chrome/browser/domicile/domicile_pointer_confinement.cc`.
+- **`app_pointer_constraint`** carries the window's `region` beside its
+  `constraint`: rectangles in the window's surface coordinates, `null` for the
+  whole window, read as `DomicileWindow.pointerRegion`.
+- **`pointer_relative`** carries `dx`/`dy`, the page's `movementX/Y`, and
+  `dx_unaccel`/`dy_unaccel`, the device's own motion before acceleration.
+  On a console libinput reports it and it rides the `PointerEvent` from the
+  mouse to the `<app>` (`ui/events/domicile/unaccelerated_motion.h`). A
+  device that reports none sends the accelerated motion for both.
 - **A compositor that hangs up** is replaced, not fatal. The browser:
   - answers each of the page's open system calls with a failed
     `system_reply` or `system_end` of kind `compositor_gone`, and closes each
@@ -256,9 +288,16 @@ The supervisor connects, sends one JSON line, reads one reply, and closes.
 {"type":"config_extensions","ids":["…"]}
 
 {"type":"extensions","version":1}
-{"type":"extensions","extensions":[{"id":"…","name":"…","description":"…","version":"1.0","enabled":true,"options_url":"chrome-extension://…/options.html","settings":{"private":false,"site_access":"all_sites"}}]}
+{"type":"extensions","extensions":[{"id":"…","name":"…","description":"…","version":"1.0","enabled":true,"options_url":"chrome-extension://…/options.html","settings":{"private":false,"site_access":"all_sites"},"icon_path":"/home/…/icons/128.png"}]}
 
 {"type":"set_extension_enabled","version":1,"id":"…","enabled":false}
+{"type":"set_extension_enabled","version":1,"id":"…","enabled":true,"profile":"work"}
+{"type":"set"}   |   {"type":"refused","why":"…"}
+
+{"type":"browser_profiles","version":1}
+{"type":"browser_profiles","default_profile":"personal","default_private_profile":"private","profiles":[{"id":"work","name":"Work","color":"#d97706","private":false,"extensions":[{"id":"…","enabled":true,"locked":true}]}],"sites":[{"site":"github.com/acme","profile":"work","pinned":true}]}
+
+{"type":"pin_browser_site","version":1,"site":"github.com/acme","profile":"work"}
 {"type":"set"}   |   {"type":"refused","why":"…"}
 
 {"type":"configure_extension","version":1,"id":"…","settings":{"private":true,"site_access":["github.com"]}}
@@ -290,6 +329,12 @@ The supervisor connects, sends one JSON line, reads one reply, and closes.
 
 {"type":"disable_while_typing","version":1,"enabled":false}
 {"type":"disable_while_typing","enabled":false}   |   {"type":"refused","why":"…"}
+
+{"type":"set_log_levels","version":1,"min_level":0,"vmodule":"*/domicile/*=2"}
+{"type":"set"}   |   {"type":"refused","why":"…"}
+
+{"type":"devtools","version":1,"window":"3","method":"DOM.getContentQuads","params":{"backendNodeId":42}}
+{"type":"devtools","result":{"quads":[[10,20,110,20,110,40,10,40]]}}   |   {"type":"refused","why":"…"}
 ```
 
 - Without the switch, the engine binds nothing. Every desktop `domicile`
@@ -334,10 +379,22 @@ The supervisor connects, sends one JSON line, reads one reply, and closes.
   ([APP-MODULES.md](/docs/architecture/APP-MODULES.md#domiciles-own-state)).
   `extensions` lists the shell profile's extensions, without apps, themes or
   Chrome's components; `options_url` is left out when there is no options
-  page. `settings` has each setting the extension can use, spelled as the
+  page. `icon_path` is the file of its manifest icon closest to 128px, left
+  out when the manifest names none: a path, so listing reads no files, which
+  `domicile-app-host` turns into the image Settings draws. `settings` has each setting the extension can use, spelled as the
   config's `extensions.settings`; `configure_extension` changes the ones it
   names, and refuses one the extension cannot use
   ([EXTENSIONS.md](/docs/architecture/EXTENSIONS.md#settings)).
+- `browser_profiles`, `pin_browser_site` and `set_extension_enabled` with a
+  `profile` are the Settings app's Profiles page
+  ([BROWSER-PROFILES.md](/docs/architecture/BROWSER-PROFILES.md)), as the
+  shell's `browserProfiles`, `pinBrowserSite` and
+  `setBrowserProfileExtensionEnabled`. Without a `profile`,
+  `set_extension_enabled` switches the shell profile's extension. A profile's
+  `extensions` is empty while it loads; `locked` is a switch the config's
+  `extensions` list sets. A site is `pinned` when the user pinned it, and the
+  config's otherwise. Pinning a site to the default profile unpins it; a site
+  the config lists is refused.
 - `media_devices` and `set_media_device` are the Settings app's too. They list
   each kind's devices in the order of Chrome's device ranking in the shell
   profile's prefs, and move one to the top. A site that names no device gets
@@ -376,11 +433,24 @@ The supervisor connects, sends one JSON line, reads one reply, and closes.
     data is left out.
   - `clear_site_data` removes everything one host stores, and replies once
     it is gone.
+- `set_log_levels` is `domicile set-log-level`: Chromium's minimum severity
+  (0 `INFO` to 3 `FATAL`) and `--vmodule`, in every engine process and those
+  started later, until the engine exits. The supervisor makes them from the
+  levels it was asked for ([Logs](/docs/LOGGING.md)).
 - `disable_while_typing` is `domicile disable-while-typing`
   ([RUNNING-A-DESKTOP.md](/docs/RUNNING-A-DESKTOP.md#disable-while-typing)).
   It sets whether the touchpads rest while a keyboard types when `enabled` is
   given, and replies with whether they do. Off a tty it is refused: the host
   compositor reads the touchpad.
+- `devtools` is `domicile devtools`
+  ([CLI.md](/docs/CLI.md#domicile-devtools-window-method-params)), which
+  `domicile mcp` drives browser windows with. `window` is the engine's id for
+  a browser window, or `shell` for the shell's page, which refuses
+  `Page.navigate`, `navigateToHistoryEntry` and `reload`. It attaches a DevTools client of its own for the one
+  method and detaches once answered, so DevTools the user has open keeps
+  working. Only `kDevToolsMethods` in `command_protocol.h` go through, and
+  `Page.navigate` only to http and https; a private window is refused, and so
+  is a page that does not answer within 10 seconds.
 - It is its own socket because the compositor has no part in choosing the
   shell. The supervisor also passes it at
   launch as `--domicile-shell-root` and `--domicile-shell-module`. See

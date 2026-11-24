@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use domicile_host::app_names::app;
-use tracing::warn;
 use zbus::blocking::object_server::InterfaceRef;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
@@ -91,7 +90,7 @@ impl Background {
             )
             .await;
         if let Err(why) = notified {
-            warn!(%why, %app_id, "the user was not told an application runs in the background");
+            tracing::error!(%why, %app_id, "the user was not told an application runs in the background");
         }
         (
             0,
@@ -109,7 +108,7 @@ impl Background {
         flags: u32,
     ) -> bool {
         let Some(config_home) = &self.config_home else {
-            warn!(
+            tracing::error!(
                 %app_id,
                 "nowhere to keep autostart entries: neither XDG_CONFIG_HOME \
                  nor HOME is set"
@@ -124,7 +123,7 @@ impl Background {
             flags & DBUS_ACTIVATABLE != 0,
         )
         .unwrap_or_else(|why| {
-            warn!(%why, %app_id, "an autostart entry could not be changed");
+            tracing::error!(%why, %app_id, "an autostart entry could not be changed");
             false
         })
     }
@@ -166,7 +165,7 @@ pub fn changed(served: &InterfaceRef<Background>) {
         served.signal_emitter(),
     ));
     if let Err(why) = said {
-        warn!(%why, "the frontend was not told the running applications changed");
+        tracing::error!(%why, "the frontend was not told the running applications changed");
     }
 }
 

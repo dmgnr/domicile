@@ -31,10 +31,10 @@ ozone_unittests.
  6 files changed, 43 insertions(+), 2 deletions(-)
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_aura.cc b/content/browser/renderer_host/render_widget_host_view_aura.cc
-index 1a9419f..48d4cce 100644
+index 0f51c80..790368a 100644
 --- a/content/browser/renderer_host/render_widget_host_view_aura.cc
 +++ b/content/browser/renderer_host/render_widget_host_view_aura.cc
-@@ -2972,6 +2972,17 @@ void RenderWidgetHostViewAura::OnSystemCursorSizeChanged(
+@@ -3027,6 +3027,17 @@ void RenderWidgetHostViewAura::OnSystemCursorSizeChanged(
    UpdateSystemCursorSize(system_cursor_size);
  }
  
@@ -53,10 +53,10 @@ index 1a9419f..48d4cce 100644
  // RenderWidgetHostViewAura, aura::client::FocusChangeObserver implementation:
  
 diff --git a/content/browser/renderer_host/render_widget_host_view_aura.h b/content/browser/renderer_host/render_widget_host_view_aura.h
-index 16150b4..ef2f3dd 100644
+index 6072501..c28c6b0 100644
 --- a/content/browser/renderer_host/render_widget_host_view_aura.h
 +++ b/content/browser/renderer_host/render_widget_host_view_aura.h
-@@ -396,6 +396,9 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
+@@ -400,6 +400,9 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
    // Overridden from aura::client::CursorClientObserver:
    void OnSystemCursorSizeChanged(const gfx::Size& cursor_size) override;
  
@@ -67,10 +67,10 @@ index 16150b4..ef2f3dd 100644
    void OnWindowFocused(aura::Window* gained_focus,
                         aura::Window* lost_focus) override;
 diff --git a/content/common/BUILD.gn b/content/common/BUILD.gn
-index 3339832..29ef5ee 100644
+index ad25062..9cbe1c2 100644
 --- a/content/common/BUILD.gn
 +++ b/content/common/BUILD.gn
-@@ -364,7 +364,10 @@ source_set("common") {
+@@ -363,7 +363,10 @@ source_set("common") {
    }
  
    if (use_aura) {

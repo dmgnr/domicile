@@ -1,7 +1,9 @@
 import {
   connectWifi,
   disconnectWifi,
+  forgetWifi,
   scanWifi,
+  setWifiAutoJoin,
   setWifiEnabled,
 } from "@domicile-desktop/system-network/wifi";
 
@@ -9,7 +11,9 @@ import {
 export const WIFI_ACTIONS = {
   connectWifi,
   disconnectWifi,
+  forgetWifi,
   scanWifi,
+  setWifiAutoJoin,
   setWifiEnabled,
 };
 

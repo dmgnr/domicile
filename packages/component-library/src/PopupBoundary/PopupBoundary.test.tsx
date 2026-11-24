@@ -138,20 +138,32 @@ describe("a popup in a narrow PopupBoundary", () => {
     render(
       <Tooltip content="Full title" open trigger={<Button>Tab</Button>} />,
     );
-    expect(
-      globalThis.getComputedStyle(await screen.findByRole("tooltip"))
-        .maxInlineSize,
-    ).toContain("var(--available-width)");
+    expectNarrowedToAvailableWidth(await screen.findByRole("tooltip"));
   });
 
   it("narrows a popover to the room it has", async () => {
     render(<Popover open>Body</Popover>);
-    expect(
-      globalThis.getComputedStyle(await screen.findByRole("dialog"))
-        .maxInlineSize,
-    ).toContain("var(--available-width)");
+    expectNarrowedToAvailableWidth(await screen.findByRole("dialog"));
   });
 });
+
+/**
+ * Fails unless `popup`'s inline size is capped by the `--available-width` its
+ * positioner (its parent) sets from the room its `PopupBoundary` leaves.
+ */
+const expectNarrowedToAvailableWidth = (popup: HTMLElement) => {
+  const positioner = popup.parentElement;
+  if (positioner === null) {
+    throw new Error("the popup has no positioner");
+  }
+  const availableWidth = globalThis
+    .getComputedStyle(positioner)
+    .getPropertyValue("--available-width");
+  expect(availableWidth).not.toBe("");
+  expect(globalThis.getComputedStyle(popup).maxInlineSize).toContain(
+    availableWidth,
+  );
+};
 
 /** A 600px screen at the page's left edge, drawn once it mounts. */
 const OnScreen = ({ children }: { children: React.ReactNode }) => (

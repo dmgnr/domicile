@@ -72,19 +72,23 @@ class ShellSwap {
   // nullopt once the new shell ran, or why it did not.
   using Swapped = base::OnceCallback<void(const ShellOutcome& ran)>;
 
-  // `load` loads whatever `source` serves into the shell's window.
+  // `load` loads whatever `source` serves into the shell's window. `changed`
+  // runs before the swap loads a shell other than the one it serves now.
   ShellSwap(ShellSource& source,
             base::RepeatingClosure load,
+            base::RepeatingClosure changed,
             base::TimeDelta patience);
   ShellSwap(const ShellSwap&) = delete;
   ShellSwap& operator=(const ShellSwap&) = delete;
   ~ShellSwap();
 
-  // Serves `module` out of `root`, loads it, and answers `swapped` once the
-  // page says whether it ran. A swap still waiting is answered first, as
-  // replaced; the shell to go back to stays the one that last ran.
+  // Serves `module` out of `root`, as `files` says, loads it, and answers
+  // `swapped` once the page says whether it ran. A swap still waiting is
+  // answered first, as replaced; the shell to go back to stays the one that
+  // last ran.
   void Swap(const base::FilePath& root,
             const std::string& module,
+            ShellFiles files,
             Swapped swapped);
 
   // The shell's page served for ShellSource serial `serial` said whether its
@@ -98,13 +102,18 @@ class ShellSwap {
   struct Served {
     base::FilePath root;
     std::string module;
+    ShellFiles files = ShellFiles::kDirectory;
   };
 
   // Answers the waiting swap with `ran` and stops waiting.
   void Answer(const ShellOutcome& ran);
 
+  // Serves `shell` and loads it, telling `changed_` first if it is another.
+  void Serve(const Served& shell);
+
   const raw_ref<ShellSource> source_;
   const base::RepeatingClosure load_;
+  const base::RepeatingClosure changed_;
   const base::TimeDelta patience_;
 
   // How to answer the waiting swap, null while none waits, and the shell

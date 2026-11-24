@@ -1,0 +1,32 @@
+{
+  "bin": {
+    "electron-host": "./src/main.ts"
+  },
+  "dependencies": {
+    "@cprussin/option-result": "catalog:",
+    "dbus-next": "catalog:",
+    "zod": "catalog:"
+  },
+  "description": "Runs an installed Electron app's main process on Domicile: mirrors its resources, answers require(\"electron\") with a stand-in, and runs the app's main.",
+  "devDependencies": {
+    "@cprussin/tsconfig": "catalog:",
+    "@types/bun": "catalog:",
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "files": [
+    "src/**",
+    "!src/**/*.test.ts"
+  ],
+  "license": "MIT",
+  "name": "@domicile-desktop/electron-host",
+  "private": true,
+  "scripts": {
+    "test:types": "tsc --noEmit",
+    "test:unit": "bun test"
+  },
+  "type": "module",
+  "version": "0.0.0"
+}

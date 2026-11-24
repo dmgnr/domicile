@@ -164,6 +164,59 @@ fn a_restored_row_tops_the_history() {
     }
 }
 
+/// Removing the copy on the clipboard drops its row and empties the
+/// clipboard, so nothing pastes it again.
+#[test]
+fn removing_the_current_copy_empties_the_clipboard() {
+    let compositor = Compositor::started_with(ONE_DISPLAY);
+    let mut chrome = compositor.chrome();
+
+    let copying = compositor
+        .command("wl-copy")
+        .args(["--foreground", "--", "a password"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("wl-copy starts; it is in `nix develop .#full`");
+    let history = chrome
+        .wait_for(|message| {
+            matches!(message, HostMessage::Clipboard { entries }
+                if entries.first().is_some_and(|entry| entry.preview == "a password" && entry.current))
+        })
+        .expect("the copy tops the shell's history as what is on the clipboard");
+    let HostMessage::Clipboard { entries } = history else {
+        unreachable!("the wait matched on this variant")
+    };
+
+    chrome
+        .say(&ChromeMessage::RemoveClipboardEntry {
+            entry: entries[0].id,
+        })
+        .expect("the chrome socket takes a removal");
+
+    chrome
+        .wait_for(
+            |message| matches!(message, HostMessage::Clipboard { entries } if entries.is_empty()),
+        )
+        .expect("the removed row leaves the shell's history");
+    // `wl-copy` exits when its selection is cleared.
+    let copied = finished(copying, Duration::from_secs(10));
+    assert!(copied.status.success(), "wl-copy failed: {}", copied.stderr);
+    let pasting = compositor
+        .command("wl-paste")
+        .arg("--no-newline")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("wl-paste starts; it is in `nix develop .#full`");
+    let pasted = finished(pasting, Duration::from_secs(10));
+    assert!(
+        !pasted.status.success() && pasted.stdout.is_empty(),
+        "wl-paste read {:?} from a clipboard that was emptied",
+        pasted.stdout
+    );
+}
+
 /// A copied image reaches the history as a row named for its size, and a
 /// restored image row pastes back the same bytes after its copier has left.
 #[test]

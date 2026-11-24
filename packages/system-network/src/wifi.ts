@@ -11,29 +11,40 @@ import { hasOwner } from "./has-owner";
 import {
   connectIwdWifi,
   disconnectIwdWifi,
+  forgetIwdWifi,
   scanIwdWifi,
+  setIwdWifiAutoJoin,
   setIwdWifiEnabled,
   watchIwdWifi,
 } from "./iwd-wifi";
 import {
   connectNetworkManagerWifi,
   disconnectNetworkManagerWifi,
+  forgetNetworkManagerWifi,
   scanNetworkManagerWifi,
+  setNetworkManagerWifiAutoJoin,
   setNetworkManagerWifiEnabled,
   watchNetworkManagerWifi,
 } from "./networkmanager-wifi";
-import type { Wifi, WifiDesktop, WifiDevice, WifiNetwork } from "./wifi-state";
+import type {
+  SavedWifi,
+  Wifi,
+  WifiDesktop,
+  WifiDevice,
+  WifiNetwork,
+} from "./wifi-state";
 import { WifiBackend } from "./wifi-state";
 
 export type {
   Ip,
+  SavedWifi,
   Wifi,
   WifiConnection,
   WifiDesktop,
   WifiDevice,
   WifiNetwork,
 } from "./wifi-state";
-export { WifiBackend } from "./wifi-state";
+export { WifiBackend, WifiSecurity } from "./wifi-state";
 
 /** Each backend's bus name, in the order they are tried. */
 const BACKENDS: readonly (readonly [string, WifiBackend])[] = [
@@ -139,6 +150,35 @@ export const disconnectWifi = (
       return disconnectNetworkManagerWifi(domicile, wifi);
     case WifiBackend.Iwd:
       return disconnectIwdWifi(domicile, wifi);
+  }
+};
+
+/** Forget a saved network, so joining it again asks for its password. */
+export const forgetWifi = (
+  domicile: WifiDesktop,
+  wifi: WifiDevice,
+  saved: SavedWifi,
+): Promise<Result<"done", SystemError>> => {
+  switch (wifi.backend) {
+    case WifiBackend.NetworkManager:
+      return forgetNetworkManagerWifi(domicile, wifi, saved);
+    case WifiBackend.Iwd:
+      return forgetIwdWifi(domicile, wifi, saved);
+  }
+};
+
+/** Whether the service joins a saved network by itself when it is in range. */
+export const setWifiAutoJoin = (
+  domicile: WifiDesktop,
+  wifi: WifiDevice,
+  saved: SavedWifi,
+  autoJoin: boolean,
+): Promise<Result<"done", SystemError>> => {
+  switch (wifi.backend) {
+    case WifiBackend.NetworkManager:
+      return setNetworkManagerWifiAutoJoin(domicile, wifi, saved, autoJoin);
+    case WifiBackend.Iwd:
+      return setIwdWifiAutoJoin(domicile, wifi, saved, autoJoin);
   }
 };
 

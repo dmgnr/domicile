@@ -26,7 +26,7 @@ namespace domicile {
 class BrowserPageThrottle : public content::NavigationThrottle {
  public:
   // Adds a throttle to `registry` if the navigation is in a <webview> guest,
-  // and a WillNavigateThrottle after it.
+  // a WillNavigateThrottle after it, and a ProfileRouteThrottle after that.
   static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry);
 
   explicit BrowserPageThrottle(content::NavigationThrottleRegistry& registry);

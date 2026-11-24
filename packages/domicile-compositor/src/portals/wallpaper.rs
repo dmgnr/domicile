@@ -17,7 +17,7 @@ use domicile_host::wallpaper::{local_path, Wallpapers};
 use domicile_protocol::{
     PortalAnswer, PortalKind, PortalWallpaper, WallpaperDialog, WallpaperTarget,
 };
-use tracing::{debug, warn};
+use tracing::debug;
 use zbus::object_server::ObjectServer;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
@@ -60,7 +60,7 @@ impl Wallpaper {
             PortalAnswer::Access => match self.pictures.set(asked.set_on, asked.path) {
                 Ok(()) => 0,
                 Err(why) => {
-                    warn!(%why, %uri, "the wallpaper could not be kept");
+                    tracing::error!(%why, %uri, "the wallpaper could not be kept");
                     2
                 }
             },
@@ -83,7 +83,7 @@ impl Pictures {
     /// replaced by the next picture set.
     pub fn load(dir: PathBuf) -> Self {
         let held = Wallpapers::load(dir.clone()).unwrap_or_else(|why| {
-            warn!(%why, dir = %dir.display(), "the wallpaper set through the portal is forgotten");
+            tracing::error!(%why, dir = %dir.display(), "the wallpaper set through the portal is forgotten");
             Wallpapers::empty(dir)
         });
         Pictures {

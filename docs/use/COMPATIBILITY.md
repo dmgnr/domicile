@@ -23,6 +23,8 @@ packaging. Steps: [Install](INSTALL.md).
 ## Apps
 
 - Wayland apps run. Electron, SDL and Qt apps are started in Wayland mode.
+- Electron apps can run on the desktop's browser instead:
+  [Electron apps](ELECTRON-APPS.md).
 - Apps that only speak X11 run through xwayland-satellite: [X11 apps](#x11-apps).
 - Which apps are checked: [Apps we check](FIRST-STEPS.md#apps-we-check).
 

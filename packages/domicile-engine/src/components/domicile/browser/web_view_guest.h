@@ -28,6 +28,8 @@
 #include "components/domicile/browser/web_view_partition.h"
 #include "components/domicile/mojom/web_view_guest.mojom.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/zoom/zoom_controller.h"
+#include "components/zoom/zoom_observer.h"
 #include "content/public/browser/browser_plugin_guest_delegate.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/download_manager.h"
@@ -43,6 +45,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/referrer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -53,6 +56,9 @@
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom-forward.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom-forward.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
+#include "ui/base/cursor/cursor.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -61,6 +67,8 @@
 
 namespace content {
 class BrowserContext;
+class NavigationHandle;
+class RenderWidgetHost;
 }  // namespace content
 
 namespace domicile {
@@ -73,8 +81,36 @@ using GuestCreatedCallback =
 
 class WebViewGuest;
 
-// A step through a guest's history.
-enum class HistoryStep { kBack, kForward };
+// Where a copy of a guest's history goes: one step back or forward, as
+// Chrome's buttons step, or the entry at `index`, as its history menus pick.
+struct HistoryStep {
+  enum class Kind { kBack, kForward, kEntry };
+  Kind kind;
+  // The entry's index in the source's history, for kEntry. The copy keeps the
+  // source's indices.
+  int index = 0;
+};
+
+// How a window's page moved to another browser profile loads there. See
+// WebViewGuest::MoveHistoryFrom.
+struct PageMove {
+  enum class Kind {
+    // Reloads the page's current entry: the user moved it.
+    kReload,
+    // Loads `url` after the page's current entry, as the link or the address
+    // bar that took it to another profile's site would have.
+    kNavigate,
+    // Takes `offset` steps through its history, as back or forward to
+    // another profile's site would have.
+    kHistory,
+  };
+
+  Kind kind = Kind::kReload;
+  GURL url;
+  content::Referrer referrer;
+  ui::PageTransition transition = ui::PAGE_TRANSITION_LINK;
+  int offset = 0;
+};
 
 // Holds the desk's browser windows, one per profile. Implemented in //chrome
 // (//chrome/browser/domicile/domicile_browser_windows.h) because a window's
@@ -87,14 +123,16 @@ class BrowserWindowHost {
   virtual ~BrowserWindowHost() = default;
 
   // Opens a browser window at `url` in `context`'s desk and `partition`, for a
-  // page's new window or an extension's tabs.create.
-  virtual void Open(content::BrowserContext& context,
-                    const GURL& url,
-                    const std::optional<WebViewPartition>& partition) = 0;
+  // page's new window or an extension's tabs.create. Returns it, or null when
+  // there is no shell to own it.
+  virtual WebViewGuest* Open(
+      content::BrowserContext& context,
+      const GURL& url,
+      const std::optional<WebViewPartition>& partition) = 0;
 
   // Opens a browser window with a copy of `source`'s history, in its context
   // and partition, and takes `step` there. See
-  // mojom::WebViewGuest.GoBackInNewWindow.
+  // mojom::WebViewGuest.GoBackInNewWindow and GoToHistoryEntryInNewWindow.
   virtual void OpenHistoryStep(WebViewGuest& source, HistoryStep step) = 0;
 
   // Makes a browser window for a page's `window.open()` or `target="_blank"`
@@ -129,14 +167,42 @@ class BrowserWindowHost {
   virtual WebViewGuest* Find(content::BrowserContext& context,
                              const std::string& id) = 0;
 
-  // Returns the off-the-record context of `context`'s profile, making it on
-  // first use. Private guests' pages live there.
-  virtual content::BrowserContext& PrivateContext(
-      content::BrowserContext& context) = 0;
+  // The browser profile window `guest`'s page moves to as the user takes it
+  // from `from` to `to`, or nothing when it stays: never for a private page
+  // or an app window. See RouteNavigation in browser_profiles.h.
+  virtual std::optional<std::string> ProfileToMoveTo(WebViewGuest& guest,
+                                                     const GURL& from,
+                                                     const GURL& to) = 0;
+
+  // Moves window `guest`'s page to browser profile `profile`: a new page
+  // under the same window id takes its place, given its history and loaded
+  // as `move` says, and `guest` is destroyed on a later task. See
+  // mojom::BrowserWindows.Reopen.
+  virtual void Reopen(WebViewGuest& guest,
+                      const std::string& profile,
+                      const PageMove& move) = 0;
+
+  // The context a page of the guest `owner` owns is made in: browser profile
+  // `profile`'s, made on first use. Empty `profile` is `owner` itself, the
+  // default profile, or with `private_browsing` the default private
+  // profile's. A profile the desk does not have is the default one, or the
+  // default private one: a private page is never made outside a private
+  // profile. See docs/architecture/BROWSER-PROFILES.md.
+  virtual content::BrowserContext& ContextFor(content::BrowserContext& owner,
+                                              bool private_browsing,
+                                              const std::string& profile) = 0;
+
+  // Runs `ready` once ContextFor's context for these can be made without
+  // blocking: at once when its browser profile is loaded, else once its load
+  // ends. Calls ContextFor in `ready`, not before.
+  virtual void WhenContextReady(content::BrowserContext& owner,
+                                bool private_browsing,
+                                const std::string& profile,
+                                base::OnceClosure ready) = 0;
 
   // A private guest's page was made in, or destroyed from, `context`, an
-  // off-the-record context. Private browsing ends when every page made has
-  // been destroyed.
+  // off-the-record context. Its private profile ends when every page made in
+  // it has been destroyed.
   virtual void PrivatePageOpened(content::BrowserContext& context) = 0;
   virtual void PrivatePageClosed(content::BrowserContext& context) = 0;
 };
@@ -147,6 +213,13 @@ class BrowserWindowHost {
 using InspectCallback =
     base::RepeatingCallback<void(content::RenderFrameHost& frame,
                                  std::optional<gfx::Point> root_point)>;
+
+// Adds `word` to `context`'s own spelling dictionary, for a menu's
+// kAddToDictionary. Provided by //chrome, which owns spell checking: see
+// //chrome/browser/domicile/domicile_spellcheck.h.
+using AddToDictionaryCallback =
+    base::RepeatingCallback<void(content::BrowserContext& context,
+                                 const std::string& word)>;
 
 // Prints `guest`'s page through the desktop's print dialog. Provided by
 // //chrome, which owns printing: see
@@ -173,12 +246,18 @@ class MediaAccess {
                      const url::Origin& origin,
                      blink::mojom::MediaStreamType type) = 0;
 
+  // Runs `listed` once the cameras and microphones are listed, at once if
+  // they are. Nothing lists them before the first ask, as listing starts an
+  // audio service that then stays up.
+  virtual void WhenDevicesListed(base::OnceClosure listed) = 0;
+
   // The cameras and microphones, ranked by `context`'s profile's preference.
+  // Complete only once WhenDevicesListed has run.
   virtual mojom::WebViewMediaDevicesPtr ListDevices(
       content::BrowserContext& context) = 0;
 
   // Ranks device `id` first among `kind`'s for `context`'s profile, or says
-  // why not.
+  // why not. Finds `id` only once WhenDevicesListed has run.
   virtual base::expected<void, std::string> PreferDevice(
       content::BrowserContext& context,
       mojom::WebViewMediaDeviceKind kind,
@@ -225,6 +304,7 @@ class WebViewGuest : public mojom::WebViewGuest,
                      public content::WebContentsObserver,
                      public content_settings::Observer,
                      public content::DownloadManager::Observer,
+                     public zoom::ZoomObserver,
                      public mojom::PagePicker {
  public:
   // Creates a guest for `placeholder`, a child frame of `owner`, and starts
@@ -233,8 +313,8 @@ class WebViewGuest : public mojom::WebViewGuest,
   //
   // `created` runs once, before the guest is attached or navigated, so tab
   // helpers see the first navigation. `extension_popup`: see
-  // extension_popup(). `private_browsing` makes the page in
-  // BrowserWindowHost::PrivateContext rather than the owner's context.
+  // extension_popup(). `private_browsing` and `profile` make the page in
+  // BrowserWindowHost::ContextFor's context.
   // `partition` gives it storage of its own; see partition().
   static void CreateAndAttach(
       content::RenderFrameHost& owner,
@@ -243,6 +323,7 @@ class WebViewGuest : public mojom::WebViewGuest,
       mojo::PendingRemote<mojom::WebViewGuestClient> client,
       bool extension_popup,
       bool private_browsing,
+      const std::string& profile,
       const std::optional<WebViewPartition>& partition,
       const GuestCreatedCallback& created);
 
@@ -255,7 +336,7 @@ class WebViewGuest : public mojom::WebViewGuest,
   // - `window_id`: the id a <webview window> uses.
   // - `popup_window`: the chrome.windows popup window whose one tab this is;
   //   empty for a tab of the desk's window. See popup_window().
-  // - `private_browsing`, `partition`: as in CreateAndAttach.
+  // - `private_browsing`, `profile`, `partition`: as in CreateAndAttach.
   // - `created`: runs before the first navigation, as in CreateAndAttach.
   //
   // The caller navigates it with Navigate.
@@ -264,6 +345,7 @@ class WebViewGuest : public mojom::WebViewGuest,
       const std::string& window_id,
       std::optional<int> popup_window,
       bool private_browsing,
+      const std::string& profile,
       const std::optional<WebViewPartition>& partition,
       const GuestCreatedCallback& created);
 
@@ -306,6 +388,10 @@ class WebViewGuest : public mojom::WebViewGuest,
   // PrintCallback.
   static void SetPrint(PrintCallback print);
 
+  // Set once by //chrome, before any guest exists. Runs for a menu's
+  // kAddToDictionary. See AddToDictionaryCallback.
+  static void SetAddToDictionary(AddToDictionaryCallback add);
+
   // Set once by //chrome, before any guest exists. See MediaAccess.
   static void SetMediaAccess(MediaAccess* access);
 
@@ -329,6 +415,26 @@ class WebViewGuest : public mojom::WebViewGuest,
   // there, as Chrome's middle-clicked back button does with a cloned tab. In
   // place of the first Navigate. See BrowserWindowHost::OpenHistoryStep.
   void TakeHistoryStep(WebViewGuest& source, HistoryStep step);
+
+  // Gives a new window's page `source`'s back and forward list, as addresses
+  // and titles, and loads as `move` says. In place of the first Navigate.
+  // Only addresses cross: two profiles share no page state, so the page
+  // reloads and form input and POST bodies stay behind. A link drops what
+  // was forward of the page, as following it would. See
+  // BrowserWindowHost::Reopen.
+  void MoveHistoryFrom(WebViewGuest& source, const PageMove& move);
+
+  // This window's page was replaced by `MoveHistoryFrom`'s: tells its
+  // <webview>, which asks for the window again, and lets go of it.
+  void Replaced();
+
+  // The browser profile this window's page moves to as the user takes it
+  // from `from` to `to`, or nothing; see BrowserWindowHost::ProfileToMoveTo.
+  std::optional<std::string> ProfileToMoveTo(const GURL& from, const GURL& to);
+
+  // Asks the host to move this window's page to `profile` as `move` says.
+  // Posted by ProfileRouteThrottle, so never under the page's own stack.
+  void MoveToProfile(const std::string& profile, const PageMove& move);
 
   // The storage partition the page was made in, or nothing for its profile's
   // own. A partitioned page has a guest SiteInstance, so its new windows share
@@ -450,6 +556,27 @@ class WebViewGuest : public mojom::WebViewGuest,
   // answered or a newer prompt replaced it.
   void WithdrawPrompt(int id);
 
+  // Asks the shell to show `request`, a step of a site's "Sign in with"
+  // request. See IdentityRequested in the mojom and
+  // components/domicile/browser/identity_dialog.h.
+  //
+  // `answered` gets the shell's answer: kNone if it ignored the step or the
+  // element went away. Returns the step's number, for WithdrawIdentity.
+  using IdentityAnswered =
+      base::OnceCallback<void(mojom::WebViewIdentityAction action,
+                              int32_t index)>;
+  int AskIdentity(mojom::WebViewIdentityRequestPtr request,
+                  IdentityAnswered answered);
+
+  // Tells the shell to stop showing step `id`. Does nothing once it was
+  // answered or a newer step replaced it.
+  void WithdrawIdentity(int id);
+
+  // Opens a browser window at `url` in this page's profile and partition, as
+  // a window its page opened with no opener. Returns it, or null when there
+  // is no shell to own it.
+  WebViewGuest* OpenWindowAt(const GURL& url);
+
   // Binds a picker for `frame`, a frame of this guest's page. See
   // mojom::PagePicker and PopulateChromeFrameBinders.
   void BindPagePicker(content::RenderFrameHost& frame,
@@ -497,11 +624,119 @@ class WebViewGuest : public mojom::WebViewGuest,
   base::CallbackListSubscription AddFocusedCallback(
       base::RepeatingClosure focused);
 
-  // The page's zoom factor, for chrome.tabs. ZoomTo expects a factor already
-  // within blink's range (see DeskZoomFactor in
-  // //components/domicile:desk_tabs) and reports the change like SetZoom.
+  // Keeps this page at its full frame rate under Energy Saver, even unfocused.
+  // An Electron window's, which is an app rather than a page. See
+  // unfocused_web_views.h.
+  void KeepFullFrameRate();
+
+  // A new window the page asked for, as an embedder that decides on its
+  // page's new windows hears of it: window.open's target and features, how
+  // it asked, and the page that asked.
+  struct WindowRequest {
+    GURL url;
+    std::string frame_name;
+    WindowOpenDisposition disposition =
+        WindowOpenDisposition::kNewForegroundTab;
+    std::optional<int> x;
+    std::optional<int> y;
+    std::optional<int> width;
+    std::optional<int> height;
+    bool popup = false;
+    GURL referrer;
+  };
+  // Runs with each window the page asks for and the window itself, `held`,
+  // when its opener keeps a handle on it, or null when it doesn't (noopener,
+  // a middle click). `opening` opens it, or destroys `held`, as it decides;
+  // nothing else opens it. An Electron window's, whose app decides with
+  // setWindowOpenHandler.
+  using WindowOpening =
+      base::RepeatingCallback<void(WindowRequest request,
+                                   std::unique_ptr<content::WebContents> held)>;
+  void DecideWindowsWith(WindowOpening opening);
+
+  // Runs with each context menu the page asks for, and where the click was in
+  // the page's CSS pixels, instead of asking the shell to draw one. An
+  // Electron window's, whose app draws its own or none, as on Electron.
+  using ContextMenuTaking =
+      base::RepeatingCallback<void(const content::ContextMenuParams& params,
+                                   const gfx::Point& in_page)>;
+  void TakeContextMenusWith(ContextMenuTaking taking);
+
+  // Runs with each navigation the page starts itself and each server redirect
+  // (`redirect`), which wait until `answered` says whether they go on, before
+  // the shell is asked. An Electron window's, whose app decides with
+  // will-navigate, will-frame-navigate and will-redirect. See
+  // AppNavigationThrottle.
+  using NavigationDeciding = base::RepeatingCallback<void(
+      content::NavigationHandle& navigation,
+      bool redirect,
+      base::OnceCallback<void(bool proceed)> answered)>;
+  void DecideNavigationsWith(NavigationDeciding deciding);
+  // Null when the page's navigations are the shell's alone.
+  const NavigationDeciding& navigation_deciding() const {
+    return navigation_deciding_;
+  }
+
+  // Runs when the page's `beforeunload` asks to stay, instead of asking the
+  // shell: `answered` says whether the page leaves anyway. An Electron
+  // window's, whose app decides with will-prevent-unload and shows no
+  // dialog, as on Electron.
+  using UnloadDeciding = base::RepeatingCallback<void(
+      base::OnceCallback<void(bool unload)> answered)>;
+  void DecideUnloadsWith(UnloadDeciding deciding);
+
+  // An address and title a page's restored history holds.
+  struct HistoryEntry {
+    GURL url;
+    std::u16string title;
+  };
+  // Gives the page `entries`, oldest first, and loads entry `index`, in place
+  // of the first Navigate: an Electron window's navigationHistory.restore.
+  // Each address Navigate would not show is blocked, as Navigate blocks it.
+  void RestoreHistory(const std::vector<HistoryEntry>& entries, int index);
+
+  // An Electron app's page, which hears what its webContents reports and
+  // decides what the app may: //chrome/browser/domicile's ElectronPageEvents.
+  class AppPage {
+   public:
+    virtual ~AppPage() = default;
+    // update-target-url, each change of the link under the pointer.
+    virtual void TargetUrlChanged(const GURL& url) = 0;
+    // zoom-changed: a Ctrl+wheel the page did not handle. The app zooms, if
+    // anyone does, as on Electron.
+    virtual void ZoomAsked(bool zoom_in) = 0;
+    // preferred-size-changed, in preferred size mode.
+    virtual void PreferredSizeChanged(const gfx::Size& size) = 0;
+    // content-bounds-updated: the page asked to move or resize its window.
+    virtual void ContentsBoundsAsked(const gfx::Rect& bounds) = 0;
+    // cursor-changed, over `widget`.
+    virtual void CursorChanged(content::RenderWidgetHost* widget,
+                               const ui::Cursor& cursor) = 0;
+    // Whether `widget` holds `event` for before-input-event, until the page
+    // releases it with RenderWidgetHost::DomicileReleaseHeldKeyboardEvent.
+    virtual bool HoldsKeyboardEvent(
+        content::RenderWidgetHost* widget,
+        const input::NativeWebKeyboardEvent& event) = 0;
+    // setIgnoreMenuShortcuts: the shell hears none of the page's unhandled
+    // keys, so no menu accelerator (and no other binding) answers them.
+    virtual bool IgnoresMenuShortcuts() const = 0;
+  };
+  // Reports to `page`, an Electron window's, as well as to the element.
+  void ReportToApp(base::WeakPtr<AppPage> page);
+
+  // The page's zoom factor, for chrome.tabs. In manual mode, the factor the
+  // page's own code zooms to, with the page itself at the default zoom.
   double GetZoomFactor() const;
-  void ZoomTo(double factor);
+  // Zooms to `factor`, already within blink's range (see DeskZoomFactor in
+  // //components/domicile:desk_tabs), and reports it like SetZoom. False in
+  // disabled mode, which zooms nothing.
+  bool ZoomTo(double factor);
+
+  // The page's zoom mode, which chrome.tabs.setZoomSettings sets. Chrome's
+  // ZoomController keeps it, and drops manual and per-tab modes when the page
+  // navigates away.
+  zoom::ZoomController::ZoomMode GetZoomMode() const;
+  void SetZoomMode(zoom::ZoomController::ZoomMode mode);
 
   // Runs `changed` on each zoom change, for tabs.onZoomChange.
   using ZoomChangedCallback =
@@ -520,6 +755,9 @@ class WebViewGuest : public mojom::WebViewGuest,
   void GoForward() override;
   void GoBackInNewWindow() override;
   void GoForwardInNewWindow() override;
+  void ListHistory(ListHistoryCallback callback) override;
+  void GoToHistoryEntry(int32_t id) override;
+  void GoToHistoryEntryInNewWindow(int32_t id) override;
   void Stop() override;
   void Reload() override;
   void SetZoom(double factor) override;
@@ -533,6 +771,7 @@ class WebViewGuest : public mojom::WebViewGuest,
   // click. See HandleContextMenu.
   void RunContextMenuAction(int32_t menu,
                             mojom::WebViewContextMenuAction action) override;
+  void ReplaceMisspelling(int32_t menu, const std::string& word) override;
   void Inspect() override;
   void Print() override;
 
@@ -564,6 +803,9 @@ class WebViewGuest : public mojom::WebViewGuest,
   // Counts in the primary main frame, as ReadDescription reads.
   void CountMatches(const std::string& selector,
                     CountMatchesCallback callback) override;
+  // Clicks in the primary main frame, as CountMatches counts.
+  void ClickMatch(const std::string& selector,
+                  ClickMatchCallback callback) override;
 
   // content::BrowserPluginGuestDelegate:
   content::WebContents* GetOwnerWebContents() override;
@@ -573,6 +815,12 @@ class WebViewGuest : public mojom::WebViewGuest,
   // Makes the page's new window as a browser window. See MakeOpenedWindow.
   std::unique_ptr<content::WebContents> CreateNewGuestWindow(
       const content::WebContents::CreateParams& create_params) override;
+  // Takes the page's noopener window when DecideWindowsWith says who decides.
+  bool TakeNoopenerWindow(const GURL& target_url,
+                          const std::string& frame_name,
+                          WindowOpenDisposition disposition,
+                          const blink::mojom::WindowFeatures& features,
+                          const GURL& referrer) override;
 
   // content::WebContentsDelegate:
   //
@@ -588,8 +836,9 @@ class WebViewGuest : public mojom::WebViewGuest,
       const input::NativeWebKeyboardEvent& event) override;
 
   // Forwards chords the page did not preventDefault to the shell, matching
-  // Chrome's order (site first, browser second). Plain keys are not sent; see
-  // UnhandledKeyDown in components/domicile/mojom/web_view_guest.mojom.
+  // Chrome's order (site first, browser second), and modifiers let go of.
+  // Plain keys are not sent; see UnhandledKeyDown and UnhandledModifierUp in
+  // components/domicile/mojom/web_view_guest.mojom.
   // Returns false because the shell handles the key asynchronously.
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) override;
@@ -640,9 +889,23 @@ class WebViewGuest : public mojom::WebViewGuest,
                        content::RenderWidgetHost* widget,
                        const std::u16string& text) override;
 
+  // An Electron app's page hears these; see AppPage. A browser's page
+  // holds no key, and its cursor is its view's alone.
+  bool DomicileHoldKeyboardEvent(
+      content::WebContents* source,
+      content::RenderWidgetHost* widget,
+      const input::NativeWebKeyboardEvent& event) override;
+  void DomicileCursorChanged(content::WebContents* source,
+                             content::RenderWidgetHost* widget,
+                             const ui::Cursor& cursor) override;
+  void UpdatePreferredSize(content::WebContents* source,
+                           const gfx::Size& pref_size) override;
+  void SetContentsBounds(content::WebContents* source,
+                         const gfx::Rect& bounds) override;
+
   // Asks the shell whether to send the page's form again. See kResendForm in
   // the mojom. Content's default does nothing, so the reload never happens.
-  void ShowRepostFormWarningDialog(content::WebContents* source) override;
+  bool ShowRepostFormWarningDialog(content::WebContents* source) override;
 
   // Asks the shell whether to end a page that stopped responding, and
   // withdraws it when the page responds again. See kUnresponsive in the mojom.
@@ -800,8 +1063,15 @@ class WebViewGuest : public mojom::WebViewGuest,
   void ScreenWakeLockChanged(content::WebContents* source, bool held) override;
 
   // Handles `window.focus()` or `client.focus()` (e.g. after a notification
-  // click) by asking the shell, which decides window order.
+  // click) by asking the shell, which decides window order. Picture-in-
+  // picture's "back to page" asks the same way.
   void ActivateContents(content::WebContents* contents) override;
+
+  // A video entering picture-in-picture. Content's default refuses it; here
+  // the shell draws its window (chrome/browser/domicile/
+  // domicile_picture_in_picture.h), so every page may.
+  content::PictureInPictureResult EnterPictureInPicture(
+      content::WebContents* web_contents) override;
 
   // Sizes an extension popup's page from its content, as Chrome's
   // ExtensionViewViews does: Blink's auto-resize, between Chrome's popup
@@ -876,6 +1146,14 @@ class WebViewGuest : public mojom::WebViewGuest,
                          download::DownloadItem* item) override;
   void ManagerGoingDown(content::DownloadManager* manager) override;
 
+  // zoom::ZoomObserver:
+  //
+  // Reports each zoom change; ReportZoom skips an unchanged factor.
+  void OnZoomChanged(
+      const zoom::ZoomController::ZoomChangedEventData& data) override;
+  void OnZoomControllerDestroyed(
+      zoom::ZoomController* zoom_controller) override;
+
  private:
   WebViewGuest(content::RenderFrameHost& owner,
                mojo::PendingReceiver<mojom::WebViewGuest> receiver,
@@ -886,7 +1164,11 @@ class WebViewGuest : public mojom::WebViewGuest,
                std::optional<int> popup_window);
 
   // One of WebContents' edit commands, which act on the focused frame.
-  using EditCommand = void (content::WebContents::*)();
+  using EditCommand = base::RepeatingCallback<void(content::WebContents*)>;
+
+  // Whether `menu` is the newest context menu, which an action acts on. Reports
+  // a bad message for an id the element was never sent.
+  bool IsNewestContextMenu(int32_t menu);
 
   // Runs `command` once this guest has focus, retrying up to `tries` times.
   //
@@ -967,6 +1249,16 @@ class WebViewGuest : public mojom::WebViewGuest,
   // changed. The renderer reads it from the widget's visual properties.
   void SetPageFullscreen(bool fullscreen);
 
+  // Checks that the page itself left fullscreen, kLeavesFullscreenWithin after
+  // the engine took it out. A page that stays in fills its window and looks
+  // stuck while the shell has shrunk the window back, and nothing else would
+  // say why. See FullscreenChecked.
+  void CheckLeftFullscreen();
+  // Reports a fault when `document`, still the page, holds a fullscreen
+  // element though the engine left fullscreen. A reply that is not a bool, as
+  // from a frame that could not run the read, says nothing.
+  void FullscreenChecked(content::WeakDocumentPtr document, base::Value held);
+
   // Opens a browser window at `target_url`, with no opener, for a middle click
   // or an extension. Never opens an empty window.
   void ReportNewWindow(const GURL& target_url);
@@ -978,8 +1270,8 @@ class WebViewGuest : public mojom::WebViewGuest,
 
   //
   // Uses `CanGoBack()`, not `ShouldEnableBackButton()`. The latter stays true
-  // over skippable entries for Chrome's long-press history menu, which a shell
-  // lacks; `goBack()` does nothing when `CanGoBack()` is false.
+  // over skippable entries for Chrome's long-press history menu; `goBack()`
+  // does nothing when `CanGoBack()` is false.
   void ReportHistory();
 
   // Reports the page's URL and security level to the element if either
@@ -1010,9 +1302,13 @@ class WebViewGuest : public mojom::WebViewGuest,
   // Reports load progress to the element if it changed.
   void ReportLoadProgress(double progress);
 
+  // The page's ZoomController, made with its WebContents.
+  zoom::ZoomController& Zoom() const;
+
   // Reports the page's zoom to the element if it changed. Zoom changes when
-  // the shell sets it, when another window on the same host changes it
-  // (HostZoomMap is per host), or on navigation to a differently zoomed site.
+  // the shell or chrome.tabs sets it or its mode, when another window on the
+  // same host changes it (HostZoomMap is per host), or on navigation to a
+  // differently zoomed site.
   void ReportZoom();
 
   // Reports find results to the element if they changed. `0, 0` means no
@@ -1122,6 +1418,9 @@ class WebViewGuest : public mojom::WebViewGuest,
   // Whether the page is fullscreen. Also what IsFullscreenForTabOrPending
   // answers, so the renderer's state and the element's never differ.
   bool page_fullscreen_ = false;
+  // Runs out kLeavesFullscreenWithin after the page leaves fullscreen. See
+  // CheckLeftFullscreen.
+  base::OneShotTimer left_fullscreen_check_;
   // Whether the page holds a screen wake lock. See ScreenWakeLockChanged.
   bool wake_lock_ = false;
 
@@ -1136,6 +1435,9 @@ class WebViewGuest : public mojom::WebViewGuest,
   // The same for AskPrompt.
   int last_prompt_ = 0;
   int open_prompt_ = 0;
+  // The same for AskIdentity.
+  int last_identity_ = 0;
+  int open_identity_ = 0;
   // The page's pickers, each with the frame that asked, and the one the
   // shell is asked now, or none. See Pick.
   mojo::ReceiverSet<mojom::PagePicker, content::GlobalRenderFrameHostId>
@@ -1172,12 +1474,30 @@ class WebViewGuest : public mojom::WebViewGuest,
                           content::DownloadManager::Observer>
       download_manager_observation_{this};
 
-  // HostZoomMap zoom changes, including from other windows on the same host.
-  // Dropped with the guest's WebContents, which ReportZoom reads.
-  base::CallbackListSubscription zoom_subscription_;
+  // The page's ZoomController, whose changes include other windows on the
+  // same host and manual zoom, which HostZoomMap never sees. Reset in
+  // WebContentsDestroyed, with the controller's WebContents.
+  base::ScopedObservation<zoom::ZoomController, zoom::ZoomObserver>
+      zoom_observation_{this};
 
   // See AddFocusedCallback.
   base::RepeatingClosureList focused_callbacks_;
+
+  // See KeepFullFrameRate.
+  bool full_frame_rate_ = false;
+
+  // See DecideWindowsWith; null when windows open as a browser's do.
+  WindowOpening window_opening_;
+  // See TakeContextMenusWith.
+  ContextMenuTaking context_menu_taking_;
+  // See DecideNavigationsWith and DecideUnloadsWith.
+  NavigationDeciding navigation_deciding_;
+  UnloadDeciding unload_deciding_;
+  // Whether the dialog open in `dialogs_` asks UnloadDeciding rather than the
+  // shell, which then hears no DialogWithdrawn for it.
+  bool dialog_asks_app_ = false;
+  // See ReportToApp; null for a browser's page.
+  base::WeakPtr<AppPage> app_page_;
 
   // See AddZoomChangedCallback.
   base::RepeatingCallbackList<void(double, double)> zoom_callbacks_;

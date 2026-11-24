@@ -24,6 +24,10 @@ uint64_t SurfaceFrames::Sent(uint32_t frame_token) {
   return number;
 }
 
+void SurfaceFrames::Redrawn() {
+  unacked_.push_back(kRedrawn);
+}
+
 uint64_t SurfaceFrames::Dropped() {
   return ++last_;
 }

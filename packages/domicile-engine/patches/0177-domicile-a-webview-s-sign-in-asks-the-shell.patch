@@ -115,7 +115,7 @@ index f3becfa..651aa4d 100644
                                               std::move(auth_required_callback));
  }
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 615c495..7f58586 100644
+index 5d71926..822fabd 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1228,6 +1228,8 @@ generated_interface_sources_in_core = [
@@ -128,7 +128,7 @@ index 615c495..7f58586 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index e101259..9f8f719 100644
+index ee86684..643b774 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -472,6 +472,7 @@ static_idl_files_in_core = [
@@ -140,7 +140,7 @@ index e101259..9f8f719 100644
    "//third_party/blink/renderer/core/html/html_head_element.idl",
    "//third_party/blink/renderer/core/html/html_heading_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 6d48c6b..1d06b89 100644
+index 3ade9c8..66e22c3 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -112,6 +112,8 @@ blink_core_sources_html = [

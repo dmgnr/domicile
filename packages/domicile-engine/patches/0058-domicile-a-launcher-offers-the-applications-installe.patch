@@ -21,7 +21,7 @@ compositor's to read, and nothing here names one.
  2 files changed, 9 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 0f54421..2e02558 100644
+index cadd117..9e65f46 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -291,6 +291,8 @@ generated_dictionary_sources_in_modules = [
@@ -33,7 +33,7 @@ index 0f54421..2e02558 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_modifiers_event_init.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_modifiers_event_init.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.cc",
-@@ -2374,6 +2376,10 @@ generated_interface_sources_in_modules = [
+@@ -2378,6 +2380,10 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_file_preview_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_files_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_files_event.h",

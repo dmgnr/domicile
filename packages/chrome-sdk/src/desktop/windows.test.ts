@@ -30,6 +30,7 @@ describe("windows", () => {
         pid: undefined,
         pidfdInode: undefined,
         pointerConstraint: undefined,
+        pointerRegion: undefined,
         sandboxAppId: undefined,
         sandboxEngine: undefined,
         sandboxed: undefined,

@@ -79,12 +79,37 @@ domicile ./my-desktop/dist/shell.js
 
 - The module path is the whole interface. Name the file what you like.
 - Domicile serves the directory the module is in, over `domicile://`.
+- Every shell has the origin `domicile://shell`, so all shells share
+  localStorage, IndexedDB, Cache Storage and cookies. A shell loaded later,
+  or a new version of yours, reads what earlier ones stored. Prefix your keys
+  and database names, and handle data in an older format.
 
-**Dev loop:** run `vite build --watch` next to `domicile ./dist/shell.js`.
-Nothing reloads automatically (the page runs under `--app`, with no reload
-button). To load a rebuilt bundle, run `domicile load-shell ./dist/shell.js`
-in a terminal inside the desktop. Any shell works, and windows stay put
+To load a rebuilt bundle, run `domicile load-shell ./dist/shell.js` in a
+terminal inside the desktop. Any shell works, and windows stay put
 ([THE-DOMICILE-BINARY.md](/docs/architecture/THE-DOMICILE-BINARY.md)).
+
+### Hot module replacement
+
+While you work on a shell, serve it from its source instead, in a terminal
+inside the desktop:
+
+```sh
+domicile dev ./my-desktop/src/shell.tsx
+```
+
+- Vite serves your source, and the shell updates as you save. An edit to a
+  module that accepts updates keeps the page's state. With
+  `@vitejs/plugin-react` in your `vite.config`, that is any React component
+  (Fast Refresh).
+- An edit nothing accepts, such as one to the entry itself, reloads the shell.
+  Windows stay open.
+- Ctrl-C goes back to the shell you had.
+- Your `vite.config` applies, as in a build. `import.meta.hot` works as in
+  any Vite app, including `import.meta.hot.send` and custom events.
+- No port opens: the engine reaches the dev server over a socket only you can
+  open
+  ([DOMICILE-SCHEME.md](/docs/architecture/DOMICILE-SCHEME.md#dev-server)).
+- The Settings app shows no options for a shell served this way.
 
 **If your page's renderer dies,** the engine ends with a FATAL line saying
 so, and the supervisor starts it again. That is a bug in Domicile, not
@@ -169,7 +194,10 @@ export const Shell = (root, domicile) => {
   for. Develop against a real desktop.
 
 **Errors:** log to the console. Page logs reach the terminal Domicile started
-from. Invalid calls (an empty argv, a keycode of zero, a malformed chord)
+from, or the journal as `domicile-shell` ([Logs](LOGGING.md)), at
+the severity you logged them. `logger("name")` from
+`@domicile-desktop/sdk/logger` names the part of the shell that said each line
+([A shell's logs](LOGGING.md#a-shells-logs)). Invalid calls (an empty argv, a keycode of zero, a malformed chord)
 throw, because they are bugs in the page.
 
 ## With React
@@ -362,7 +390,8 @@ being typed in, just under its text cursor:
 
 To show one:
 
-- Mount an `<app>` for it at that position, above its parent.
+- Mount an `<app>` for it at that position, above its parent. For a zoomed
+  window, give it the window's `zoom` (see [Windows](#windows)).
 - Give it no frame and do not tile it. Draw it only where its window is drawn.
 - Remove it when `windows.list` drops it.
 - The engine routes a click on it to its window's keyboard.
@@ -427,10 +456,25 @@ Each entry in `domicile.windows.list` describes one client window.
   ask goes away. Escape does not end a lock, since games use it; leaving the
   user a way out, such as a chord that moves the keyboard, is the shell's job.
   Manganese's `followPointerLock` does all of this.
+- **Pointer confinement:** for `"confine"`, call
+  `pointer.confine(boxes)` with the boxes in the page that hold the pointer:
+  the window's `<app>` box, or its `pointerRegion` (boxes in the window's own
+  coordinates, which `width` and `height` measure) scaled into it. Then call
+  `windows.pointerConstrained(appId, true)`. Call `confine` again as the
+  window moves, and `confine([])` plus `pointerConstrained(appId, false)` once
+  it loses the keyboard or the ask goes away. A box may reach onto another
+  monitor. Nested or headless, `confine` resolves `false` and the pointer is
+  not held. Manganese's `usePointerConfinement` does all of this.
 - **Size:** the `<app>` element's layout box is the window size. The engine
   sends it to the client. Resize a window by styling its element. Set
   `resizing` on the element while the user drags an edge; see
   [ELEMENTS.md](/packages/chrome-sdk/docs/ELEMENTS.md).
+- **Zoom:** set CSS `zoom` on a window's `<app>` to draw its content larger or
+  smaller without touching its monitor's scale, as scroll's per-window scale
+  does. It stays sharp: the client draws at the zoomed density. Give the
+  window's popups the same `zoom`. Their `x`, `y`, `width` and `height` are
+  then in zoomed pixels, which `zoom` scales for you when the popup sits in a
+  box at the window's top-left corner.
 - **On screen:** listed means drawn, not shown. Wait for
   `domicile-presented` on the `<app>` before revealing a window, for example
   to start an open animation. `domicile-suspended` and `domicile-resumed` say
@@ -760,7 +804,8 @@ const Keys = () => {
   useEffect(
     () =>
       bindKeys(domicile, KEYS, {
-        onCommand: (args) => run(args), // ["focus", "right"]
+        commands: [{ usage: "focus left|right", description: "Move focus." }],
+        onCommand: (args) => run(args), // ["focus", "right"] -> Ok("ran") or Err(why)
         onModeChanged: setMode, // "resize", "default"
       }).unbind,
     [domicile],
@@ -790,7 +835,8 @@ bindKeys(
     },
   },
   {
-    onCommand: (args) => run(args),        // ["focus", "right"]
+    commands: [{ usage: "focus left|right", description: "Move focus." }],
+    onCommand: (args) => run(args),        // ["focus", "right"] -> Ok("ran") or Err(why)
     onModeChanged: (mode) => show(mode),   // "resize", "default"
   },
 );
@@ -806,20 +852,29 @@ bindKeys(
   cannot type is logged, and the other keys still work.
 - `bindKeys` grabs every chord by name (`domicile.keyboard.grab`), handles each
   `shortcut` by its `chord` whether the press landed on the page or in a
-  `<webview>`, handles `Mode` itself, and passes every `SendShell` to
-  `onCommand`.
+  `<webview>`, handles `Mode` itself, starts every `Exec` (as `domicile exec`
+  does; a program that does not start is a notification), and passes every
+  `SendShell` to `onCommand`.
 - `KeyAction.Hold(press, release)` runs `press` on the chord's press and
   `release` on its release, once per press. The release runs whatever mode the
   keys are in by then; `unbind` runs any still armed. Gestures cannot hold an
   action. For example, `"Meta+Tab": KeyAction.Hold(SendShell(["peek"]),
   SendShell(["unpeek"]))`.
-- `domicile send-shell <word>…` from a terminal reaches `onCommand` too, on
-  every page bound. A page that cannot listen calls `report`, which logs by
+- `onCommand` returns `Ok("ran")`, `Ok({ output })` for a command that
+  answers (a query's JSON, which `domicile send-shell` prints), or `Err(why)`
+  for a command the shell does not run. A pressed binding's `Err` goes to `reportRefusal`, which logs by
   default.
+- `domicile send-shell <word>…` from a terminal reaches `onCommand` too, on
+  every page bound. `send-shell` fails with the `Err`, or when no page answers
+  within a second. A page that cannot listen calls `report`, which logs by
+  default.
+- `commands` describes what `onCommand` runs: `domicile list-shell-commands`
+  (and `send-shell --help`) prints it. `domicile list-bindings` prints your
+  keybindings, which `bindKeys` describes for you.
 - It returns `{ setMode, unbind }`. `setMode` keeps one mode across a desktop
   of several pages.
-- Command meanings are yours. Document them in your README, as
-  [manganese does](/packages/shell-manganese/README.md). Manganese takes keys
+- Command meanings are yours. Describe them in `commands`, and in your README,
+  as [manganese does](/packages/shell-manganese/README.md). Manganese takes keys
   from `runManganese({ keybindings })`, defaulting to sway's.
 - While bound, a key bound in any mode is taken from every client. `unbind`
   gives the chords back (`domicile.keyboard.ungrab`). Each `grab` needs its
@@ -832,6 +887,33 @@ bindKeys(
   `domicile.keyboard.switchShortcutsInhibitor(InhibitorAction.Toggle)`
   (`@domicile-desktop/sdk/inhibitor-action`), which turns the keyboard
   window's inhibitor off and on.
+
+## Links
+
+A shell can open links of a scheme itself, instead of the app
+`mimeapps.list` names: manganese writes `mailto:` links from its inboxes.
+
+```ts
+const claimed = await domicile.shell.links(["mailto"]);
+claimed.match({
+  Err: (error) => console.error("cannot claim mailto links", error),
+  Ok: async ({ items }) => {
+    for await (const { url, appId } of items) {
+      writeEmail(url, appId);
+    }
+  },
+});
+```
+
+- Links come from `domicile open`, and so `xdg-open`, `xdg-email` and apps'
+  links, and from the Email portal (`appId` names the app that asked).
+- A page's `mailto:` link opens through `xdg-email`, so it comes here too.
+- A page's other links (`<webview>`'s `WEBVIEW_EXTERNAL_APP_EVENT`) go to the
+  page's listener. Handle claimed schemes there too.
+- The page that claimed a scheme last gets its links. `stop()` gives them
+  back to the apps.
+- `http`, `https` and `file` can't be claimed: `domicile open` browses or
+  opens them first.
 
 ## The configuration
 

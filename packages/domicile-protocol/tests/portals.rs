@@ -1034,3 +1034,31 @@ fn a_recording_is_controlled_under_its_id() {
         assert!(!access().kind.accepts(&parsed), "{sent} is for recordings");
     }
 }
+
+#[test]
+fn an_agent_is_remembered_only_with_the_whole_desk() {
+    use domicile_protocol::{AgentDialog, AgentReach, AgentWindow, WindowKind};
+    let notes = AgentWindow {
+        id: "w1".into(),
+        kind: WindowKind::Native,
+        title: "Notes".into(),
+        app: None,
+    };
+    let dialog = PortalKind::Agent(AgentDialog {
+        agent: "Claude Code".into(),
+        windows: vec![notes.clone()],
+        current: None,
+        remembered: false,
+    });
+    let answer = |reach, remember| PortalAnswer::Agent { reach, remember };
+    assert!(dialog.accepts(&answer(AgentReach::Desk, true)));
+    let windows = AgentReach::Windows {
+        windows: vec![notes],
+    };
+    assert!(dialog.accepts(&answer(windows.clone(), false)));
+    assert!(!dialog.accepts(&answer(windows, true)));
+    assert_eq!(
+        serde_json::to_value(answer(AgentReach::Desk, true)).unwrap(),
+        serde_json::json!({ "kind": "agent", "reach": { "type": "desk" }, "remember": true })
+    );
+}

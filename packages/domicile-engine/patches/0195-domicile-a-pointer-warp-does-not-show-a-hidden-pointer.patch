@@ -24,10 +24,10 @@ job builds it on `crux`.
  2 files changed, 14 insertions(+), 1 deletion(-)
 
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
-index fa16886..c7e9210 100644
+index ae5caca..6d4111d 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.cc
 +++ b/ui/events/ozone/evdev/event_factory_evdev.cc
-@@ -583,13 +583,19 @@ void EventFactoryEvdev::WarpCursorTo(gfx::AcceleratedWidget widget,
+@@ -623,13 +623,19 @@ void EventFactoryEvdev::WarpCursorTo(gfx::AcceleratedWidget widget,
  
    cursor_->MoveCursorTo(widget, location);
  
@@ -49,10 +49,10 @@ index fa16886..c7e9210 100644
                PointerDetails(EventPointerType::kMouse), EventTimeForNow())));
  }
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 87dbb0c..0bd25cb 100644
+index 9d7e0b3..d723671 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -307,6 +307,7 @@ source_set("gbm_unittests") {
+@@ -309,6 +309,7 @@ source_set("gbm_unittests") {
      "//ui/events/ozone/evdev/domicile/input_settings_unittest.cc",
      "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
      "//ui/events/ozone/evdev/domicile/typing_guard_unittest.cc",
@@ -60,7 +60,7 @@ index 87dbb0c..0bd25cb 100644
      "//ui/events/ozone/evdev/domicile/wheel_ticks_unittest.cc",
      "//ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc",
      "//ui/events/ozone/evdev/event_converter_test_util.cc",
-@@ -368,6 +369,12 @@ source_set("gbm_unittests") {
+@@ -370,6 +371,12 @@ source_set("gbm_unittests") {
      # needs, so it names both directly.
      "//ui/events/ozone/evdev",
  

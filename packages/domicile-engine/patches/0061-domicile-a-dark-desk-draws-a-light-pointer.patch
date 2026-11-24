@@ -60,10 +60,10 @@ index 8928f4f..7e3d6be 100644
          public += [
            "widget/desktop_aura/desktop_drag_drop_client_win.h",
 diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
-index c14c74e..8a97d5d 100644
+index d5613c8..dae5128 100644
 --- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
 +++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
-@@ -4,18 +4,25 @@
+@@ -4,6 +4,7 @@
  
  #include "ui/views/widget/desktop_aura/desktop_native_cursor_manager.h"
  
@@ -71,9 +71,10 @@ index c14c74e..8a97d5d 100644
  #include "base/notimplemented.h"
  #include "base/trace_event/trace_event.h"
  #include "ui/aura/client/cursor_shape_client.h"
- #include "ui/aura/window_event_dispatcher.h"
+@@ -11,12 +12,18 @@
  #include "ui/aura/window_tree_host.h"
  #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
+ #include "ui/display/display.h"
 +#include "ui/native_theme/native_theme.h"
 +#include "ui/views/widget/desktop_aura/domicile/cursor_color_scheme.h"
  #include "ui/wm/core/cursor_loader.h"
@@ -89,7 +90,7 @@ index c14c74e..8a97d5d 100644
  }
  
  DesktopNativeCursorManager::~DesktopNativeCursorManager() {
-@@ -41,6 +48,7 @@ void DesktopNativeCursorManager::SetDisplay(
+@@ -43,6 +50,7 @@ void DesktopNativeCursorManager::SetDisplay(
  void DesktopNativeCursorManager::SetCursor(
      gfx::NativeCursor cursor,
      wm::NativeCursorManagerDelegate* delegate) {
@@ -97,7 +98,7 @@ index c14c74e..8a97d5d 100644
    gfx::NativeCursor new_cursor = cursor;
    cursor_loader_.SetPlatformCursor(&new_cursor);
    delegate->CommitCursor(new_cursor);
-@@ -107,4 +115,14 @@ void DesktopNativeCursorManager::SetCursorColor(
+@@ -109,4 +117,14 @@ void DesktopNativeCursorManager::SetCursorColor(
    NOTIMPLEMENTED();
  }
  
@@ -113,7 +114,7 @@ index c14c74e..8a97d5d 100644
 +
  }  // namespace views
 diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
-index 9029e3d..fcb66b2 100644
+index 2a6a639..bfb6e8e 100644
 --- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
 +++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
 @@ -24,6 +24,9 @@ class NativeCursorManagerDelegate;
@@ -127,7 +128,7 @@ index 9029e3d..fcb66b2 100644
  // state. Similar to NativeCursorManagerAsh, it also communicates these changes
  // to all root windows.
 @@ -68,7 +71,20 @@ class VIEWS_EXPORT DesktopNativeCursorManager : public wm::NativeCursorManager {
-   using Hosts = std::set<raw_ptr<aura::WindowTreeHost, SetExperimental>>;
+   using Hosts = std::set<raw_ptr<aura::WindowTreeHost>>;
    Hosts hosts_;
  
 +  // Domicile: recolors `cursor_loader_`'s art, and the cursor on screen with
@@ -148,10 +149,10 @@ index 9029e3d..fcb66b2 100644
  
  }  // namespace views
 diff --git a/ui/wm/core/cursor_loader.cc b/ui/wm/core/cursor_loader.cc
-index 3ad6944..929eece 100644
+index f0c74a0..3524601 100644
 --- a/ui/wm/core/cursor_loader.cc
 +++ b/ui/wm/core/cursor_loader.cc
-@@ -88,6 +88,20 @@ void CursorLoader::SetColor(SkColor color) {
+@@ -87,6 +87,20 @@ void CursorLoader::SetColor(SkColor color) {
    UnloadCursors();
  }
  
@@ -172,7 +173,7 @@ index 3ad6944..929eece 100644
  void CursorLoader::SetPlatformCursor(ui::Cursor* cursor) {
    CHECK(cursor, base::NotFatalUntil::M163);
  
-@@ -129,7 +143,8 @@ std::optional<ui::CursorData> CursorLoader::GetCursorData(
+@@ -128,7 +142,8 @@ std::optional<ui::CursorData> CursorLoader::GetCursorData(
    // sense for the current use cases of `GetCursorData` (e.g. Chrome Remote
    // Desktop, WebRTC and VideoRecordingWatcher).
    return wm::GetCursorData(type, scale_, GetCustomCursorSizeInPixels(),
@@ -182,7 +183,7 @@ index 3ad6944..929eece 100644
  }
  
  void CursorLoader::UnloadCursors() {
-@@ -202,7 +217,8 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
+@@ -201,7 +216,8 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
  scoped_refptr<ui::PlatformCursor> CursorLoader::LoadCursorFromAsset(
      CursorType type) {
    std::optional<ui::CursorData> cursor_data = wm::GetCursorData(
@@ -193,7 +194,7 @@ index 3ad6944..929eece 100644
      return nullptr;
    }
 diff --git a/ui/wm/core/cursor_loader.h b/ui/wm/core/cursor_loader.h
-index f3e0005..c3104f2 100644
+index fe8a171..f37f905 100644
 --- a/ui/wm/core/cursor_loader.h
 +++ b/ui/wm/core/cursor_loader.h
 @@ -51,6 +51,11 @@ class COMPONENT_EXPORT(UI_WM) CursorLoader
@@ -208,7 +209,7 @@ index f3e0005..c3104f2 100644
    // Sets the platform cursor based on the type of |cursor|.
    void SetPlatformCursor(ui::Cursor* cursor);
  
-@@ -90,6 +95,9 @@ class COMPONENT_EXPORT(UI_WM) CursorLoader
+@@ -89,6 +94,9 @@ class COMPONENT_EXPORT(UI_WM) CursorLoader
  
    // The current color set to the mouse cursor icon.
    SkColor color_ = ui::kDefaultCursorColor;

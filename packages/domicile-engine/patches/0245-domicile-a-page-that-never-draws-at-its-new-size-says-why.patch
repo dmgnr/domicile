@@ -1,0 +1,173 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page that never draws at its new size says why
+
+Patch 0241's log fired on lyra (2026-11-18): a <webview>'s widget sent
+its page a new size and surface and waited for good, the page shown and
+its renderer alive, both renderer threads idle. It reproduces on leaving
+video fullscreen with Esc on a DisplayLink monitor.
+
+A page told a new size begins no impl frame until a tree at the new
+surface activates (LayerTreeHostImpl::WillBeginImplFrame), so it draws
+nothing until its main thread commits one. LayerTreeHost now watches
+that from SetViewportRectAndScale's SetTargetLocalSurfaceId. If, 2
+seconds in, no frame has been presented since the new surface was
+committed, it logs at ERROR whether that commit happened, how many
+commits ran, the surface it holds now, the main frame update deferral
+count, whether commits are deferred, a commit requested or rendering
+paused, and whether it has a frame sink. A hidden page's wait starts
+when it is shown.
+
+Log only: the line names which of those holds the page.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+---
+ cc/trees/layer_tree_host.cc | 72 +++++++++++++++++++++++++++++++++++++
+ cc/trees/layer_tree_host.h  | 14 ++++++++
+ 2 files changed, 86 insertions(+)
+
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index c7b24a4..bc04697 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -465,6 +465,16 @@ std::unique_ptr<CommitState> LayerTreeHost::WillCommit(
+   // TODO(paint-dev): We can avoid the churn of this call when (!has_updates) if
+   // we know there are no paint event handlers registered.
+   std::unique_ptr<CommitState> activated_commit_state = ActivateCommitState();
++  // DOMICILE: see DomicileWatchTarget.
++  ++domicile_commits_since_target_;
++  // As LayerTreeHostImpl::WillBeginImplFrame does, a surface at or past the
++  // target lets the page draw.
++  const viz::LocalSurfaceId& domicile_committed =
++      activated_commit_state->local_surface_id_from_parent;
++  if (domicile_target_.is_valid() && domicile_committed.is_valid() &&
++      !domicile_target_.IsNewerThan(domicile_committed)) {
++    domicile_target_committed_ = true;
++  }
+ 
+   {
+     base::AutoReset<bool> in_will_commit(&inside_will_commit_, true);
+@@ -977,6 +987,19 @@ void LayerTreeHost::SetVisible(bool visible) {
+   if (visible_ == visible)
+     return;
+   visible_ = visible;
++  // DOMICILE: a hidden page's wait for its new surface starts once shown.
++  if (visible_ && domicile_target_.is_valid() &&
++      domicile_frames_presented_since_target_ == 0) {
++    domicile_target_set_at_ = base::TimeTicks::Now();
++    if (!domicile_target_timer_.IsRunning()) {
++      domicile_target_timer_.SetTaskRunner(
++          base::WrapRefCounted(task_runner_provider_->MainThreadTaskRunner()));
++    }
++    domicile_target_timer_.Start(
++        FROM_HERE, base::Seconds(2),
++        base::BindOnce(&LayerTreeHost::DomicileReportTargetWait,
++                       base::Unretained(this)));
++  }
+   // If the page becomes invisible, corresponding metrics will be discarded
+   // because they are invalid. The metrics will be measured when the page
+   // becomes visible again.
+@@ -986,6 +1009,49 @@ void LayerTreeHost::SetVisible(bool visible) {
+   proxy_->SetVisible(visible);
+ }
+ 
++void LayerTreeHost::DomicileWatchTarget(const viz::LocalSurfaceId& target) {
++  domicile_target_ = target;
++  domicile_target_set_at_ = base::TimeTicks::Now();
++  domicile_commits_since_target_ = 0;
++  domicile_target_committed_ = false;
++  domicile_frames_presented_since_target_ = 0;
++  if (!domicile_target_timer_.IsRunning()) {
++    domicile_target_timer_.SetTaskRunner(
++        base::WrapRefCounted(task_runner_provider_->MainThreadTaskRunner()));
++  }
++  domicile_target_timer_.Start(
++      FROM_HERE, base::Seconds(2),
++      base::BindOnce(&LayerTreeHost::DomicileReportTargetWait,
++                     base::Unretained(this)));
++}
++
++void LayerTreeHost::DomicileReportTargetWait() {
++  // A frame at the new surface has been shown: nothing is stuck. A hidden
++  // page draws nothing; SetVisible watches again once it is shown.
++  if (domicile_frames_presented_since_target_ > 0 || !visible_) {
++    return;
++  }
++  LOG(ERROR) << "domicile: compositor " << id_
++             << " has drawn nothing at its new surface "
++             << domicile_target_.ToString() << " in "
++             << (base::TimeTicks::Now() - domicile_target_set_at_)
++             << ": committed it "
++             << (domicile_target_committed_ ? "yes" : "no") << ", commits "
++             << domicile_commits_since_target_ << ", surface now "
++             << pending_commit_state()->local_surface_id_from_parent.ToString()
++             << ", main frame updates deferred "
++             << defer_main_frame_update_count_ << ", commits deferred "
++             << (proxy_->IsDeferringCommits() ? "yes" : "no")
++             << ", commit requested "
++             << (proxy_->CommitRequested() ? "yes" : "no")
++             << ", rendering paused "
++             << (proxy_->IsRenderingPaused() ? "yes" : "no")
++             << ", frame sink "
++             << (current_layer_tree_frame_sink_ ? "bound" : "none")
++             << (new_layer_tree_frame_sink_ ? " (new one initializing)" : "")
++             << ".";
++}
++
+ bool LayerTreeHost::IsVisible() const {
+   DCHECK(IsMainThread());
+   return visible_;
+@@ -1052,6 +1118,11 @@ void LayerTreeHost::DidPresentCompositorFrame(
+         successful_presentation_callbacks,
+     const viz::FrameTimingDetails& frame_timing_details) {
+   DCHECK(IsMainThread());
++  // DOMICILE: see DomicileWatchTarget.
++  if (domicile_target_committed_ &&
++      !frame_timing_details.presentation_feedback.failed()) {
++    ++domicile_frames_presented_since_target_;
++  }
+   for (auto& callback : presentation_callbacks)
+     std::move(callback).Run(frame_timing_details.presentation_feedback);
+   for (auto& callback : successful_presentation_callbacks)
+@@ -1576,6 +1647,7 @@ void LayerTreeHost::SetViewportRectAndScale(
+           local_surface_id_from_parent &&
+       device_viewport_rect_changed) {
+     SetTargetLocalSurfaceId(local_surface_id_from_parent);
++    DomicileWatchTarget(local_surface_id_from_parent);
+   }
+ 
+   if (device_viewport_rect_changed || painted_device_scale_factor_changed ||
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index 85ad1cf..21527e9 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -27,6 +27,7 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "base/timer/timer.h"
+ #include "base/types/optional_ref.h"
+ #include "cc/base/completion_event.h"
+ #include "cc/benchmarks/micro_benchmark.h"
+@@ -1190,6 +1191,19 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+   // State cached until impl side is initialized.
+   raw_ptr<TaskGraphRunner> task_graph_runner_;
+ 
++  // DOMICILE: a page told a new size draws nothing until a frame at its new
++  // surface activates (LayerTreeHostImpl::WillBeginImplFrame). One that never
++  // gets there stays at its old size for good. Says why, 2 seconds into such a
++  // wait; see DomicileReportTargetWait.
++  void DomicileWatchTarget(const viz::LocalSurfaceId& target);
++  void DomicileReportTargetWait();
++  viz::LocalSurfaceId domicile_target_;
++  base::TimeTicks domicile_target_set_at_;
++  int domicile_commits_since_target_ = 0;
++  bool domicile_target_committed_ = false;
++  int domicile_frames_presented_since_target_ = 0;
++  base::OneShotTimer domicile_target_timer_;
++
+   float recording_scale_factor_ = 1.f;
+   // Used to track the out-bound state for ApplyViewportChanges.
+   bool is_pinch_gesture_active_from_impl_ = false;

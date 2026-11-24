@@ -139,6 +139,8 @@ fn results(answer: PortalAnswer, activation_token: Option<String>) -> HashMap<St
         | PortalAnswer::ScreenshotWindow { .. }
         | PortalAnswer::ScreenshotBrowserWindow { .. }
         | PortalAnswer::PickColor { .. }
+        | PortalAnswer::Agent { .. }
+        | PortalAnswer::Change
         | PortalAnswer::Pressed
         | PortalAnswer::Released
         | PortalAnswer::Canceled

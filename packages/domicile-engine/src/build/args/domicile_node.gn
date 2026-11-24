@@ -1,0 +1,30 @@
+# Copyright 2026 Connor Prussin
+# SPDX-License-Identifier: MIT
+
+# Electron's Node, built as Electron builds it: against the engine's V8 and
+# BoringSSL, with the V8 settings Node needs. From Electron's
+# `build/args/all.gn`. See "Phase 2" in docs/architecture/ELECTRON-APPS.md.
+
+# GN loads Node's build files only from a target the root names.
+root_extra_deps = [ "//third_party/electron_node:node" ]
+
+# The native module ABI of Electron's own Node, so an app's prebuilt modules
+# for Electron load.
+node_module_version = 154
+
+node_openssl_path = "//third_party/boringssl"
+node_v8_path = "//v8"
+
+# The engine owns V8's platform in its own processes. Node's own `node`
+# program still makes one: its startup snapshot needs it.
+node_use_v8_platform = false
+
+# Node keeps its async context on each promise and in fixed context slots.
+v8_promise_internal_field_count = 1
+v8_embedder_data_array_size = 40
+
+# Node's `async_hooks`. Electron's V8 patch keeps builtins PGO with it on.
+v8_enable_javascript_promise_hooks = true
+
+# Native modules link against V8 by name.
+v8_expose_public_symbols = true

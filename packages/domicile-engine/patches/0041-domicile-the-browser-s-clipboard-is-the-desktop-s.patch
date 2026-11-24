@@ -52,7 +52,7 @@ repository.
  4 files changed, 59 insertions(+)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 500e2e4..aa9f6de 100644
+index 5b00714..0ae7eac 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -132,6 +132,8 @@ source_set("gbm") {
@@ -64,7 +64,7 @@ index 500e2e4..aa9f6de 100644
      "domicile/drm_screen.cc",
      "domicile/drm_screen.h",
      "domicile/drm_sleep.cc",
-@@ -259,6 +261,7 @@ source_set("gbm_unittests") {
+@@ -261,6 +263,7 @@ source_set("gbm_unittests") {
      "domicile/drm_input_devices_unittest.cc",
      "domicile/drm_master_unittest.cc",
      "domicile/drm_modeset_unittest.cc",
@@ -144,7 +144,7 @@ index 410ebdc..e44d0c5 100644
    // And after event_factory_ozone_ for the same kind of reason: it observes
    // that event source for as long as it lives. And after modeset_, which it
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index a2aadd6..2a598b2 100644
+index ce8a65e..cdbb550 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -18,6 +18,7 @@
@@ -155,7 +155,7 @@ index a2aadd6..2a598b2 100644
  #include "ui/gfx/buffer_types.h"
  #include "ui/gfx/geometry/point.h"
  #include "ui/gfx/native_ui_types.h"
-@@ -366,6 +367,26 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -353,6 +354,26 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // to lay out. See `DomicileDisplayLayout` above.
    virtual void SetDomicileDisplayLayout(
        const std::vector<DomicileDisplayLayout>& layout) {}

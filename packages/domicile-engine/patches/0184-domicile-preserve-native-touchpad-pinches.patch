@@ -284,10 +284,10 @@ index 7de4407..853eda6 100644
      // No phase information is avaiable.
      kPhaseNone = 0,
 diff --git a/third_party/blink/public/mojom/input/input_handler.mojom b/third_party/blink/public/mojom/input/input_handler.mojom
-index 13022a9..f68affc 100644
+index 7a3e074..8c8d550 100644
 --- a/third_party/blink/public/mojom/input/input_handler.mojom
 +++ b/third_party/blink/public/mojom/input/input_handler.mojom
-@@ -72,7 +72,20 @@ struct PointerData {
+@@ -73,7 +73,20 @@ struct PointerData {
    int32 device_id;
  };
  
@@ -308,7 +308,7 @@ index 13022a9..f68affc 100644
    uint8 native_scroll_source;
    bool axis_stop_x;
    bool axis_stop_y;
-@@ -154,6 +167,7 @@ struct TapDownData {
+@@ -155,6 +168,7 @@ struct TapDownData {
  };
  
  struct GestureData {
@@ -447,7 +447,7 @@ index 9236885..abd90ab 100644
  };
  
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
-index d7107e2..70f4665 100644
+index 7d147d2..92306a5 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.cc
 +++ b/ui/events/ozone/evdev/event_factory_evdev.cc
 @@ -3,7 +3,6 @@
@@ -456,9 +456,9 @@ index d7107e2..70f4665 100644
  #include "ui/events/ozone/evdev/event_factory_evdev.h"
 -#include "ui/events/domicile/scroll_metadata.h"
  
+ #include <optional>
  #include <utility>
- 
-@@ -18,6 +17,8 @@
+@@ -20,6 +19,8 @@
  #include "ui/events/devices/keyboard_device.h"
  #include "ui/events/devices/microphone_mute_switch_monitor.h"
  #include "ui/events/devices/touchpad_device.h"
@@ -467,7 +467,7 @@ index d7107e2..70f4665 100644
  #include "ui/events/event_utils.h"
  #include "ui/events/ozone/device/device_event.h"
  #include "ui/events/ozone/device/device_manager.h"
-@@ -389,6 +390,9 @@ void EventFactoryEvdev::DispatchPinchEvent(const PinchEventParams& params) {
+@@ -416,6 +417,9 @@ void EventFactoryEvdev::DispatchPinchEvent(const PinchEventParams& params) {
    }
    GestureEvent event(params.location.x(), params.location.y(), 0,
                       params.timestamp, details);
@@ -626,7 +626,7 @@ index 55d1b8f..97de847 100644
      "scroll_input_type.h",
      "scroll_types.h",
 diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.cc b/ui/ozone/platform/wayland/host/wayland_event_source.cc
-index e55633f..e6a15f6 100644
+index 5486a04..b712072 100644
 --- a/ui/ozone/platform/wayland/host/wayland_event_source.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_event_source.cc
 @@ -20,6 +20,7 @@
@@ -637,7 +637,7 @@ index e55633f..e6a15f6 100644
  #include "ui/events/domicile/scroll_metadata.h"
  #include "ui/events/event_utils.h"
  #include "ui/events/keycodes/dom/dom_code.h"
-@@ -946,7 +947,8 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
+@@ -939,7 +940,8 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
                                        const gfx::Vector2dF& delta,
                                        base::TimeTicks timestamp,
                                        int device_id,
@@ -647,7 +647,7 @@ index e55633f..e6a15f6 100644
    GestureEventDetails details(event_type);
    details.set_device_type(GestureDeviceType::DEVICE_TOUCHPAD);
    if (scale_delta) {
-@@ -957,6 +959,9 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
+@@ -950,6 +952,9 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
    GestureEvent event(location.x(), location.y(), 0 /* flags */, timestamp,
                       details);
    event.set_source_device_id(device_id);
@@ -658,10 +658,10 @@ index e55633f..e6a15f6 100644
    auto* target = window_manager_->GetCurrentPointerFocusedWindow();
    // A window may be deleted when the event arrived from the server.
 diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.h b/ui/ozone/platform/wayland/host/wayland_event_source.h
-index 76eba10..1fd8ea9 100644
+index 4740e41..da84dde 100644
 --- a/ui/ozone/platform/wayland/host/wayland_event_source.h
 +++ b/ui/ozone/platform/wayland/host/wayland_event_source.h
-@@ -184,11 +184,13 @@ class WaylandEventSource : public PlatformEventSource,
+@@ -185,11 +185,13 @@ class WaylandEventSource : public PlatformEventSource,
    void CancelActiveTouches(base::TimeTicks timestamp);
  
    // WaylandZwpPointerGesture::Delegate:

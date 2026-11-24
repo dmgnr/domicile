@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import { Button } from "../Button/Button";
 import type { Size } from "../control-sizes";
@@ -54,7 +54,7 @@ type Options = {
   Component: AnyComponent;
   prefixIcon: ReactNode;
   suffixIcon: ReactNode;
-  suffixButtonIcons: { primary: ReactNode; secondary: ReactNode };
+  suffixButtonIcons: { primary: ReactElement; secondary: ReactElement };
   primaryButtonLabel: string;
 };
 

@@ -20,7 +20,7 @@ import { QuickSettings } from "./QuickSettings";
 const tile =
   (label: string) =>
   ({ onMore }: { onMore?: (() => void) | undefined }) => (
-    <QuickTile icon={undefined} label={label} onMore={onMore} />
+    <QuickTile icon={undefined} label={label} lit={false} onMore={onMore} />
   );
 
 /** A switch that switches nothing. */

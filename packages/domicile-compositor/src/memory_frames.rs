@@ -15,10 +15,19 @@ use std::os::fd::{AsFd as _, AsRawFd as _};
 use thiserror::Error;
 
 use crate::casting::memory::Mapping;
-use crate::engine::{ShmBuffer, FOURCCS};
+use crate::engine::ShmBuffer;
 use crate::uploads::Shape;
 
-/// Every format the engine takes is four bytes a pixel.
+/// The fourccs the engine shows from memory: the 8-bit ones. Viz's software
+/// path draws no 10-bit or half-float image.
+const MEMORY_FOURCCS: [u32; 4] = [
+    0x3432_5241, // DRM_FORMAT_ARGB8888
+    0x3432_5258, // DRM_FORMAT_XRGB8888
+    0x3432_4241, // DRM_FORMAT_ABGR8888
+    0x3432_4258, // DRM_FORMAT_XBGR8888
+];
+
+/// Every format in [`MEMORY_FOURCCS`] is four bytes a pixel.
 const BYTES_PER_PIXEL: usize = 4;
 
 /// Why a frame could not be put in memory.
@@ -44,7 +53,7 @@ pub struct MemoryFrame {
 impl MemoryFrame {
     /// A black frame of `shape`.
     pub fn allocate(shape: Shape) -> Result<Self, MemoryError> {
-        if !FOURCCS.contains(&shape.fourcc) {
+        if !MEMORY_FOURCCS.contains(&shape.fourcc) {
             return Err(MemoryError::Format(shape.fourcc));
         }
         let stride = shape.width as usize * BYTES_PER_PIXEL;
@@ -198,6 +207,21 @@ mod tests {
         assert!(matches!(
             MemoryFrame::allocate(shape),
             Err(MemoryError::Format(fourcc)) if fourcc == rgb565
+        ));
+    }
+
+    #[test]
+    fn a_10_bit_frame_is_refused() {
+        let xbgr2101010 = 0x3033_4258;
+        let shape = Shape {
+            width: 2,
+            height: 1,
+            fourcc: xbgr2101010,
+        };
+
+        assert!(matches!(
+            MemoryFrame::allocate(shape),
+            Err(MemoryError::Format(fourcc)) if fourcc == xbgr2101010
         ));
     }
 }

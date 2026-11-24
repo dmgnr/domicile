@@ -26,10 +26,10 @@ guard-shell-crash.sh crash each kind of page.
  3 files changed, 16 insertions(+)
 
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index c52adb7..a3c60dd 100644
+index 5e72442..e4cbb29 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -2294,6 +2294,8 @@ if (toolkit_views) {
+@@ -2281,6 +2281,8 @@ if (toolkit_views) {
        "//chrome/browser/ui/views/frame:browser_view_header",
        "//chrome/browser/ui/views/frame:contents_web_view",
        "//chrome/common",
@@ -64,10 +64,10 @@ index c0157e8..42231fa 100644
      // If the renderer was terminated to prevent an browser OOM crash, discard
      // the tab instead of showing a sad tab, unless the tab is visible. The tab
 diff --git a/third_party/blink/renderer/core/frame/remote_frame.cc b/third_party/blink/renderer/core/frame/remote_frame.cc
-index cf6c833..5fd6b70 100644
+index 90726d2..c2fec2d 100644
 --- a/third_party/blink/renderer/core/frame/remote_frame.cc
 +++ b/third_party/blink/renderer/core/frame/remote_frame.cc
-@@ -43,6 +43,7 @@
+@@ -47,6 +47,7 @@
  #include "third_party/blink/renderer/core/frame/remote_frame_view.h"
  #include "third_party/blink/renderer/core/frame/user_activation.h"
  #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
@@ -75,7 +75,7 @@ index cf6c833..5fd6b70 100644
  #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
  #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
  #include "third_party/blink/renderer/core/inspector/console_message.h"
-@@ -927,6 +928,12 @@ void RemoteFrame::ChildProcessGone() {
+@@ -971,6 +972,12 @@ void RemoteFrame::ChildProcessGone() {
    remote_process_gone_ = true;
    compositing_helper_->ChildFrameGone(
        ancestor_widget_->GetOriginalDeviceScaleFactor());

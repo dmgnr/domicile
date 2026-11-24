@@ -19,7 +19,7 @@ repository.
  3 files changed, 20 insertions(+), 2 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index cd282e3..e8ce410 100644
+index 5ca611e..221d0bc 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -124,6 +124,8 @@ source_set("gbm") {
@@ -39,7 +39,7 @@ index cd282e3..e8ce410 100644
      "//ui/events/devices",
      "//ui/events/ozone",
      "//ui/events/ozone/evdev",
-@@ -277,6 +280,7 @@ source_set("gbm_unittests") {
+@@ -279,6 +282,7 @@ source_set("gbm_unittests") {
      "domicile/drm_canvas_unittest.cc",
      "domicile/drm_no_gbm_modeset_unittest.cc",
      "domicile/drm_cursor_factory_unittest.cc",
@@ -47,7 +47,7 @@ index cd282e3..e8ce410 100644
      "domicile/drm_fullscreen_unittest.cc",
      "domicile/drm_input_controller_unittest.cc",
      "domicile/drm_input_devices_unittest.cc",
-@@ -343,6 +347,7 @@ source_set("gbm_unittests") {
+@@ -345,6 +349,7 @@ source_set("gbm_unittests") {
      # this target includes a `//ui/events` header directly rather than only
      # through `:gbm`, and `gn check` wants the edge said out loud.
      "//ui/events",
@@ -101,10 +101,10 @@ index c11d72f..2bd62e5 100644
    PlatformProperties platform_properties_;
  
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index f975437..faabf13 100644
+index c11d172..7c8b972 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
-@@ -469,8 +469,8 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -456,8 +456,8 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // the host session's.
    virtual void SetDomicileWhitePoint(const DomicileWhitePoint& white_point) {}
    // DOMICILE: emulated input for the desk host, which it hears as it hears

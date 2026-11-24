@@ -45,6 +45,7 @@ class ExternalSurfaceProvider : public mojom::ExternalSurfaceProvider {
              const viz::LocalSurfaceId& local_surface_id,
              const gfx::Size& size,
              double scale,
+             double zoom,
              EmbedCallback callback) override;
   void WaitForEnd(const viz::FrameSinkId& frame_sink_id,
                   WaitForEndCallback callback) override;

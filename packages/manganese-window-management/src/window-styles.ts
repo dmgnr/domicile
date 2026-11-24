@@ -272,6 +272,39 @@ export const clippedTo = (
 };
 
 /**
+ * The screen a workspace switch slides a window across, or `undefined` when
+ * no switch is sliding it. See {@link clippedAlong}.
+ */
+export const slidingAcross = (
+  screen: Rect,
+  motion: WindowMotion,
+): Rect | undefined => (isSwitching(motion) ? screen : undefined);
+
+/**
+ * Inline style clipping part of a window at `rect` to the `screen` a switch
+ * slides it across (see {@link slidingAcross}), or none.
+ *
+ * In the part's own box, so the clip moves with the slide: a float hanging
+ * off the screen's edge stays off its workspace instead of sliding into view
+ * beside it. {@link clippedTo}'s clip stays put, keeping the slide on its
+ * monitor.
+ */
+export const clippedAlong = (
+  screen: Rect | undefined,
+  rect: Rect,
+): CSSProperties => {
+  if (screen === undefined) {
+    return {};
+  } else {
+    const top = `${(screen.y - rect.y).toString()}px`;
+    const right = `${(screen.x + screen.width - rect.x).toString()}px`;
+    const bottom = `${(screen.y + screen.height - rect.y).toString()}px`;
+    const left = `${(screen.x - rect.x).toString()}px`;
+    return { clip: `rect(${top}, ${right}, ${bottom}, ${left})` };
+  }
+};
+
+/**
  * A window's animation, keyed by `WindowMotion`. Keyframes are in
  * `panda.config.ts`.
  *
@@ -460,6 +493,8 @@ export const settlingStyles = cva({
           "background-color {durations.fast} {easings.out}, border-color {durations.fast} {easings.out}, color {durations.fast} {easings.out}, opacity {durations.fast} {easings.out}",
       },
       true: {
+        // main-thread animation: a lowered depth steps once at the end;
+        // nothing eases.
         transition:
           "background-color {durations.fast} {easings.out}, border-color {durations.fast} {easings.out}, color {durations.fast} {easings.out}, opacity {durations.fast} {easings.out}, z-index {durations.fast} step-end",
       },

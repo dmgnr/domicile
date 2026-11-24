@@ -16,10 +16,10 @@ factor, which is what it is drawn at.
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-index 258b13e..a7858e6 100644
+index ba9c573..25246fb 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-@@ -2173,7 +2173,7 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
+@@ -2202,7 +2202,7 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
    external_surface_embedder_->Embed(
        app_id,
        frame->GetPage()->GetChromeClient().GetFrameSinkId(frame),

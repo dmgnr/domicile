@@ -1,0 +1,464 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jeremy Apthorp <nornagon@nornagon.net>
+Date: Tue, 26 Feb 2019 17:07:45 -0800
+Subject: build: add GN build files
+
+This adds GN build files for Node, so we don't have to build with GYP.
+
+Note that there always GN files in upstream Node in 20/21 branches,
+however those files were cherry-picked from main branch and do not
+really in 20/21. We have to wait until 22 is released to be able to
+build with upstream GN files.
+
+src/inspector/unofficial.gni - The node_protocol_generated_sources action
+was missing gypi_values.node_pdl_files from its inputs, causing Ninja to skip
+regeneration when PDL domain files changed. Should be upstreamed.
+
+node.gni - The node_* declare_args() are configured from Electron's build
+args (//electron/build/args/all.gn) rather than by changing their defaults
+here. The exception is node_path: node_module_version's default in the same
+declare_args() block runs exec_script() on $node_path, and GN evaluates it
+against node_path's default even when both are overridden, so gn gen fails
+unless the default points at the real checkout.
+
+diff --git a/configure.py b/configure.py
+index a3769ff2d8798341046935bf1dd1b2783d514a0f..493f6b51fdf2280aaa5f9ac2b4850efc02ea0052 100755
+--- a/configure.py
++++ b/configure.py
+@@ -2259,7 +2259,7 @@ def configure_v8(o, configs):
+   # Like V8's own default, the sandbox goes with the shared pointer compression
+   # cage. Multi-cage builds give every IsolateGroup its own sandbox, which the
+   # array buffer allocator does not know about yet.
+-  o['variables']['v8_enable_sandbox'] = 1 if options.pointer_compression_shared_cage else 0
++  o['variables']['v8_enable_sandbox'] = 1 if options.enable_pointer_compression else 0
+   o['variables']['v8_enable_pointer_compression_shared_cage'] = 1 if options.pointer_compression_shared_cage else 0
+   o['variables']['v8_enable_external_code_space'] = 1 if options.enable_pointer_compression else 0
+   o['variables']['v8_enable_31bit_smis_on_64bit_arch'] = 1 if options.enable_pointer_compression else 0
+diff --git a/node.gni b/node.gni
+index fa4668a543e2c1d6f084a0ac1e7c6fc4f5d3a1ee..6220b9339265051156aaa6ff77a735c8e49c85e1 100644
+--- a/node.gni
++++ b/node.gni
+@@ -5,7 +5,7 @@
+ # Embedder options.
+ declare_args() {
+   # The location of Node.js in source code tree.
+-  node_path = "//node"
++  node_path = "//third_party/electron_node"
+ 
+   # The location of V8 - use the one from node's deps by default.
+   node_v8_path = "$node_path/deps/v8"
+@@ -80,6 +80,12 @@ declare_args() {
+ 
+   # Build with Amaro (TypeScript utils).
+   node_use_amaro = true
++
++  # Allows downstream packagers (eg. Linux distributions) to build against system shared libraries.
++  use_system_cares = false
++  use_system_nghttp2 = false
++  use_system_llhttp = false
++  use_system_histogram = false
+ }
+ 
+ # Link against shared copies of the bundled dependencies instead of building
+diff --git a/src/node_builtins.cc b/src/node_builtins.cc
+index c58fa0089105db6b815aaf773b0700226f36c8e3..29e9a4748878285f505df82b74ef60a2f97ada24 100644
+--- a/src/node_builtins.cc
++++ b/src/node_builtins.cc
+@@ -484,6 +484,30 @@ MaybeLocal<Function> BuiltinLoader::LookupAndCompileFunction(
+   return value.As<Function>();
+ }
+ 
++MaybeLocal<Function> BuiltinLoader::LookupAndCompileFunction(
++    Local<Context> context,
++    const char* id,
++    LocalVector<String>* parameters,
++    Realm* optional_realm) {
++  Isolate* isolate = Isolate::GetCurrent();
++  const BuiltinSource* builtin_source = LoadBuiltinSource(isolate, id);
++  if (builtin_source == nullptr) {
++    THROW_ERR_MODULE_NOT_FOUND(isolate, "Cannot find module %s", id);
++    return MaybeLocal<Function>();
++  }
++  std::string filename_s = std::string("node:") + builtin_source->id;
++  Local<String> filename = OneByteString(isolate, filename_s);
++  Local<String> source = builtin_source->source.ToStringChecked(isolate);
++  ScriptOrigin origin(filename, 0, 0, true);
++  ScriptCompiler::Source script_source(source, origin);
++  return ScriptCompiler::CompileFunction(context,
++                                         &script_source,
++                                         parameters->size(),
++                                         parameters->data(),
++                                         0,
++                                         nullptr);
++}
++
+ MaybeLocal<Value> BuiltinLoader::CompileAndCall(Local<Context> context,
+                                                 const char* id,
+                                                 Realm* realm) {
+@@ -930,6 +954,7 @@ void BuiltinLoader::RegisterExternalReferences(
+   registry->Register(ImportBuiltinSourceTextModule);
+ 
+   RegisterExternalReferencesForInternalizedBuiltinCode(registry);
++  EmbedderRegisterExternalReferencesForInternalizedBuiltinCode(registry);
+ }
+ 
+ }  // namespace builtins
+diff --git a/src/node_builtins.h b/src/node_builtins.h
+index 89fe7f5c1aa7a3b985ca8f4968586045430fd079..5a74c5dd4fbbacd6cbff91efbf6b56e7900989a1 100644
+--- a/src/node_builtins.h
++++ b/src/node_builtins.h
+@@ -82,6 +82,8 @@ using BuiltinCodeCacheMap =
+ // Generated by tools/js2c.cc as node_javascript.cc
+ void RegisterExternalReferencesForInternalizedBuiltinCode(
+     ExternalReferenceRegistry* registry);
++void EmbedderRegisterExternalReferencesForInternalizedBuiltinCode(
++    ExternalReferenceRegistry* registry);
+ 
+ // Handles compilation and caching of built-in JavaScript modules and
+ // bootstrap scripts, whose source are bundled into the binary as static data.
+@@ -104,6 +106,13 @@ class NODE_EXTERN_PRIVATE BuiltinLoader {
+   v8::MaybeLocal<v8::Function> LookupAndCompileFunction(
+       v8::Local<v8::Context> context, const char* id, Realm* optional_realm);
+ 
++  // Overload that accepts custom parameters for embedder scripts.
++  v8::MaybeLocal<v8::Function> LookupAndCompileFunction(
++      v8::Local<v8::Context> context,
++      const char* id,
++      v8::LocalVector<v8::String>* parameters,
++      Realm* optional_realm);
++
+   v8::MaybeLocal<v8::Value> CompileAndCallWith(v8::Local<v8::Context> context,
+                                                const char* id,
+                                                int argc,
+diff --git a/tools/js2c.cc b/tools/js2c.cc
+old mode 100644
+new mode 100755
+index 2cb09f8e1d7ba6ba389f70cdfc6300458f469caa..1a7b6ec6e6c51cf947694fac5dfd860b345d478f
+--- a/tools/js2c.cc
++++ b/tools/js2c.cc
+@@ -29,6 +29,7 @@ namespace js2c {
+ int Main(int argc, char* argv[]);
+ 
+ static bool is_verbose = false;
++static bool only_js = false;
+ 
+ void Debug(const char* format, ...) {
+   va_list arguments;
+@@ -176,6 +177,7 @@ const char* kTemplate = R"(
+ #include "node_builtins.h"
+ #include "node_external_reference.h"
+ #include "node_internals.h"
++#include "node_threadsafe_cow-inl.h"
+ 
+ namespace node {
+ 
+@@ -191,7 +193,11 @@ const ThreadsafeCopyOnWrite<BuiltinSourceMap> global_source_map {
+ }  // anonymous namespace
+ 
+ void BuiltinLoader::LoadJavaScriptSource() {
+-  source_ = global_source_map;
++  BuiltinSourceMap map = *source_.read();
++  BuiltinSourceMap new_map = *global_source_map.read();
++
++  map.merge(new_map);
++  source_ = ThreadsafeCopyOnWrite<BuiltinSourceMap>(map);
+ }
+ 
+ void RegisterExternalReferencesForInternalizedBuiltinCode(
+@@ -208,6 +214,45 @@ UnionBytes BuiltinLoader::GetConfig() {
+ }  // namespace node
+ )";
+ 
++const char* kEmbedderTemplate = R"(
++#include "env-inl.h"
++#include "node_builtins.h"
++#include "node_external_reference.h"
++#include "node_internals.h"
++#include "node_threadsafe_cow-inl.h"
++
++namespace node {
++
++namespace builtins {
++
++%.*s
++namespace {
++const ThreadsafeCopyOnWrite<BuiltinSourceMap> global_source_map {
++  BuiltinSourceMap {
++%.*s
++  }  // BuiltinSourceMap
++
++};  // ThreadsafeCopyOnWrite
++}  // anonymous namespace
++
++void BuiltinLoader::LoadEmbedderJavaScriptSource() {
++  BuiltinSourceMap map = *source_.read();
++  BuiltinSourceMap new_map = *global_source_map.read();
++
++  map.merge(new_map);
++  source_ = ThreadsafeCopyOnWrite<BuiltinSourceMap>(map);
++}
++
++void EmbedderRegisterExternalReferencesForInternalizedBuiltinCode(
++  ExternalReferenceRegistry* registry) {
++%.*s
++}
++
++}  // namespace builtins
++
++}  // namespace node
++)";
++
+ Fragment Format(const Fragments& definitions,
+                 const Fragments& initializers,
+                 const Fragments& registrations) {
+@@ -217,13 +262,12 @@ Fragment Format(const Fragments& definitions,
+   size_t init_size = init_buf.size();
+   std::vector<char> reg_buf = Join(registrations, "\n");
+   size_t reg_size = reg_buf.size();
+-
+-  size_t result_size =
+-      def_size + init_size + reg_size + strlen(kTemplate) + 100;
++  size_t result_size = def_size + init_size + reg_size +
++          strlen(only_js ? kEmbedderTemplate: kTemplate) + 300;
+   std::vector<char> result(result_size, 0);
+   int r = snprintf(result.data(),
+                    result_size,
+-                   kTemplate,
++                   only_js ? kEmbedderTemplate: kTemplate,
+                    static_cast<int>(def_buf.size()),
+                    def_buf.data(),
+                    static_cast<int>(init_buf.size()),
+@@ -848,12 +892,15 @@ int JS2C(const FileList& js_files,
+     }
+   }
+ 
++  if (!only_js) {
+   assert(FilenameIsConfigGypi(config));
+   // "config.gypi" -> config_raw.
+   int r = AddGypi("config", config, &definitions);
+   if (r != 0) {
+     return r;
+   }
++  }
++
+   Fragment out = Format(definitions, initializers, registrations);
+   return WriteIfChanged(out, dest);
+ }
+@@ -879,6 +926,8 @@ int Main(int argc, char* argv[]) {
+     std::string arg(argv[i]);
+     if (arg == "--verbose") {
+       is_verbose = true;
++    } else if (arg == "--only-js") {
++      only_js = true;
+     } else if (arg == "--root") {
+       if (i == argc - 1) {
+         fprintf(stderr, "--root must be followed by a path\n");
+@@ -927,6 +976,14 @@ int Main(int argc, char* argv[]) {
+     }
+   }
+ 
++  if (only_js) {
++    auto js_it = file_map.find(".js");
++
++    assert(file_map.size() == 1);
++    assert(js_it != file_map.end());
++
++    return JS2C(js_it->second, FileList(), std::string(), output);
++  } else {
+   // Should have exactly 3 types: `.js`, `.mjs` and `.gypi`.
+   assert(file_map.size() == 3);
+   auto gypi_it = file_map.find(".gypi");
+@@ -953,6 +1010,7 @@ int Main(int argc, char* argv[]) {
+   std::sort(mjs_it->second.begin(), mjs_it->second.end());
+ 
+   return JS2C(js_it->second, mjs_it->second, gypi_it->second[0], output);
++  }
+ }
+ }  // namespace js2c
+ }  // namespace node
+diff --git a/tools/search_files.py b/tools/search_files.py
+index 856878c33681a73d41016729dabe48b0a6a80589..91a11852d206b65485fe90fd037a0bd17a16c20b 100755
+--- a/tools/search_files.py
++++ b/tools/search_files.py
+@@ -14,6 +14,7 @@ if __name__ == '__main__':
+   try:
+     files = SearchFiles(*sys.argv[2:])
+     files = [ os.path.relpath(x, sys.argv[1]) for x in files ]
++    files = [os.path.normpath(x).replace(os.sep, '/') for x in files]
+     # Apply the same transform in SearchFiles after relpath
+     if sys.platform == 'win32':
+       files = [ x.replace('\\', '/') for x in files ]
+diff --git a/unofficial.gni b/unofficial.gni
+index 5878f079d94e8becff276619d0ca204c329a6675..2443574f3c2aa7a6ec5bd7027f9dac5a1a51a1d7 100644
+--- a/unofficial.gni
++++ b/unofficial.gni
+@@ -158,32 +158,43 @@ template("node_gn_build") {
+     public_configs = [
+       ":node_external_config",
+       "deps/googletest:googletest_config",
++      ":zstd_include_config"
+     ]
+     public_deps = [
+       "deps/ada",
+       "deps/uv",
++      "//electron:electron_js2c",
+       "deps/simdjson",
+       "$node_v8_path",
+     ]
+     deps = [
+       ":run_node_js2c",
+-      "deps/brotli",
+       "deps/cares",
+       "deps/histogram",
+       "deps/llhttp",
+       "deps/merve",
+       "deps/nbytes",
+       "deps/nghttp2",
+-      "deps/ngtcp2",
+       "deps/postject",
+       "deps/uvwasi",
+-      "deps/zstd",
+       "//third_party/zlib",
++      "//third_party/brotli:dec",
++      "//third_party/brotli:enc",
++      "//third_party/zstd:compress",
++      "//third_party/zstd:decompress",
++      "//third_party/zstd:headers",
+       "$node_simdutf_path",
+       "$node_v8_path:v8_libplatform",
+     ]
+ 
++    cflags_cc = [
++      "-Wno-unguarded-availability-new",
++      "-Wno-return-stack-address"
++    ]
++
+     sources = [
++      "src/node_snapshot_stub.cc",
++      "$root_gen_dir/electron_natives.cc",
+       "$target_gen_dir/node_javascript.cc",
+     ] + gypi_values.node_sources
+ 
+@@ -235,6 +246,10 @@ template("node_gn_build") {
+     }
+   }
+ 
++  config("zstd_include_config") {
++    include_dirs = [ "//third_party/zstd/src/lib" ]
++  }
++
+   executable(target_name) {
+     forward_variables_from(invoker, "*")
+ 
+@@ -326,6 +341,7 @@ template("node_gn_build") {
+   }
+ 
+   executable("node_js2c") {
++    defines = []
+     deps = [
+       "deps/uv",
+       "$node_simdutf_path",
+@@ -340,27 +356,77 @@ template("node_gn_build") {
+     ]
+     include_dirs = [
+       "src",
++      "tools",
+       get_label_info(node_simdutf_path, "dir"),
+     ]
++
++    if (!is_win) {
++      defines += [ "NODE_JS2C_USE_STRING_LITERALS" ]
++    }
++  }
++
++  node_deps_files = gypi_values.deps_files + node_builtin_shareable_builtins
++  node_library_files = exec_script("./tools/search_files.py",
++                                    [ rebase_path(".", root_build_dir),
++                                      rebase_path("lib", root_build_dir),
++                                      "js" ],
++                                    "list lines")
++
++  fs_files = [
++    "lib/internal/fs/cp/cp-sync.js",
++    "lib/internal/fs/cp/cp.js",
++    "lib/internal/fs/dir.js",
++    "lib/internal/fs/glob.js",
++    "lib/internal/fs/promises.js",
++    "lib/internal/fs/read/context.js",
++    "lib/internal/fs/recursive_watch.js",
++    "lib/internal/fs/rimraf.js",
++    "lib/internal/fs/streams.js",
++    "lib/internal/fs/sync_write_stream.js",
++    "lib/internal/fs/utils.js",
++    "lib/internal/fs/watchers.js",
++    "lib/fs.js",
++    "lib/fs/promises.js"
++  ]
++
++  original_fs_files = []
++  foreach(file, fs_files) {
++    original_fs_files += [string_replace(string_replace(string_replace(file, "internal/fs/", "internal/original-fs/"), "lib/fs.js", "lib/original-fs.js"), "lib/fs/", "lib/original-fs/")]
++  }
++
++  copy("node_js2c_inputs") {
++    sources = node_deps_files + node_library_files
++    outputs = [
++      "$target_gen_dir/js2c_inputs/{{source_target_relative}}",
++    ]
++  }
++
++  action("node_js2c_original_fs") {
++    script = "//electron/script/node/generate_original_fs.py"
++    inputs = fs_files
++    deps = [ ":node_js2c_inputs" ]
++
++    outputs = []
++    foreach(file, original_fs_files) {
++      outputs += ["$target_gen_dir/js2c_inputs/$file"]
++    }
++
++    args = [rebase_path("$target_gen_dir/js2c_inputs")] + fs_files
+   }
+ 
+   action("run_node_js2c") {
+-    script = "$node_v8_path/tools/run.py"
++    script = "//electron/build/run-in-dir.py"
+     deps = [
++      ":node_js2c_original_fs",
+       ":node_js2c($host_toolchain)",
+       ":generate_config_gypi",
+     ]
+ 
+-    node_deps_files = gypi_values.deps_files + node_builtin_shareable_builtins
+-    node_library_files = exec_script("./tools/search_files.py",
+-                                     [ rebase_path(".", root_build_dir),
+-                                       rebase_path("lib", root_build_dir),
+-                                       "js" ],
+-                                     "list lines")
+-
++    config_gypi = [ "$target_gen_dir/config.gypi" ]
+     inputs = node_library_files +
+              node_deps_files +
+-             [ "$target_gen_dir/config.gypi" ]
++             get_target_outputs(":node_js2c_original_fs") +
++             config_gypi
+     outputs = [ "$target_gen_dir/node_javascript.cc" ]
+ 
+     # Get the path to node_js2c executable of the host toolchain.
+@@ -374,11 +440,11 @@ template("node_gn_build") {
+         get_label_info(":node_js2c($host_toolchain)", "name") +
+         host_executable_suffix
+ 
+-    args = [ rebase_path(node_js2c_path),
+-             rebase_path("$target_gen_dir/node_javascript.cc"),
+-             "--root", rebase_path("."),
+-             "lib", rebase_path("$target_gen_dir/config.gypi") ] +
+-           node_deps_files
++    args = [ rebase_path("$target_gen_dir/js2c_inputs"),
++             rebase_path(node_js2c_path),
++             rebase_path("$target_gen_dir/node_javascript.cc")] +
++             rebase_path(config_gypi) + node_deps_files +
++             original_fs_files + node_library_files
+   }
+ 
+   executable("node_cctest") {

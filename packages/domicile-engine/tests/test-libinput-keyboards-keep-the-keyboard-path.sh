@@ -17,7 +17,7 @@ added = "\n".join(line[1:] for patch in sorted((engine / "patches").glob("*.patc
 checks = {
     "libinput keyboards inherit Chromium's keyboard state and filters": ": public EventConverterEvdevImpl" in header,
     "the shared context owns keyboard subscriptions": "SetEventHandler" in source and "RemoveDevice" in source,
-    "native keys reach the existing key pipeline": "LibInputKeyboardKey" in source and "ProcessEvents(&key, 1)" in source,
+    "native keys reach the existing key pipeline": "LibInputKeyboardKey" in source and "ProcessEvents(base::span_from_ref(key))" in source,
     "disabled keyboards do not deliver new keys": "IsEnabled()" in source,
     "keyboard adapters never start a competing raw reader": "EventConverterEvdevImpl::Start" not in source and "EventConverterEvdev::Start" not in source and "WatchFileDescriptor" not in source and "read(" not in source,
     "factory start and stop dispatch through the adapter": "virtual void Start();" in added and "virtual void Stop();" in added,

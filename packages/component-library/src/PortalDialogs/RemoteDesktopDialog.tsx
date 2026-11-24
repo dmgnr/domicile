@@ -11,6 +11,7 @@ import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
 import { Switch } from "../Switch/Switch";
 import { deviceNames } from "./device-names";
+import type { Presence } from "./presence";
 
 const LABELS = {
   keyboard: "Keyboard",
@@ -23,6 +24,8 @@ type Props = {
   /** Who asks, as the dialog names them. */
   asker: string;
   body: RemoteDesktopBody;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -30,7 +33,13 @@ type Props = {
  * Which devices, and the clipboard, an application may control. Offers only
  * what it asked for, all on. Dismissing it denies.
  */
-export const RemoteDesktopDialog = ({ answer, asker, body, screen }: Props) => {
+export const RemoteDesktopDialog = ({
+  answer,
+  asker,
+  body,
+  presence,
+  screen,
+}: Props) => {
   const [devices, setDevices] = useState<Devices>(body.devices);
   const [clipboard, setClipboard] = useState(body.clipboard);
   return (
@@ -60,7 +69,7 @@ export const RemoteDesktopDialog = ({ answer, asker, body, screen }: Props) => {
           answer(Answer.Canceled());
         }
       }}
-      open
+      {...presence}
       screen={screen}
       title="Allow remote control?"
     >

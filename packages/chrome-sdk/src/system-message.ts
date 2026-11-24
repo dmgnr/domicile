@@ -53,8 +53,21 @@ const systemReplySchema = z.looseObject({
     z.looseObject({ kind: z.literal("saved"), path: z.string() }),
     z.looseObject({ kind: z.literal("copied") }),
     z.looseObject({ frame: z.string(), kind: z.literal("preview") }),
-    z.looseObject({ kind: z.literal("sent") }),
+    z.looseObject({ kind: z.literal("sent"), output: z.string().optional() }),
     z.looseObject({ kind: z.literal("set") }),
+    z.looseObject({
+      connected: z.array(
+        z.looseObject({
+          agent: z.string(),
+          reach: z.unknown(),
+          session: z.number(),
+        }),
+      ),
+      kind: z.literal("agents"),
+      remembered: z.array(
+        z.looseObject({ agent: z.string(), last_used_ms: z.number() }),
+      ),
+    }),
     z.looseObject({ kind: z.literal("virtual_monitor"), output: z.string() }),
     z.looseObject({ error: systemErrorSchema, kind: z.literal("failed") }),
   ]),
@@ -85,6 +98,12 @@ const systemEventSchema = z.looseObject({
     z.looseObject({
       command: z.array(z.string()),
       kind: z.literal("shell_command"),
+      sent: z.number(),
+    }),
+    z.looseObject({
+      app_id: z.string().optional(),
+      kind: z.literal("link"),
+      url: z.string(),
     }),
     z.looseObject({
       idle: z.boolean(),

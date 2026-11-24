@@ -7,11 +7,12 @@ import type { InstalledExtension } from "./host";
 const UBLOCK: InstalledExtension = {
   description: "An efficient content blocker.",
   enabled: true,
+  icon: undefined,
   id: "ddkjiahejlhfcafbddmgiahcphecmpfh",
   name: "uBlock Origin Lite",
   optionsUrl:
     "chrome-extension://ddkjiahejlhfcafbddmgiahcphecmpfh/dashboard.html",
-  settings: { private: false },
+  settings: { file_access: false },
   version: "2025.1",
 };
 
@@ -76,9 +77,9 @@ describe(hostExtensions, () => {
     const changed = new Promise<void>((resolve) => {
       extensions.onChange(resolve);
     });
-    await extensions.configure(UBLOCK.id, { private: true });
+    await extensions.configure(UBLOCK.id, { file_access: true });
     await changed;
-    expect(state.installed[0]?.settings).toEqual({ private: true });
+    expect(state.installed[0]?.settings).toEqual({ file_access: true });
   });
 
   it("opens an extension's options", async () => {

@@ -65,7 +65,7 @@ display::GammaCurve GammaCurveOf(const DomicileGammaRamp& ramp);
 // docs/DISPLAYS.md#adaptive-sync.
 std::vector<display::DisplayConfigurationParams> ModesetParamsFromSnapshots(
     const std::vector<raw_ptr<display::DisplaySnapshot,
-                              VectorExperimental>>& snapshots,
+                              DanglingUntriaged>>& snapshots,
     const std::vector<DomicileDisplayLayout>& layout,
     const base::flat_set<int64_t>& refused = {});
 
@@ -81,20 +81,33 @@ base::flat_set<int64_t> AdaptiveSyncAskedIn(
 // `--vmodule=screen_manager=1`; see docs/TTY-DEBUGGING.md#seeing-a-modeset.
 std::string DescribeSnapshots(
     const std::vector<raw_ptr<display::DisplaySnapshot,
-                              VectorExperimental>>& snapshots);
+                              DanglingUntriaged>>& snapshots);
 
-// Whether a modeset for `wanted` differs from the last confirmed one, `asked`.
+// The requests in `wanted` that differ from the last confirmed modeset,
+// `asked`, or that light a display whose CRTC `snapshots` read as dark. Empty
+// when nothing changed.
+//
+// A display left out keeps scanning out as it is. Asking for it again points
+// its plane at a new modeset buffer, which is black when the driver tiles its
+// framebuffers (i915), so an unchanged display flashes.
+//
+// A display that reads dark is asked for even if its request is unchanged:
+// a hotplug can move it to a CRTC nothing has lit. One moved onto a CRTC still
+// lit at the same timings, for a connector unplugged or moved away, reads lit
+// and is missed.
 //
 // Each `Configure` makes the kernel emit a udev CHANGE, which triggers another
-// reading. Skipping a request that matches the last confirmed one stops that
-// loop. A real hotplug changes the reading and gets through.
+// reading. Asking for nothing when the request matches the last confirmed one
+// stops that loop. A real hotplug changes the reading and gets through.
 //
 // Compare only against confirmed modesets. The first `Configure` goes out
 // before the GPU process has a DRM device, so it reaches nothing; recording it
 // would suppress the identical reading that later does work.
-bool ModesetWouldChangeAnything(
+std::vector<display::DisplayConfigurationParams> ModesetParamsThatChange(
     const std::vector<display::DisplayConfigurationParams>& asked,
-    const std::vector<display::DisplayConfigurationParams>& wanted);
+    const std::vector<display::DisplayConfigurationParams>& wanted,
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
+        snapshots);
 
 // Drives `NativeDisplayDelegate` to modeset off ChromeOS, where
 // `DisplayConfigurator` is unavailable. See
@@ -131,7 +144,7 @@ class DrmModeset : public display::NativeDisplayObserver {
   //
   // After a resume or a VT switch back, the CRTCs are reset or programmed by
   // another process, but the connectors report the same as before, so
-  // `ModesetWouldChangeAnything` would skip the modeset. This clears the last
+  // `ModesetParamsThatChange` would skip the modeset. This clears the last
   // confirmation so the next reading gets through. Called by `DrmSleep` and
   // `DrmVtSwitcher`.
   void Relight();
@@ -158,12 +171,12 @@ class DrmModeset : public display::NativeDisplayObserver {
   void Read();
   void OnDisplaysReceived(
       const std::vector<raw_ptr<display::DisplaySnapshot,
-                                VectorExperimental>>& snapshots);
+                                DanglingUntriaged>>& snapshots);
   // What one reading does: lays the screen out, notes the connectors, applies
   // their ramps and modesets if anything changed.
   void TakeReading(
       const std::vector<raw_ptr<display::DisplaySnapshot,
-                                VectorExperimental>>& snapshots);
+                                DanglingUntriaged>>& snapshots);
   // Sends each display in `display_ids_` its ramp in `ramps_`, if it has one.
   void ApplyGamma();
   // Sends display `id` its ramp.
@@ -172,7 +185,7 @@ class DrmModeset : public display::NativeDisplayObserver {
   const std::unique_ptr<display::NativeDisplayDelegate> delegate_;
   const raw_ptr<DrmScreen> screen_;  // Not owned; outlives this.
   // The last modeset the hardware confirmed. See
-  // `ModesetWouldChangeAnything`.
+  // `ModesetParamsThatChange`.
   std::vector<display::DisplayConfigurationParams> confirmed_;
   // The connectors a refused modeset asked for adaptive sync on. Not asked
   // for it again until unplugged; see `ModesetParamsFromSnapshots`.

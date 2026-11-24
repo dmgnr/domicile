@@ -1,8 +1,14 @@
 import { describe, expect, it } from "bun:test";
+import { loadEmittedStylesheet } from "@domicile-desktop/test-support/emitted-stylesheet";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 
 import { ChoiceToast, LevelToast } from "./LevelToast";
+
+loadEmittedStylesheet(
+  document,
+  new URL("../../styled-system/styles.css", import.meta.url),
+);
 
 /** Volume at `level`, after `changes` changes. */
 const volume = (
@@ -25,6 +31,17 @@ describe(LevelToast, () => {
       expect(screen.getByRole("status")).toHaveTextContent("Volume40%");
       expect(screen.getByTestId("icon")).toBeInTheDocument();
       expect(screen.getByRole("meter")).toHaveAttribute("aria-valuenow", "40");
+    });
+
+    // A held key changes the level many times a second, so the fill must
+    // skip layout.
+    it("moves the meter's fill with a transform", () => {
+      render(<LevelToast {...volume(1, 0.4)} />);
+
+      const fill = screen.getByRole("meter").firstElementChild as HTMLElement;
+      const { transition } = globalThis.getComputedStyle(fill);
+      expect(transition).toContain("transform ");
+      expect(transition).not.toContain("inline-size");
     });
 
     it("says muted and grays the meter", () => {

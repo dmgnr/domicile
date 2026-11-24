@@ -1,0 +1,49 @@
+name: Nix cache
+
+# Add the flake's packages at a commit to Domicile's Nix binary cache
+# (.github/scripts/nix-cache-push.sh). stable.yml calls this for each commit it
+# promotes, so a config pinned to `stable` substitutes Domicile instead of
+# building it.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to cache
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The commit to cache
+        type: string
+        required: true
+
+concurrency:
+  group: nix-cache-${{ inputs.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      # `accept-flake-config` reads the cache from flake.nix, so paths an
+      # earlier commit pushed are substituted, not rebuilt.
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+      - run: .github/scripts/nix-cache-push.sh
+        env:
+          NIX_CACHE_SIGNING_KEY: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          DOMICILE_R2_BUCKET: ${{ vars.DOMICILE_R2_BUCKET }}

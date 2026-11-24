@@ -30,3 +30,35 @@ fn files_to_omit_are_written_as_a_list_of_globs() {
     assert_eq!(omit["type"], json!("array"), "{omit}");
     assert_eq!(omit["items"], json!({ "type": "string" }), "{omit}");
 }
+
+/// The SDK's Zod schema fills in what a config leaves out from these, so a
+/// field with no default would read as absent where the compositor fills it.
+#[test]
+fn every_optional_key_states_its_default() {
+    let schema = schema();
+    let root = "Config".to_owned();
+    let objects = schema["$defs"]
+        .as_object()
+        .expect("definitions")
+        .iter()
+        .chain([(&root, &schema)]);
+    for (name, object) in objects {
+        let required = object["required"].as_array().cloned().unwrap_or_default();
+        for (key, property) in object["properties"].as_object().into_iter().flatten() {
+            let nullable = property.to_string().contains(r#""null""#);
+            assert!(
+                required.contains(&json!(key)) || nullable || property.get("default").is_some(),
+                "{name}.{key} has no default: {property}"
+            );
+        }
+    }
+}
+
+#[test]
+fn defaults_are_written_as_a_config_writes_them() {
+    let schema = schema();
+    let files = &schema["properties"]["files"]["default"];
+    assert_eq!(files, &json!({ "omit": ["**/.*"] }));
+    let color: String = domicile_config::AccentColor([0x12, 0xab, 0xff]).into();
+    assert_eq!(color, "#12abff");
+}

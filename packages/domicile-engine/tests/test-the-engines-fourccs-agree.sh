@@ -3,8 +3,7 @@
 #
 # `FormatFromFourcc` in the fork's brokered_frame_sink.cc refuses any other
 # fourcc. `FOURCCS` in the compositor's engine.rs is what `zwp_linux_dmabuf_v1`
-# offers clients. A format only the compositor lists gets every frame refused;
-# for example imv picked XR30 and drew nothing.
+# offers clients. A format only the compositor lists gets every frame refused.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"

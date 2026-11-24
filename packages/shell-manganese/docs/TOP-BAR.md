@@ -27,6 +27,7 @@ package's default export path:
 | `Battery` | `@domicile-desktop/manganese-bar-module-battery` |
 | `Notifications` | `@domicile-desktop/manganese-bar-module-notifications` |
 | `Sharing` | `@domicile-desktop/manganese-bar-module-sharing` |
+| `Agents` | `@domicile-desktop/manganese-bar-module-sharing/agents` |
 | `KeptAwake` | `@domicile-desktop/manganese-bar-module-idle-inhibitor/kept-awake` |
 | `Cast` | `@domicile-desktop/manganese-bar-module-cast` |
 | `Downloads` | `@domicile-desktop/manganese-bar-module-downloads` |
@@ -85,7 +86,8 @@ Every bar and the lock screen share one watch per system readout. See
 
 - **left**: launcher button, tray, workspaces
 - **center**: clock
-- **right**: sharing indicator (while recorded), Cast (while a TV is near or
+- **right**: sharing indicator (while recorded), agents (while one is in
+  control), Cast (while a TV is near or
   cast to), downloads (while there are any), keymap (with several keymaps), quick settings, notification bell
 
 The theme selector, idle inhibitor, brightness, volume, Bluetooth, network and
@@ -139,7 +141,8 @@ export const Shell = runManganese({
 
 ## Clock
 
-- Reads like `Wednesday 2026-09-16 20:53:40` and ticks every second.
+- Reads like `Wednesday 2026-09-16 20:53:40` and ticks every second. Without
+  seconds it changes on the minute, and reads the time every few seconds.
 - The shell options `clock.format` (`24h` or `12h`) and `clock.seconds` change
   that, e.g. `Wednesday 2026-09-16 08:53 PM`. See the
   [README](../README.md#configure).
@@ -171,9 +174,10 @@ button, and their controls in one panel, each labeled in words.
 - Scroll over the button to step the volume by 5%. Middle-click to mute or
   unmute it.
 - **The panel**, a `Drilldown` in a popover:
-  - Tiles (`QuickTile`): Wi-Fi, Wired (with a cable in, or without Wi-Fi),
-    Bluetooth, Keep awake, Night light, Dark mode. A press switches the tile.
-    An arrow opens its details.
+  - Tiles (`QuickTile`): Wi-Fi, Wired (with a cable in, or without Wi-Fi)
+    and Bluetooth. Each icon is lit in the accent color while connected. A
+    press opens the tile's details.
+  - Toggles (`QuickToggle`): Keep awake, Night light, Dark mode.
   - The brightness slider, and the volume slider with an arrow to the mixer.
   - The battery in words, such as `Battery 78%, about 3 h 20 min left`. Red
     while low.
@@ -218,14 +222,19 @@ button, and their controls in one panel, each labeled in words.
     panel is open.
   - The Wi-Fi panel, from NetworkManager or iwd. With wpa_supplicant alone it
     says there is no Wi-Fi device.
-    - A switch turns the radio on or off.
-    - Opening it scans. The arrow scans again.
+    - A switch turns the radio on or off. Beside it, **N saved** opens
+      Saved networks, and the arrow scans again.
+    - Opening it scans.
     - The connection: signal, frequency, speed, addresses, gateway, DNS,
       interface and hardware address, and **Disconnect**. iwd reports no
       addresses.
     - The other networks, strongest first, marked saved and secured. A click
       joins a saved or open network. A new secured one asks for its
       passphrase.
+    - **Saved networks** is a page of every saved network, in range or
+      not, radio on or off: the connected one, then those in range, then the
+      rest by when they were last used. Each shows its security, a **Join
+      automatically** switch and **Forget**.
     - A refusal shows under what was asked.
     - Wi-Fi is read only while the panel is open.
   - Details can be selected. Addresses, gateways, DNS servers, interface
@@ -324,7 +333,10 @@ button, and their controls in one panel, each labeled in words.
   - A muted device's or stream's row is gray.
   - Names wrap instead of truncating. `Select` lists stay over the panel.
   - A PipeWire filter's own stream (e.g. laptop speaker correction) isn't
-    listed under Apps.
+    listed under Apps. The hardware behind the filter isn't offered as a
+    device unless it is in use.
+  - A filter shows as muted when the hardware behind it is; unmuting it
+    unmutes both.
 - Sliders stop at 100%. A device set higher elsewhere shows its value.
 - Level meters run only while the mixer is open, for the devices it shows.
   They show -60 to 0 dB.
@@ -405,6 +417,15 @@ export const Shell = runManganese({
   one (app id `google-messages`). Don't also use the
   [Google Messages](#google-messages) item: Messages runs one web session at
   a time.
+- **Email links**: an inbox with a `write` writes email. While one does,
+  manganese claims `mailto:` links ([Links](../../../docs/WRITING-A-SHELL.md#links)):
+  from pages, apps, `domicile open` and the Email portal. A link asks which
+  address to write from, in a dialog listing every such inbox's addresses
+  (`MailPicker`), the one picked last first; with one address it writes at
+  once. `gmailInbox` writes from the account and its Gmail aliases ("Send mail
+  as"), in the account's window: from the account, with Gmail's new message
+  form open over the inbox; from an alias, which that form can't be told,
+  by saving the message as a draft from the alias and opening the draft.
 - Not on the lock screen, as the drawer is not.
 
 ## Sharing
@@ -424,6 +445,16 @@ export const Shell = runManganese({
 - While the bar has this item, the portal dialogs' indicator leaves screen
   casts out, so each shows once. Without it, the indicator lists them.
 - See [PORTALS.md](../../../docs/PORTALS.md).
+
+## Agents
+
+- Shown while an agent, such as Claude Code, is in control: one violet pill
+  for every session, named as the agent names itself, or "Agents" when the
+  sessions are different agents. With several sessions it shows a count.
+- Hovering one session's pill says what it can reach.
+- Click says what each session can see and use and what it did last, with
+  **Change** and **Stop** buttons, and **Stop all** when there are several.
+- See [AGENTS.md](../../../docs/AGENTS.md).
 
 ## Keep awake
 
@@ -485,10 +516,12 @@ one account's inbox, read with the Gmail API. Not in `DEFAULT_BAR`.
   locked. Counts are conversations, as Gmail's inbox counts them.
 - How it reads:
   - `client` is a Google Cloud OAuth client of the Desktop app type, with the
-    Gmail API on and the `gmail.metadata` scope: labels and message headers,
-    never bodies. Publish its consent screen: one in Testing expires sign-ins
-    after 7 days. A refresh token granted without that scope signs the
-    account out, to sign in again.
+    Gmail API on and the `gmail.metadata`, `gmail.settings.basic` and
+    `gmail.compose` scopes: labels and message headers, never bodies; the
+    addresses the account sends from; and drafts, for email written from an
+    alias. Publish its consent screen: one in Testing expires sign-ins after
+    7 days. A refresh token granted without those scopes signs the account
+    out, to sign in again.
   - Sign-in is Google's desktop flow. Consent redirects the window to a
     loopback address nothing listens on; the item reads the code from the
     window's address, closes it, and trades the code for a refresh token.
@@ -539,6 +572,33 @@ extension with an action. See
 - **Drag to reorder.** The order is saved in `localStorage` (`tray-order:v1`)
   and shared by every screen. Extensions are keyed by id, apps by title. New
   icons go last, apps first.
+- **The menu of every icon**, under a caret at the row's end. It lists every
+  app and every installed extension, on or off.
+  - **Pins.** Each icon's pin puts it in the row or keeps it out. New icons
+    arrive pinned. Dragging an icon onto the caret unpins it. Unpinned keys
+    are saved in `localStorage` (`tray-unpinned:v1`) and shared by every
+    screen. A switched-off extension has no pin.
+  - **Rows** click as their icon does. An unpinned extension's popup opens
+    from the row's icon, shown while the popup is open. Right-clicking an
+    app's name opens its own menu.
+  - **The tray's actions** are the same profile's, so an extension on only in
+    another profile, such as a password manager kept to a work profile, shows
+    once a page of that profile is focused, and its popup opens there.
+  - **Extensions in <profile>** are the last focused browser page's
+    profile's ([BROWSER-PROFILES.md](/docs/architecture/BROWSER-PROFILES.md)):
+    the tray shows the actions of those switched on there, and each **Switch**
+    turns one on or off in that profile. One the config switches there is
+    locked. Focusing an app keeps the last page's profile; before any page,
+    it is the default profile's.
+  - **⋯** holds an extension's options page (in a browser window), what
+    websites it can read, local files and user scripts,
+    each where it can use them, and Uninstall…, which asks first. "On sites
+    you choose…" opens Settings. A setting the config sets is grayed with a
+    lock, saying "Set in your config"; an extension the config installed has
+    no Uninstall.
+  - A dot on the caret says an unpinned extension has a badge.
+  - A change the engine refuses is said at the top, with its words on hover.
+  - The footer opens Settings.
 - **App icons**: click sends `Activate`, middle-click `SecondaryActivate`.
   - Right-click opens the app's dbusmenu under the icon: submenus, check
     boxes and radio items; disabled entries are grayed and hidden ones left

@@ -42,17 +42,25 @@ struct Told {
   // giving it.
   bool hold_open = false;
   WindowOpened held_open;
+  // Set to hold `media_devices`'s and `set_media_device`'s answers, as until
+  // the devices are listed, in `held_devices` and `held_device` instead of
+  // giving them.
+  bool hold_devices = false;
+  MediaDevicesFound held_devices;
+  CommandDone held_device;
   // The last reply, which a held command gives after Answer returns.
   std::string reply;
   bool asked = false;
   base::FilePath root;
   std::string module;
+  std::optional<ShellFiles> files;
   bool ran = false;
   base::FilePath app_root;
   std::string app_module;
   bool opened = false;
   std::string url;
   std::optional<AppLaunch> app;
+  std::string profile;
   bool set = false;
   std::string origin;
   std::optional<WebViewPermission> permission;
@@ -63,6 +71,9 @@ struct Told {
   std::string device;
   std::string toggled;
   std::optional<bool> enabled;
+  std::string toggled_in;
+  std::string pinned_site;
+  std::string pinned_to;
   std::string configured;
   std::optional<ExtensionSettings> settings;
   std::optional<HistorySearch> search;
@@ -73,6 +84,11 @@ struct Told {
   std::string cleared_host;
   // Whether the recording `disable_while_typing` has the pads rest.
   bool typing_rests = true;
+  std::string devtools_window;
+  std::string devtools_method;
+  std::optional<base::DictValue> devtools_params;
+  std::optional<int> min_log_level;
+  std::string vmodule;
 };
 
 // The id the recording `load_unpacked` gives what it loads, and the one the
@@ -92,7 +108,7 @@ SitePermissionList StoredSettings() {
 }
 
 // What the recording `extensions` answers: one extension with an options page,
-// allowed in private windows and on one site, and one switched off without,
+// allowed on local files and on one site, and one switched off without,
 // which has no settings to change.
 std::vector<InstalledExtension> InstalledExtensions() {
   InstalledExtension dark;
@@ -101,11 +117,12 @@ std::vector<InstalledExtension> InstalledExtensions() {
   dark.description = "Dark mode for every site";
   dark.version = "4.9";
   dark.enabled = true;
-  dark.settings.in_private = true;
+  dark.settings.file_access = true;
   dark.settings.site_access = SiteAccess::kSpecificSites;
   dark.settings.sites = {"github.com"};
   dark.options_url =
       GURL("chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html");
+  dark.icon_path = "/extensions/dark/icons/128.png";
   InstalledExtension quiet;
   quiet.id = "ponmlkjihgfedcbaponmlkjihgfedcba";
   quiet.name = "Quiet";
@@ -153,10 +170,11 @@ std::string Answer(std::string_view line,
                    bool has_window = true) {
   auto load_shell = [told, has_window](const base::FilePath& root,
                                        const std::string& module,
-                                       ShellLoaded loaded) {
+                                       ShellFiles files, ShellLoaded loaded) {
     told->asked = true;
     told->root = root;
     told->module = module;
+    told->files = files;
     if (told->hold_load) {
       told->held_load = std::move(loaded);
       return;
@@ -181,15 +199,21 @@ std::string Answer(std::string_view line,
   };
   auto open_url = [told, has_window](const GURL& url,
                                      std::optional<AppLaunch> app,
+                                     const std::string& profile,
                                      WindowOpened opened) {
     told->opened = true;
     told->url = url.spec();
     told->app = app;
+    told->profile = profile;
     if (told->hold_open) {
       told->held_open = std::move(opened);
       return;
     }
     std::move(opened).Run(has_window);
+  };
+  // The desk's profiles are `default` and `work`.
+  auto has_browser_profile = [](const std::string& id) {
+    return id == "default" || id == "work";
   };
   auto list_site_permissions =
       [has_window]() -> std::optional<SitePermissionList> {
@@ -241,10 +265,12 @@ std::string Answer(std::string_view line,
     return InstalledExtensions();
   };
   auto set_extension_enabled =
-      [told, has_window](const std::string& id,
-                         bool enabled) -> base::expected<void, std::string> {
+      [told, has_window](const std::string& id, bool enabled,
+                         const std::string& profile)
+      -> base::expected<void, std::string> {
     told->toggled = id;
     told->enabled = enabled;
+    told->toggled_in = profile;
     if (!has_window) {
       return base::unexpected("no shell");
     }
@@ -261,22 +287,60 @@ std::string Answer(std::string_view line,
     }
     return base::ok();
   };
-  auto list_media_devices = [has_window]() -> std::optional<MediaDeviceList> {
+  auto list_browser_profiles = [has_window](BrowserProfilesFound found) {
     if (!has_window) {
-      return std::nullopt;
+      std::move(found).Run(std::nullopt);
+      return;
     }
-    return ConnectedDevices();
+    BrowserProfileList list;
+    list.default_profile = "personal";
+    list.default_private_profile = "private";
+    ListedBrowserProfile& work = list.profiles.emplace_back();
+    work.id = "work";
+    work.name = "Work";
+    work.color = "#d97706";
+    work.extensions.push_back(
+        {.id = kExtensionId, .enabled = true, .locked = true});
+    list.sites.push_back(
+        {.site = "github.com/acme", .profile = "work", .pinned = true});
+    std::move(found).Run(std::move(list));
   };
-  auto set_media_device =
-      [told, has_window](
-          MediaDeviceKind kind,
-          const std::string& id) -> base::expected<void, std::string> {
-    told->device_kind = kind;
-    told->device = id;
+  auto pin_browser_site =
+      [told, has_window](const std::string& site,
+                         const std::string& profile)
+      -> base::expected<void, std::string> {
+    told->pinned_site = site;
+    told->pinned_to = profile;
     if (!has_window) {
       return base::unexpected("no shell");
     }
     return base::ok();
+  };
+  auto list_media_devices = [told, has_window](MediaDevicesFound found) {
+    if (told->hold_devices) {
+      told->held_devices = std::move(found);
+      return;
+    }
+    if (!has_window) {
+      std::move(found).Run(std::nullopt);
+      return;
+    }
+    std::move(found).Run(ConnectedDevices());
+  };
+  auto set_media_device = [told, has_window](MediaDeviceKind kind,
+                                             const std::string& id,
+                                             CommandDone done) {
+    told->device_kind = kind;
+    told->device = id;
+    if (told->hold_devices) {
+      told->held_device = std::move(done);
+      return;
+    }
+    if (!has_window) {
+      std::move(done).Run(base::unexpected("no shell"));
+      return;
+    }
+    std::move(done).Run(base::ok());
   };
   auto search_history = [told, has_window](const HistorySearch& search,
                                            HistoryFound found) {
@@ -342,11 +406,32 @@ std::string Answer(std::string_view line,
     }
     return told->typing_rests;
   };
+  // Answers with the method it was sent, so a test can see it went through.
+  auto send_devtools = [told, has_window](const std::string& window,
+                                          const std::string& method,
+                                          base::DictValue params,
+                                          DevToolsAnswered answered) {
+    told->devtools_window = window;
+    told->devtools_method = method;
+    told->devtools_params = std::move(params);
+    if (!has_window) {
+      std::move(answered).Run(base::unexpected("no browser window " + window));
+      return;
+    }
+    base::DictValue result;
+    result.Set("sent", method);
+    std::move(answered).Run(base::ok(std::move(result)));
+  };
+  auto set_log_levels = [told](int min_level, const std::string& vmodule) {
+    told->min_log_level = min_level;
+    told->vmodule = vmodule;
+  };
   told->reply.clear();
   AnswerCommand(line,
                 {.load_shell = load_shell,
                  .run_app = run_app,
                  .open_url = open_url,
+                 .has_browser_profile = has_browser_profile,
                  .list_site_permissions = list_site_permissions,
                  .set_site_permission = set_site_permission,
                  .load_unpacked = load_unpacked,
@@ -355,6 +440,8 @@ std::string Answer(std::string_view line,
                  .list_extensions = list_extensions,
                  .set_extension_enabled = set_extension_enabled,
                  .configure_extension = configure_extension,
+                 .list_browser_profiles = list_browser_profiles,
+                 .pin_browser_site = pin_browser_site,
                  .list_media_devices = list_media_devices,
                  .set_media_device = set_media_device,
                  .search_history = search_history,
@@ -363,7 +450,9 @@ std::string Answer(std::string_view line,
                  .clear_browsing_data = clear_browsing_data,
                  .list_site_data = list_site_data,
                  .clear_site_data = clear_site_data,
-                 .disable_while_typing = disable_while_typing},
+                 .disable_while_typing = disable_while_typing,
+                 .send_devtools = send_devtools,
+                 .set_log_levels = set_log_levels},
                 base::BindOnce([](std::string* out,
                                   std::string line) { *out = std::move(line); },
                                &told->reply));
@@ -405,8 +494,37 @@ TEST(CommandProtocolTest, LoadsTheShellARequestNames) {
   EXPECT_TRUE(told.asked);
   EXPECT_EQ(told.root, base::FilePath("/home/someone/desktop/dist"));
   EXPECT_EQ(told.module, "desktop.js");
+  EXPECT_EQ(told.files, ShellFiles::kDirectory);
   // The reply is one line and includes its newline.
   EXPECT_EQ(reply.find('\n'), reply.size() - 1);
+}
+
+// `domicile dev`: the root is the dev server's socket.
+TEST(CommandProtocolTest, LoadsAShellFromTheDevServerARequestNames) {
+  Told told;
+  const std::string reply = Answer(
+      R"({"type":"load_shell","version":1,"root":"/run/user/1000/dev.sock",)"
+      R"("module":"@domicile/shell.js","dev_server":true})",
+      &told);
+
+  EXPECT_EQ(TypeOf(reply), "loaded");
+  EXPECT_EQ(told.root, base::FilePath("/run/user/1000/dev.sock"));
+  EXPECT_EQ(told.module, "@domicile/shell.js");
+  EXPECT_EQ(told.files, ShellFiles::kDevServer);
+}
+
+TEST(CommandProtocolTest, RefusesADevServerThatIsNotABoolean) {
+  // Read as false, it would serve the socket as a directory: a blank shell
+  // with no reason given.
+  Told told;
+  const std::string reply = Answer(
+      R"({"type":"load_shell","version":1,"root":"/run/user/1000/dev.sock",)"
+      R"("module":"@domicile/shell.js","dev_server":"yes"})",
+      &told);
+
+  EXPECT_EQ(TypeOf(reply), "refused");
+  EXPECT_THAT(WhyOf(reply), HasSubstr("dev_server"));
+  EXPECT_FALSE(told.asked);
 }
 
 // An app module, opened by `domicile run-app`. See
@@ -586,6 +704,61 @@ TEST(CommandProtocolTest, HandsTheShellTheAddressARequestNames) {
   EXPECT_EQ(told.url, "https://example.com/a?b=c");
   EXPECT_EQ(told.app, std::nullopt);
   EXPECT_FALSE(told.asked);
+}
+
+TEST(CommandProtocolTest, OpensABrowserWindowInTheProfileARequestNames) {
+  Told told;
+  const std::string reply = Answer(
+      R"({"type":"open_url","version":1,"url":"https://example.com/",)"
+      R"("profile":"work"})",
+      &told);
+  EXPECT_EQ(TypeOf(reply), "opened");
+  EXPECT_EQ(told.profile, "work");
+
+  // None is the profile the site opens in, which the action works out.
+  Answer(R"({"type":"open_url","version":1,"url":"https://example.com/"})",
+         &told);
+  EXPECT_EQ(told.profile, "");
+}
+
+TEST(CommandProtocolTest, RefusesAProfileTheDeskDoesNotHave) {
+  // Opening it in another profile would put the page among the wrong
+  // sign-ins without a word.
+  Told told;
+  const std::string reply = Answer(
+      R"({"type":"open_url","version":1,"url":"https://example.com/",)"
+      R"("profile":"wrok"})",
+      &told);
+  EXPECT_EQ(TypeOf(reply), "refused");
+  EXPECT_THAT(WhyOf(reply), HasSubstr("\"wrok\""));
+  EXPECT_FALSE(told.opened);
+}
+
+TEST(CommandProtocolTest, RefusesAProfileThatIsNoId) {
+  for (const char* profile : {R"("")", "7", "null"}) {
+    Told told;
+    const std::string reply =
+        Answer(base::StrCat({R"({"type":"open_url","version":1,)",
+                             R"("url":"https://example.com/","profile":)",
+                             profile, "}"}),
+               &told);
+    EXPECT_EQ(TypeOf(reply), "refused") << profile;
+    EXPECT_THAT(WhyOf(reply), HasSubstr("\"profile\"")) << profile;
+    EXPECT_FALSE(told.opened) << profile;
+  }
+}
+
+TEST(CommandProtocolTest, OpensAnAppWindowInTheProfileARequestNames) {
+  // Two accounts of one site, such as two Gmail inboxes, open in their own
+  // profiles though their site routes to one.
+  Told told;
+  const std::string reply = Answer(
+      R"({"type":"open_url","version":1,"url":"https://example.com/",)"
+      R"("app":true,"app_id":"mail","profile":"work"})",
+      &told);
+  EXPECT_EQ(TypeOf(reply), "opened");
+  EXPECT_EQ(told.app, (AppLaunch{.id = "mail"}));
+  EXPECT_EQ(told.profile, "work");
 }
 
 TEST(CommandProtocolTest, OpensAnAppWindowWhenARequestAsksForOne) {
@@ -802,6 +975,29 @@ TEST(CommandProtocolTest, ListsEachKindsMediaDevicesInTheOrderGiven) {
                 base::JSON_PARSE_RFC));
 }
 
+TEST(CommandProtocolTest, AnswersMediaDevicesOnceTheyAreListed) {
+  // Nothing lists devices before the first ask, so the first answer waits for
+  // the list rather than giving an empty one.
+  Told told;
+  told.hold_devices = true;
+  EXPECT_EQ(Answer(R"({"type":"media_devices","version":1})", &told), "");
+
+  std::move(told.held_devices).Run(ConnectedDevices());
+  EXPECT_EQ(TypeOf(told.reply), "media_devices");
+}
+
+TEST(CommandProtocolTest, PrefersAMediaDeviceOnceTheyAreListed) {
+  Told told;
+  told.hold_devices = true;
+  EXPECT_EQ(Answer(R"({"type":"set_media_device","version":1,)"
+                   R"("kind":"camera","id":"/dev/video2"})",
+                   &told),
+            "");
+
+  std::move(told.held_device).Run(base::ok());
+  EXPECT_EQ(TypeOf(told.reply), "set");
+}
+
 TEST(CommandProtocolTest, PrefersTheMediaDeviceARequestNames) {
   Told told;
   const std::string reply = Answer(
@@ -938,9 +1134,10 @@ TEST(CommandProtocolTest, ListsTheProfilesExtensions) {
           R"({"id":"abcdefghijklmnopabcdefghijklmnop","name":"Dark Reader",)"
           R"("description":"Dark mode for every site","version":"4.9",)"
           R"("enabled":true,)"
-          R"("settings":{"private":true,"site_access":["github.com"]},)"
+          R"("settings":{"file_access":true,"site_access":["github.com"]},)"
           R"("options_url":)"
-          R"("chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html"},)"
+          R"("chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html",)"
+          R"("icon_path":"/extensions/dark/icons/128.png"},)"
           R"({"id":"ponmlkjihgfedcbaponmlkjihgfedcba","name":"Quiet",)"
           R"("description":"","version":"1.0","enabled":false,)"
           R"("settings":{}}]})",
@@ -961,6 +1158,59 @@ TEST(CommandProtocolTest, SwitchesAnExtensionOnOrOff) {
   EXPECT_EQ(told.enabled, false);
 }
 
+// The Settings app's Profiles page.
+TEST(CommandProtocolTest, SwitchesAnExtensionInTheProfileARequestNames) {
+  Told told;
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"set_extension_enabled","version":1,)"
+                          R"("id":"abcdefghijklmnopabcdefghijklmnop",)"
+                          R"("enabled":true,"profile":"work"})",
+                          &told)),
+            "set");
+  EXPECT_EQ(told.toggled_in, "work");
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"set_extension_enabled","version":1,)"
+                          R"("id":"abcdefghijklmnopabcdefghijklmnop",)"
+                          R"("enabled":true,"profile":3})",
+                          &told)),
+            "refused");
+}
+
+TEST(CommandProtocolTest, ListsTheDesksBrowserProfiles) {
+  Told told;
+  EXPECT_EQ(
+      base::JSONReader::ReadDict(
+          Answer(R"({"type":"browser_profiles","version":1})", &told),
+          base::JSON_PARSE_RFC),
+      base::JSONReader::ReadDict(
+          R"({"type":"browser_profiles","default_profile":"personal",)"
+          R"("default_private_profile":"private",)"
+          R"("profiles":[{"id":"work","name":"Work","color":"#d97706",)"
+          R"("private":false,"extensions":[)"
+          R"({"id":"abcdefghijklmnopabcdefghijklmnop","enabled":true,)"
+          R"("locked":true}]}],)"
+          R"("sites":[{"site":"github.com/acme","profile":"work",)"
+          R"("pinned":true}]})",
+          base::JSON_PARSE_RFC));
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"browser_profiles","version":1})", &told,
+                          /*has_window=*/false)),
+            "refused");
+}
+
+TEST(CommandProtocolTest, PinsASiteToTheProfileARequestNames) {
+  Told told;
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"pin_browser_site","version":1,)"
+                          R"("site":"github.com/acme","profile":"work"})",
+                          &told)),
+            "set");
+  EXPECT_EQ(told.pinned_site, "github.com/acme");
+  EXPECT_EQ(told.pinned_to, "work");
+  Told missing;
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"pin_browser_site","version":1,)"
+                          R"("site":"github.com/acme"})",
+                          &missing)),
+            "refused");
+  EXPECT_EQ(missing.pinned_site, "");
+}
+
 TEST(CommandProtocolTest, RefusesASwitchWithoutAnIdAndAnEnabled) {
   Told told;
   EXPECT_EQ(TypeOf(Answer(R"({"type":"set_extension_enabled","version":1,)"
@@ -978,20 +1228,28 @@ TEST(CommandProtocolTest, ConfiguresAnExtension) {
   Told told;
   EXPECT_EQ(TypeOf(Answer(R"({"type":"configure_extension","version":1,)"
                           R"("id":"abcdefghijklmnopabcdefghijklmnop",)"
-                          R"("settings":{"private":true,)"
+                          R"("settings":{"file_access":true,)"
                           R"("site_access":"on_click"}})",
                           &told)),
             "set");
   EXPECT_EQ(told.configured, kExtensionId);
   ExtensionSettings wanted;
-  wanted.in_private = true;
+  wanted.file_access = true;
   wanted.site_access = SiteAccess::kOnClick;
   EXPECT_EQ(told.settings, wanted);
   EXPECT_EQ(TypeOf(Answer(R"({"type":"configure_extension","version":1,)"
                           R"("id":"abcdefghijklmnopabcdefghijklmnop",)"
-                          R"("settings":{"private":false}})",
+                          R"("settings":{"file_access":false}})",
                           &told, /*has_window=*/false)),
             "refused");
+  // A private browser profile's switches say what runs in private windows.
+  Told in_private;
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"configure_extension","version":1,)"
+                          R"("id":"abcdefghijklmnopabcdefghijklmnop",)"
+                          R"("settings":{"private":true}})",
+                          &in_private)),
+            "refused");
+  EXPECT_FALSE(in_private.settings.has_value());
 }
 
 TEST(CommandProtocolTest, RefusesAConfigurationItCannotRead) {
@@ -1045,6 +1303,46 @@ TEST(CommandProtocolTest, RefusesDisableWhileTypingItCannotSet) {
   EXPECT_EQ(WhyOf(Answer(R"({"type":"disable_while_typing","version":1})",
                          &told, /*has_window=*/false)),
             "no touchpad");
+}
+
+// `domicile set-log-level`. The supervisor turns subsystems into `vmodule`
+// patterns; see domicile-launch's engine_log_levels.rs.
+TEST(CommandProtocolTest, SetsTheLogLevels) {
+  Told told;
+  EXPECT_EQ(TypeOf(Answer(
+                R"({"type":"set_log_levels","version":1,"min_level":0,)"
+                R"("vmodule":"*/domicile/*=2"})",
+                &told)),
+            "set");
+  EXPECT_EQ(told.min_log_level, 0);
+  EXPECT_EQ(told.vmodule, "*/domicile/*=2");
+}
+
+TEST(CommandProtocolTest, SetsVerboseForTheShellsConsoleDebug) {
+  // A shell's console.debug is VERBOSE, which `domicile set-log-level debug
+  // shell` asks for.
+  Told told;
+  EXPECT_EQ(TypeOf(Answer(
+                R"({"type":"set_log_levels","version":1,"min_level":-1,)"
+                R"("vmodule":""})",
+                &told)),
+            "set");
+  EXPECT_EQ(told.min_log_level, -1);
+}
+
+TEST(CommandProtocolTest, RefusesALogLevelChromiumHasNot) {
+  // -1 is VERBOSE, a shell's console.debug, and 3 is FATAL. Below -1 is a
+  // VLOG level, which `vmodule` sets per file instead of turning on all of
+  // Chromium's.
+  Told told;
+  for (const char* line :
+       {R"({"type":"set_log_levels","version":1,"min_level":-2,"vmodule":""})",
+        R"({"type":"set_log_levels","version":1,"min_level":4,"vmodule":""})",
+        R"({"type":"set_log_levels","version":1,"vmodule":""})",
+        R"({"type":"set_log_levels","version":1,"min_level":2})"}) {
+    EXPECT_EQ(TypeOf(Answer(line, &told)), "refused") << line;
+  }
+  EXPECT_EQ(told.min_log_level, std::nullopt);
 }
 
 // The History app, which these replace `chrome.history` and
@@ -1252,6 +1550,100 @@ TEST(CommandProtocolTest, ClearsTheSiteDataOfTheHostARequestNames) {
     EXPECT_THAT(WhyOf(no_host), HasSubstr("\"host\""));
   }
   EXPECT_TRUE(told.cleared_host.empty());
+}
+
+TEST(CommandProtocolTest, SendsADevToolsMethodToABrowserWindow) {
+  Told told;
+  const std::string reply = Answer(
+      R"({"type":"devtools","version":1,"window":"w1",)"
+      R"("method":"DOM.getBoxModel","params":{"backendNodeId":7}})",
+      &told);
+  EXPECT_EQ(base::JSONReader::ReadDict(reply, base::JSON_PARSE_RFC),
+            base::JSONReader::ReadDict(
+                R"({"type":"devtools","result":{"sent":"DOM.getBoxModel"}})",
+                base::JSON_PARSE_RFC));
+  EXPECT_EQ(told.devtools_window, "w1");
+  EXPECT_EQ(told.devtools_method, "DOM.getBoxModel");
+  EXPECT_EQ(told.devtools_params,
+            base::JSONReader::ReadDict(R"({"backendNodeId":7})",
+                                       base::JSON_PARSE_RFC));
+}
+
+TEST(CommandProtocolTest, SendsADevToolsMethodWithoutParamsAsAnEmptyObject) {
+  Told told;
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"devtools","version":1,"window":"w1",)"
+                          R"("method":"Accessibility.getFullAXTree"})",
+                          &told)),
+            "devtools");
+  EXPECT_EQ(told.devtools_params, base::DictValue());
+}
+
+TEST(CommandProtocolTest, PassesOnWhyABrowserWindowCouldNotAnswer) {
+  Told told;
+  const std::string refused =
+      Answer(R"({"type":"devtools","version":1,"window":"w9",)"
+             R"("method":"Page.reload"})",
+             &told, /*has_window=*/false);
+  EXPECT_EQ(TypeOf(refused), "refused");
+  EXPECT_THAT(WhyOf(refused), HasSubstr("no browser window w9"));
+}
+
+// An agent drives pages, but reads no cookies and runs no script of its own.
+TEST(CommandProtocolTest, RefusesADevToolsMethodAgentsDoNotGet) {
+  Told told;
+  for (const char* method :
+       {"Runtime.evaluate", "Network.getCookies", "Storage.getCookies",
+        "Target.createTarget", "Browser.close", "page.reload"}) {
+    const std::string refused =
+        Answer(base::StrCat({R"({"type":"devtools","version":1,)",
+                             R"("window":"w1","method":")",
+                             method, R"("})"}),
+               &told);
+    EXPECT_EQ(TypeOf(refused), "refused") << method;
+    EXPECT_THAT(WhyOf(refused), HasSubstr(method));
+    EXPECT_THAT(WhyOf(refused), HasSubstr("Accessibility.getFullAXTree"));
+  }
+  EXPECT_TRUE(told.devtools_method.empty());
+}
+
+TEST(CommandProtocolTest, NavigatesABrowserWindowOnlyToTheWeb) {
+  Told told;
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"devtools","version":1,"window":"w1",)"
+                          R"("method":"Page.navigate",)"
+                          R"("params":{"url":"https://example.com/"}})",
+                          &told)),
+            "devtools");
+
+  told.devtools_method.clear();
+  for (const char* url :
+       {"file:///etc/passwd", "javascript:alert(1)", "chrome://settings",
+        "not a url"}) {
+    const std::string refused =
+        Answer(base::StrCat({R"({"type":"devtools","version":1,)",
+                             R"("window":"w1","method":"Page.navigate",)",
+                             R"("params":{"url":")", url, R"("}})"}),
+               &told);
+    EXPECT_EQ(TypeOf(refused), "refused") << url;
+    EXPECT_THAT(WhyOf(refused), HasSubstr("http"));
+  }
+  EXPECT_EQ(TypeOf(Answer(R"({"type":"devtools","version":1,"window":"w1",)"
+                          R"("method":"Page.navigate","params":{}})",
+                          &told)),
+            "refused");
+  EXPECT_TRUE(told.devtools_method.empty());
+}
+
+TEST(CommandProtocolTest, RefusesADevToolsRequestMissingAField) {
+  Told told;
+  for (const char* line :
+       {R"({"type":"devtools","version":1,"method":"Page.reload"})",
+        R"({"type":"devtools","version":1,"window":"","method":"Page.reload"})",
+        R"({"type":"devtools","version":1,"window":"w1"})",
+        R"({"type":"devtools","version":1,"window":"w1",)"
+        R"("method":"Page.reload","params":[1]})"}) {
+    EXPECT_EQ(TypeOf(Answer(line, &told)), "refused") << line;
+  }
+  EXPECT_TRUE(told.devtools_method.empty());
 }
 
 }  // namespace

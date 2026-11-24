@@ -43,7 +43,7 @@ index 4ef103f..c11d72f 100644
      if (window_manager_) {
        window_manager_->set_desk_host(host);
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 81a8eb5..6fda68e 100644
+index 22403df..bc8edc3 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -123,6 +123,15 @@ struct DomicileVirtualDisplay {
@@ -62,7 +62,7 @@ index 81a8eb5..6fda68e 100644
  // Base class for Ozone platform implementations.
  //
  // Ozone platforms must override this class and implement the virtual
-@@ -433,6 +442,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -420,6 +429,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // like the layout above.
    virtual void SetDomicileVirtualDisplays(
        std::vector<DomicileVirtualDisplay> displays) {}

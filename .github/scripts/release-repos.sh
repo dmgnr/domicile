@@ -33,8 +33,11 @@ export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_A
 export AWS_DEFAULT_REGION=auto
 BUCKET="s3://$DOMICILE_R2_BUCKET"
 
+# `nix/` holds the Nix cache (`nix-cache-push.sh`): too big to bring down, and
+# not this script's to delete.
 sync() { # from, to, flags...
-  aws s3 sync "$1" "$2" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" "${@:3}"
+  aws s3 sync "$1" "$2" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \
+    --exclude 'nix/*' "${@:3}"
 }
 
 mkdir -p "$REPO"

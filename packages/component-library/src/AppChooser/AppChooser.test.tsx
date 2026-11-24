@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { fakeDesktop } from "@domicile-desktop/system-apps/fake-desktop";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { AppChooser } from "./AppChooser";
@@ -127,6 +127,34 @@ describe("AppChooser", () => {
       ).not.toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Close" }));
       expect(await answer).toBeUndefined();
+    });
+  });
+
+  it("animates out when closed, then says so", async () => {
+    const props = {
+      choices: ["editor"],
+      contentType: undefined,
+      domicile: desktop(),
+      onCancel: () => undefined,
+      onChoose: () => undefined,
+      opened: "this link",
+      screen: undefined,
+    };
+    const { rerender } = render(<AppChooser {...props} />);
+    const closed = new Promise<boolean>((resolve) => {
+      rerender(
+        <AppChooser {...props} onOpenChangeComplete={resolve} open={false} />,
+      );
+    });
+
+    expect(screen.getByRole("dialog", { hidden: true })).toHaveAttribute(
+      "data-closed",
+    );
+    expect(await closed).toBe(false);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { hidden: true }),
+      ).not.toBeInTheDocument();
     });
   });
 });

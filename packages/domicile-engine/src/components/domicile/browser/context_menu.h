@@ -4,6 +4,7 @@
 #ifndef COMPONENTS_DOMICILE_BROWSER_CONTEXT_MENU_H_
 #define COMPONENTS_DOMICILE_BROWSER_CONTEXT_MENU_H_
 
+#include "components/domicile/browser/electron_protocol.h"
 #include "components/domicile/mojom/web_view_guest.mojom.h"
 
 namespace content {
@@ -32,6 +33,17 @@ mojom::WebViewContextMenuPtr AsWebViewContextMenu(
 // not offered is a bad message.
 bool Offers(const content::ContextMenuParams& params,
             mojom::WebViewContextMenuAction action);
+
+// Whether a menu over `params` is over a misspelled word, which
+// WebViewGuest::ReplaceMisspelling replaces. As Offers, the element checks
+// first.
+bool OffersSpellingFixes(const content::ContextMenuParams& params);
+
+// `params` as an Electron app's webContents hears it in `context-menu`, with
+// the click at `in_page`.
+ElectronContextMenu AsElectronContextMenu(
+    const content::ContextMenuParams& params,
+    const gfx::Point& in_page);
 
 }  // namespace domicile
 

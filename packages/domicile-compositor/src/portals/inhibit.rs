@@ -72,7 +72,7 @@ impl Inhibitors {
     fn tell(&self, held: &[(OwnedObjectPath, String)]) {
         match self.hold_idle.get() {
             Some(hold) => hold(held.iter().map(|(_, app)| app.clone()).collect()),
-            None => warn!("an idle inhibitor reached a desk not listening for one"),
+            None => tracing::error!("an idle inhibitor reached a desk not listening for one"),
         }
     }
 }

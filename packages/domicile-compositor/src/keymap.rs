@@ -50,6 +50,19 @@ impl Keyboard {
     pub fn compiled(config: &Keymap) -> Result<Keyboard, UnknownLayout> {
         compiled(config).map(|keymap| Keyboard { keymap })
     }
+
+    /// The keyboard `XKB_KEYMAP_FORMAT_TEXT_V1` text describes, as
+    /// [`compiled_keymap`] writes it. `None` for text xkb cannot read.
+    pub fn from_text(text: &str) -> Option<Keyboard> {
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        xkb::Keymap::new_from_string(
+            &context,
+            text.to_string(),
+            xkb::KEYMAP_FORMAT_TEXT_V1,
+            xkb::COMPILE_NO_FLAGS,
+        )
+        .map(|keymap| Keyboard { keymap })
+    }
 }
 
 impl Keyboard {
@@ -74,6 +87,23 @@ impl Keyboard {
             }
         }
         keys
+    }
+}
+
+impl Keyboard {
+    /// Whether typing the keysym named `name` takes Shift on the key
+    /// [`Keyboard::keys`] maps it to. `None` when that key has it on neither
+    /// of its first two levels, or no key has it.
+    pub fn shifted(&self, name: &str) -> Option<bool> {
+        let key = xkb::Keycode::new(self.keys().get(name)? + 8);
+        let keysym = xkb::keysym_from_name(name, xkb::KEYSYM_NO_FLAGS);
+        (0..self.keymap.num_levels_for_key(key, 0).min(2))
+            .find(|level| {
+                self.keymap
+                    .key_get_syms_by_level(key, 0, *level)
+                    .contains(&keysym)
+            })
+            .map(|level| level == 1)
     }
 }
 
@@ -239,6 +269,17 @@ mod tests {
         // block.
         assert_eq!(key_for(&Keymap::default(), "parenleft"), Some(KEY_9));
         assert_eq!(key_for(&Keymap::default(), "less"), Some(KEY_COMMA));
+    }
+
+    #[test]
+    fn a_keysym_on_its_keys_second_level_types_with_shift() {
+        let us = Keyboard::from_text(&compiled_keymap(&Keymap::default()).unwrap()).unwrap();
+        assert_eq!(us.shifted("a"), Some(false));
+        assert_eq!(us.shifted("A"), Some(true));
+        assert_eq!(us.shifted("exclam"), Some(true));
+        let dvp = Keyboard::compiled(&dvorak()).unwrap();
+        assert_eq!(dvp.shifted("parenleft"), Some(false));
+        assert_eq!(dvp.shifted("Greek_alpha"), None);
     }
 
     #[test]

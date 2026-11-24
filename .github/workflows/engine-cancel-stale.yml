@@ -10,6 +10,10 @@ name: Cancel a pull request's stale queued engine runs
 #   same-repository pull requests, a run in "Build" or "The engine's checks".
 #   A stale run that already holds the machine is ended by engine.yml's "Take
 #   the compile slot" step.
+# - A started run is left alone when the new head changes nothing under
+#   engine.yml's `paths:`, such as the docs media bot's retake commit: it builds
+#   the same engine, and canceling it would restart a cold compile hours in.
+#   crux-still-head.sh decides.
 #
 # Canceling a build is safe: lld and clang write through a temp file and
 # rename, the next run resumes from the series stamp and out/Release, and

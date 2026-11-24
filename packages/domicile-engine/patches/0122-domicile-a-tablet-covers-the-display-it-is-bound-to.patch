@@ -31,7 +31,7 @@ job builds it on `crux`.
  4 files changed, 48 insertions(+), 4 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index a34023a..dc3d666 100644
+index 175b384..fe060d5 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -136,6 +136,8 @@ source_set("gbm") {
@@ -43,7 +43,7 @@ index a34023a..dc3d666 100644
      "domicile/drm_clipboard.cc",
      "domicile/drm_clipboard.h",
      "domicile/drm_screen.cc",
-@@ -273,6 +275,7 @@ source_set("gbm_unittests") {
+@@ -275,6 +277,7 @@ source_set("gbm_unittests") {
      "domicile/drm_master_unittest.cc",
      "domicile/drm_modeset_unittest.cc",
      "domicile/drm_pointer_crossing_unittest.cc",
@@ -133,7 +133,7 @@ index 572e759..13a228e 100644
    // that event source for as long as it lives. And after modeset_, which it
    // asks to light the screens again when the console comes back.
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 15330b0..2340115 100644
+index 96a3e2a..6752829 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -96,6 +96,16 @@ struct DomicileDisplayLayout {
@@ -153,7 +153,7 @@ index 15330b0..2340115 100644
  // Base class for Ozone platform implementations.
  //
  // Ozone platforms must override this class and implement the virtual
-@@ -396,6 +406,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -383,6 +393,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // (docs/architecture/ONE-PAGE-FOR-THE-DESK.md). `gfx::kNullAcceleratedWidget`
    // gives each window its own events again. DRM only, like the layout above.
    virtual void SetDomicileDeskHost(gfx::AcceleratedWidget host) {}

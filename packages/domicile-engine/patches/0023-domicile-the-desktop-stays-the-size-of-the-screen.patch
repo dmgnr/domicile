@@ -65,7 +65,7 @@ Either alone compiles and does nothing.
  4 files changed, 76 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/ui/views/exclusive_access/BUILD.gn b/chrome/browser/ui/views/exclusive_access/BUILD.gn
-index 01b229b..98fc81e 100644
+index 885091f..0573c2d 100644
 --- a/chrome/browser/ui/views/exclusive_access/BUILD.gn
 +++ b/chrome/browser/ui/views/exclusive_access/BUILD.gn
 @@ -40,6 +40,12 @@ source_set("impl") {
@@ -82,7 +82,7 @@ index 01b229b..98fc81e 100644
  
  source_set("browser_tests") {
 diff --git a/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc b/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc
-index a9d1150..11ac91f 100644
+index 12ffc33..c9f67ee 100644
 --- a/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc
 +++ b/chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.cc
 @@ -44,6 +44,10 @@
@@ -123,7 +123,7 @@ index a9d1150..11ac91f 100644
  // Returns whether `type` indicates a tab-initiated fullscreen mode.
  bool IsTabFullscreenType(ExclusiveAccessBubbleType type) {
    return type == EXCLUSIVE_ACCESS_BUBBLE_TYPE_FULLSCREEN_EXIT_INSTRUCTION ||
-@@ -480,7 +504,18 @@ void ExclusiveAccessBubbleViews::Show() {
+@@ -486,7 +510,18 @@ void ExclusiveAccessBubbleViews::Show() {
    // relying on visible exit instructions. Arming the watchdog would make it
    // always fire and spuriously exit fullscreen (e.g. reverting the
    // --start-fullscreen switch shortly after startup).
@@ -169,10 +169,10 @@ index a3f50bc..9be70ef 100644
      window_manager_ = std::make_unique<DrmWindowHostManager>();
      cursor_ = std::make_unique<DrmCursor>(window_manager_.get());
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 3618214..be85fec 100644
+index ca01b87..7a4094c 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
-@@ -232,6 +232,26 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -219,6 +219,26 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
      // ui::kStatusIconWmRoleName) are supported.
      bool supports_system_tray_windowing = false;
  

@@ -44,7 +44,7 @@ job builds it on `crux`.
  16 files changed, 100 insertions(+)
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index d1d1569..ede8d67 100644
+index 5f3e0ed..9cbe676 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -54,6 +54,8 @@ component("evdev") {
@@ -95,10 +95,10 @@ index 9f7bcc9..347de4d 100644
    virtual std::vector<uint64_t> GetKeyboardKeyBits() const;
  
 diff --git a/ui/events/ozone/evdev/event_converter_evdev_impl.cc b/ui/events/ozone/evdev/event_converter_evdev_impl.cc
-index 65c319e..83eac8e 100644
+index 0777984..d62118b 100644
 --- a/ui/events/ozone/evdev/event_converter_evdev_impl.cc
 +++ b/ui/events/ozone/evdev/event_converter_evdev_impl.cc
-@@ -18,6 +18,7 @@
+@@ -19,6 +19,7 @@
  #include "ui/events/event_utils.h"
  #include "ui/events/keycodes/dom/keycode_converter.h"
  #include "ui/events/ozone/evdev/device_event_dispatcher_evdev.h"
@@ -129,10 +129,10 @@ index 65c319e..83eac8e 100644
    if (!cursor_ || (x_offset_ == 0 && y_offset_ == 0))
      return;
 diff --git a/ui/events/ozone/evdev/event_converter_evdev_impl.h b/ui/events/ozone/evdev/event_converter_evdev_impl.h
-index 227c1d4..c127733 100644
+index bb340f0..8ef7952 100644
 --- a/ui/events/ozone/evdev/event_converter_evdev_impl.h
 +++ b/ui/events/ozone/evdev/event_converter_evdev_impl.h
-@@ -93,6 +93,9 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
+@@ -94,6 +94,9 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
    void SetReceivedValidInputCallback(
        ReceivedValidInputCallback callback) override;
  
@@ -142,7 +142,7 @@ index 227c1d4..c127733 100644
    // Input device file descriptor.
    const base::ScopedFD input_device_fd_;
  
-@@ -147,6 +150,9 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
+@@ -148,6 +151,9 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
    // Callback to update keyboard devices when valid input is received.
    ReceivedValidInputCallback received_valid_input_callback_;
  
@@ -330,10 +330,10 @@ index 3122771..d5b140d 100644
  
  }  // namespace ui
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 369d0a9..1b21cc9 100644
+index 99b8846..af8699b 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -288,6 +288,7 @@ source_set("gbm_unittests") {
+@@ -290,6 +290,7 @@ source_set("gbm_unittests") {
      # console is the one platform whose touchpad goes through libinput.
      "//ui/events/ozone/evdev/domicile/absolute_mouse_event_converter_evdev_unittest.cc",
      "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
@@ -365,10 +365,10 @@ index a4d8847..f3898d5 100644
      return drm_device_connector_.get();
    }
 diff --git a/ui/ozone/public/ozone_platform.cc b/ui/ozone/public/ozone_platform.cc
-index 3515f7c..cb5cab3 100644
+index 0007ba2..eabb873 100644
 --- a/ui/ozone/public/ozone_platform.cc
 +++ b/ui/ozone/public/ozone_platform.cc
-@@ -140,6 +140,10 @@ base::flat_map<int64_t, std::string> OzonePlatform::GetDomicileConnectors()
+@@ -136,6 +136,10 @@ base::flat_map<int64_t, std::string> OzonePlatform::GetDomicileConnectors()
    return {};
  }
  
@@ -380,7 +380,7 @@ index 3515f7c..cb5cab3 100644
    return nullptr;
  }
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 2340115..7bd8506 100644
+index 6752829..96066e6 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -8,6 +8,7 @@
@@ -391,7 +391,7 @@ index 2340115..7bd8506 100644
  #include <string>
  #include <vector>
  
-@@ -442,6 +443,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -429,6 +430,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // names a monitor with no EDID name after it. Empty on every platform but
    // DRM, which alone has connectors.
    virtual base::flat_map<int64_t, std::string> GetDomicileConnectors() const;

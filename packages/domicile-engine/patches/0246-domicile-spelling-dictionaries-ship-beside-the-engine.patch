@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: spelling dictionaries ship beside the engine
+
+Chrome checks spelling with Hunspell dictionaries it downloads from Google
+into the profile the first time a language is used. A desk's engine is
+packaged, and its pages should not reach Google to check a word.
+
+- DIR_APP_DICTIONARIES is `dictionaries/` beside the engine, which the
+  build fills from //third_party/hunspell_dictionaries (the
+  `domicile_dictionaries` target in //chrome/browser/domicile) and the
+  release tarball carries.
+- A dictionary missing there is never downloaded: the engine logs it, and
+  that language goes unchecked.
+
+Which languages, and whether to check at all, is the config's `spellcheck`:
+see chrome/browser/domicile/domicile_spellcheck.h. Guarded by
+`guard-webview-spellcheck.sh`, whose misspelling only gets suggestions
+when the dictionary loaded.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../spellcheck_hunspell_dictionary.cc         | 22 +++++++------------
+ chrome/common/chrome_paths.cc                 | 10 +++++----
+ 2 files changed, 14 insertions(+), 18 deletions(-)
+
+diff --git a/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc b/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
+index db88601..f614d27 100644
+--- a/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
++++ b/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
+@@ -15,6 +15,7 @@
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/observer_list.h"
+@@ -412,21 +413,14 @@ void SpellcheckHunspellDictionary::InitializeDictionaryLocationComplete(
+   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
+   dictionary_file_ = std::move(file);
+ 
++  // Domicile's engine fork: the dictionaries ship beside the engine
++  // (chrome_paths.cc), so one is never downloaded from Google. A language
++  // missing there is the engine's packaging bug, and says so.
+   if (!dictionary_file_.file.IsValid()) {
+-    // Notify browser tests that this dictionary is corrupted. Skip downloading
+-    // the dictionary in browser tests.
+-    // TODO(rouslan): Remove this test-only case.
+-    if (spellcheck_service_->SignalStatusEvent(
+-          SpellcheckService::BDICT_CORRUPTED)) {
+-      browser_context_ = nullptr;
+-    }
+-
+-    if (browser_context_) {
+-      // Download from the UI thread to check that |browser_context_| is
+-      // still valid.
+-      DownloadDictionary(GetDictionaryURL());
+-      return;
+-    }
++    LOG(ERROR) << "domicile: the engine has no spelling dictionary for "
++               << language_ << " at " << dictionary_file_.path
++               << ", so spelling in it is not checked.";
++    InformListenersOfDownloadFailure();
+   }
+ 
+   InformListenersOfInitialization();
+diff --git a/chrome/common/chrome_paths.cc b/chrome/common/chrome_paths.cc
+index b2e5bf2..a1225f2 100644
+--- a/chrome/common/chrome_paths.cc
++++ b/chrome/common/chrome_paths.cc
+@@ -275,20 +275,22 @@ bool PathProvider(int key, base::FilePath* result) {
+       break;
+     case chrome::DIR_APP_DICTIONARIES:
+ #if !BUILDFLAG(IS_WIN)
+-      // On most platforms, we can't write into the directory where
+-      // binaries are stored, so keep dictionaries in the user data dir.
+-      if (!base::PathService::Get(chrome::DIR_USER_DATA, &cur)) {
++      // Domicile's engine fork: the Hunspell dictionaries ship beside the
++      // engine, read-only, and are never downloaded. See
++      // chrome/browser/domicile/domicile_spellcheck.h.
++      if (!base::PathService::Get(base::DIR_MODULE, &cur)) {
+         return false;
+       }
++      cur = cur.Append(FILE_PATH_LITERAL("dictionaries"));
+ #else
+       // TODO(crbug.com/40840089): Migrate Windows to use `DIR_USER_DATA` like
+       // other platforms.
+       if (!base::PathService::Get(base::DIR_EXE, &cur)) {
+         return false;
+       }
+-#endif
+       cur = cur.Append(FILE_PATH_LITERAL("Dictionaries"));
+       create_dir = true;
++#endif
+       break;
+     case chrome::DIR_COMPONENTS:
+       if (!GetComponentDirectory(&cur)) {

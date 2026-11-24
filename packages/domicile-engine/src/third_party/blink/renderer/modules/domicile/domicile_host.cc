@@ -13,9 +13,12 @@
 #include "base/check.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size.h"
 #include "components/domicile/common/cursor_shape.h"
 #include "components/domicile/common/display_transform.h"
 #include "components/domicile/common/theme.h"
@@ -24,6 +27,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_cursor_shape.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension_settings.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_download_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_fetch_header.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_fetch_response.h"
@@ -46,12 +50,15 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_app_event.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_clipboard_entry.h"
+#include "third_party/blink/renderer/modules/domicile/domicile_browser_profile.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_browser_window.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_cast_sink.h"
+#include "third_party/blink/renderer/modules/domicile/domicile_picture_in_picture_video.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_display.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_download.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_extension.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_extension_popup_event.h"
+#include "third_party/blink/renderer/modules/domicile/domicile_installed_extension.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_notification.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_notification_action.h"
 #include "third_party/blink/renderer/modules/domicile/domicile_gesture_event.h"
@@ -100,6 +107,8 @@ constexpr char kFocusReleaseRequested[] = "domicile-focus-release-requested";
 constexpr char kPresented[] = "domicile-presented";
 constexpr char kSuspended[] = "domicile-suspended";
 constexpr char kResumed[] = "domicile-resumed";
+// A key press reached the window, as `<webview>` also dispatches for its guest.
+constexpr char kKeyDelivered[] = "domicile-key-delivered";
 
 // Something happened on the page: a key went down or up, a press, a blur.
 class PageHeard final : public NativeEventListener {
@@ -266,6 +275,8 @@ DomicileHost::DomicileHost(LocalDOMWindow& window)
       cast_receiver_(this, &window),
       downloads_remote_(&window),
       downloads_receiver_(this, &window),
+      picture_in_picture_(&window),
+      picture_in_picture_receiver_(this, &window),
       shell_fetch_(&window) {}
 
 DomicileHost::~DomicileHost() = default;
@@ -320,6 +331,13 @@ bool DomicileHost::EnsureBound() {
       downloads_remote_.BindNewPipeAndPassReceiver(task_runner));
   downloads_remote_->SetClient(
       downloads_receiver_.BindNewPipeAndPassRemote(task_runner));
+
+  // The videos in picture-in-picture, bound eagerly too: a page puts one there
+  // unasked, and only the shell draws it. See picture_in_picture.mojom.
+  window_->GetBrowserInterfaceBroker().GetInterface(
+      picture_in_picture_.BindNewPipeAndPassReceiver(task_runner));
+  picture_in_picture_->SetClient(
+      picture_in_picture_receiver_.BindNewPipeAndPassRemote(task_runner));
   return true;
 }
 
@@ -390,6 +408,11 @@ const FrozenArray<DomicileNotification>* DomicileHost::notifications() const {
 
 const FrozenArray<DomicileExtension>* DomicileHost::extensions() const {
   return extensions_.Get();
+}
+
+const FrozenArray<DomicileInstalledExtension>*
+DomicileHost::installedExtensions() const {
+  return installed_extensions_.Get();
 }
 
 std::optional<bool> DomicileHost::idle() const {
@@ -647,6 +670,16 @@ void DomicileHost::copyClipboardEntry(ScriptState*,
   }
 }
 
+// An id, for copyClipboardEntry's reason: a page can forget a copy but cannot
+// name one that was never made.
+void DomicileHost::removeClipboardEntry(ScriptState*,
+                                        uint32_t entry,
+                                        ExceptionState& exception_state) {
+  if (Ready(exception_state)) {
+    channel_->RemoveClipboardEntry(entry);
+  }
+}
+
 void DomicileHost::focusChrome(ScriptState*, ExceptionState& exception_state) {
   if (Ready(exception_state)) {
     FocusChromeKeyboard();
@@ -685,7 +718,7 @@ void DomicileHost::warpPointer(ScriptState*,
     return;
   }
   if (Ready(exception_state)) {
-    warped_to_ = gfx::PointF(x, y);
+    warp_landing_.Warped(gfx::PointF(x, y));
     channel_->WarpPointer(
         x, y,
         unless_over == nullptr
@@ -711,6 +744,43 @@ void DomicileHost::pointerConstrained(ScriptState*,
   if (ReadyForApp(app_id, exception_state)) {
     channel_->PointerConstrained(app_id, active);
   }
+}
+
+namespace {
+
+void SettleConfinement(ScriptPromiseResolver<IDLBoolean>* resolver,
+                       bool confined) {
+  resolver->Resolve(confined);
+}
+
+}  // namespace
+
+ScriptPromise<IDLBoolean> DomicileHost::confinePointer(
+    ScriptState* script_state,
+    const HeapVector<Member<DOMRectReadOnly>>& boxes,
+    ExceptionState& exception_state) {
+  // Refused here for `warpPointer`'s reason: a box with a NaN edge holds no
+  // point, and the mistake is the page's.
+  Vector<gfx::RectF> held;
+  for (const DOMRectReadOnly* box : boxes) {
+    if (!std::isfinite(box->x()) || !std::isfinite(box->y()) ||
+        !std::isfinite(box->width()) || !std::isfinite(box->height())) {
+      exception_state.ThrowTypeError("confinePointer: boxes must be finite");
+      return EmptyPromise();
+    }
+    held.push_back(gfx::RectF(box->left(), box->top(),
+                              box->right() - box->left(),
+                              box->bottom() - box->top()));
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  channel_->ConfinePointer(
+      held, BindOnce(&SettleConfinement, WrapPersistent(resolver)));
+  return promise;
 }
 
 void DomicileHost::setAppBounds(ScriptState*, const String& app_id, double x,
@@ -842,6 +912,7 @@ void DomicileHost::themeCaptured(ScriptState*, V8DomicileTheme theme,
 void DomicileHost::grabShortcut(ScriptState*,
                                 const String& written,
                                 bool while_inhibited,
+                                uint32_t longest_tap,
                                 ExceptionState& exception_state) {
   if (const auto modifier = ParseDomicileTap(written)) {
     if (!Ready(exception_state)) {
@@ -853,12 +924,14 @@ void DomicileHost::grabShortcut(ScriptState*,
         found = &grabbed;
       }
     }
+    const base::TimeDelta longest = base::Milliseconds(longest_tap);
     if (found) {
       ++found->holds;
       found->while_inhibited |= while_inhibited;
+      found->longest = std::max(found->longest, longest);
     } else {
-      taps_.push_back(
-          GrabbedTap{written, *modifier, /*holds=*/1, while_inhibited});
+      taps_.push_back(GrabbedTap{written, *modifier, /*holds=*/1,
+                                 while_inhibited, longest});
     }
     RegrabTap(*modifier);
     return;
@@ -1056,16 +1129,19 @@ void DomicileHost::TellWhetherTheKeyboardWindowInhibits() {
 void DomicileHost::RegrabTap(domicile::mojom::blink::TapModifier modifier) {
   bool grabbed = false;
   bool while_inhibited = false;
+  base::TimeDelta longest;
   for (const GrabbedTap& tap : taps_) {
     if (tap.modifier == modifier) {
       grabbed = true;
       while_inhibited |= tap.while_inhibited;
+      longest = std::max(longest, tap.longest);
     }
   }
   if (grabbed) {
     // Sent again on each grab: the browser process keeps the latest
-    // `while_inhibited`, which an ungrab of another name can take away.
-    channel_->GrabModifierTap(modifier, while_inhibited);
+    // `while_inhibited` and `longest`, which an ungrab of another name can
+    // take away. `ModifierTapped` holds each name to its own `longest`.
+    channel_->GrabModifierTap(modifier, while_inhibited, longest);
   } else {
     channel_->UngrabModifierTap(modifier);
   }
@@ -1174,6 +1250,133 @@ void DomicileHost::activateExtension(ScriptState*,
   }
 }
 
+// Over the tray's pipe, as activateExtension().
+void DomicileHost::setExtensionsProfile(ScriptState*,
+                                        const String& profile,
+                                        ExceptionState& exception_state) {
+  if (profile.empty()) {
+    exception_state.ThrowTypeError("profile must be a browser profile's id");
+    return;
+  }
+  if (Ready(exception_state)) {
+    tray_->SetProfile(profile);
+  }
+}
+
+namespace {
+
+// The browser's answer to a change asked of an extension: empty for done, or
+// why not.
+void ExtensionAnswered(ScriptPromiseResolver<IDLUndefined>* resolver,
+                       const String& error) {
+  if (!error.empty()) {
+    resolver->RejectWithDOMException(DOMExceptionCode::kOperationError, error);
+    return;
+  }
+  resolver->Resolve();
+}
+
+// The site access configureExtension() names, as DomicileInstalledExtension
+// spells it, or nothing for a name that is none.
+std::optional<domicile::mojom::blink::SiteAccess> SiteAccessNamed(
+    const String& name) {
+  if (name == "on_click") {
+    return domicile::mojom::blink::SiteAccess::kOnClick;
+  }
+  if (name == "specific_sites") {
+    return domicile::mojom::blink::SiteAccess::kSpecificSites;
+  }
+  if (name == "all_sites") {
+    return domicile::mojom::blink::SiteAccess::kAllSites;
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+ScriptPromise<IDLUndefined> DomicileHost::setExtensionEnabled(
+    ScriptState* script_state,
+    const String& id,
+    bool enabled,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a non-empty extension id");
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  tray_->SetEnabled(id, enabled,
+                    BindOnce(&ExtensionAnswered, WrapPersistent(resolver)));
+  return promise;
+}
+
+ScriptPromise<IDLUndefined> DomicileHost::configureExtension(
+    ScriptState* script_state,
+    const String& id,
+    const DomicileExtensionSettings* settings,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a non-empty extension id");
+    return EmptyPromise();
+  }
+  auto wanted = domicile::mojom::blink::ExtensionSettings::New();
+  if (settings->hasFileAccess()) {
+    wanted->file_access = settings->fileAccess();
+  }
+  if (settings->hasUserScripts()) {
+    wanted->user_scripts = settings->userScripts();
+  }
+  if (settings->hasSiteAccess()) {
+    wanted->site_access = SiteAccessNamed(settings->siteAccess());
+    if (!wanted->site_access.has_value()) {
+      exception_state.ThrowTypeError(
+          "siteAccess must be \"on_click\", \"specific_sites\" or "
+          "\"all_sites\"");
+      return EmptyPromise();
+    }
+  }
+  if (settings->hasSites()) {
+    if (wanted->site_access !=
+        domicile::mojom::blink::SiteAccess::kSpecificSites) {
+      exception_state.ThrowTypeError(
+          "sites are only for siteAccess \"specific_sites\"");
+      return EmptyPromise();
+    }
+    wanted->sites = settings->sites();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  tray_->Configure(id, std::move(wanted),
+                   BindOnce(&ExtensionAnswered, WrapPersistent(resolver)));
+  return promise;
+}
+
+ScriptPromise<IDLUndefined> DomicileHost::uninstallExtension(
+    ScriptState* script_state,
+    const String& id,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a non-empty extension id");
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  tray_->Uninstall(id, BindOnce(&ExtensionAnswered, WrapPersistent(resolver)));
+  return promise;
+}
+
 // A document going away has nobody waiting to hear it.
 void DomicileHost::ReportShellRan(const String& serial) {
   if (EnsureBound()) {
@@ -1260,26 +1463,34 @@ void DomicileHost::AppPointerMotion(const String& app_id,
   }
 }
 
-// A WARP MOVES THE POINTER TOO, AND NOBODY MOVED IT. The browser reports a
-// warp as a move (synthesized, which Blink does not see), and Blink measures
-// its `movementX/Y` from where the pointer was, so it would reach a game as a
-// flick of the mouse. The move that lands where the page last warped is taken
-// as the warp. A warp the browser skipped or clamped leaves its target
-// waiting, which costs at most one later move that lands exactly there.
-void DomicileHost::AppPointerRelative(const String& app_id,
-                                      const gfx::Vector2dF& movement,
-                                      const gfx::PointF& on_page,
-                                      const gfx::SizeF& size) {
-  if (warped_to_ && std::abs(warped_to_->x() - on_page.x()) < 1 &&
-      std::abs(warped_to_->y() - on_page.y()) < 1) {
-    warped_to_.reset();
+// A WARP MOVES THE POINTER TOO, AND NOBODY MOVED IT, so the move that lands
+// it reaches no client. See `domicile::WarpLanding`, which has the tests.
+void DomicileHost::AppPointerRelative(
+    const String& app_id,
+    const gfx::Vector2dF& movement,
+    const std::optional<gfx::Vector2dF>& unaccelerated,
+    const gfx::PointF& on_page,
+    const gfx::SizeF& size) {
+  if (warp_landing_.Landed(on_page)) {
     return;
   }
   // Scaled as a point is, from the element's CSS pixels into the client's.
   const gfx::PointF scaled = IntoClient(
       app_id, gfx::PointF(movement.x(), movement.y()), size);
+  // The device's own motion is in physical pixels, as the accelerated motion
+  // was before it became the page's CSS pixels, so it takes the same density.
+  // A device that said none moved as far as the page saw.
+  const double density = window_ ? window_->devicePixelRatio() : 0;
+  const gfx::PointF scaled_unaccel =
+      unaccelerated && density > 0
+          ? IntoClient(app_id,
+                       gfx::PointF(unaccelerated->x() / density,
+                                   unaccelerated->y() / density),
+                       size)
+          : scaled;
   if (EnsureBound()) {
-    channel_->PointerRelative(app_id, scaled.x(), scaled.y());
+    channel_->PointerRelative(app_id, scaled.x(), scaled.y(),
+                              scaled_unaccel.x(), scaled_unaccel.y());
   }
 }
 
@@ -1431,6 +1642,16 @@ void DomicileHost::ForwardKeyDown(Event* event) {
   if (app_id.IsNull()) {
     return;
   }
+  // A locked desk's keys are the page's: its lock screen is the only thing to
+  // type into, and the compositor drops a key sent for a client. Taken from
+  // the page, the passphrase would reach nothing. The window should not have
+  // the keyboard at all while locked, so say so.
+  if (locked_.value_or(false)) {
+    // `String` quotes itself when streamed.
+    LOG(ERROR) << "domicile: the desk is locked but window " << app_id
+               << " has the keyboard; the key stays on the page";
+    return;
+  }
   event->preventDefault();
   // The browser repeats a held key; Wayland does not. A client repeats from
   // `wl_keyboard.repeat_info` itself, so forwarding these as presses would
@@ -1441,6 +1662,14 @@ void DomicileHost::ForwardKeyDown(Event* event) {
   forwarded_keys_.Forward(keycode, app_id);
   if (EnsureBound()) {
     channel_->Key(app_id, keycode, true);
+  }
+  // Names no key, so typed text stays the client's. `KeyboardTarget` dropped a
+  // window whose <app> left the page, so the element is there.
+  if (!ui::KeycodeConverter::IsDomKeyForModifier(
+          ui::KeycodeConverter::KeyStringToDomKey(key->key().Utf8()))) {
+    HTMLAppElement* app = AppElement(app_id);
+    CHECK(app);
+    app->DispatchEvent(*Event::CreateBubble(AtomicString(kKeyDelivered)));
   }
 }
 
@@ -1755,14 +1984,17 @@ void DomicileHost::AppPresented(const String& app_id) {
 
 void DomicileHost::AppPointerConstraint(
     const String& app_id,
-    std::optional<domicile::mojom::blink::PointerConstraint> constraint) {
+    std::optional<domicile::mojom::blink::PointerConstraint> constraint,
+    const std::optional<Vector<gfx::RectF>>& region) {
   String named;
   if (constraint) {
     named = *constraint == domicile::mojom::blink::PointerConstraint::kLock
                 ? "lock"
                 : "confine";
   }
-  WindowNamed(app_id).pointer_constraint = named;
+  DomicileWindowState& window = WindowNamed(app_id);
+  window.pointer_constraint = named;
+  window.pointer_region = region;
   WindowsChanged();
 }
 
@@ -1809,7 +2041,8 @@ void DomicileHost::GesturePerformed(
 }
 
 void DomicileHost::ModifierTapped(
-    domicile::mojom::blink::TapModifier modifier) {
+    domicile::mojom::blink::TapModifier modifier,
+    base::TimeDelta held) {
   using domicile::mojom::blink::TapModifier;
   // A tap is over when it is heard: the key is already up. So `shortcut` and
   // `shortcutrelease` together, for each name it is grabbed by, with no key
@@ -1820,7 +2053,7 @@ void DomicileHost::ModifierTapped(
   const bool meta = modifier == TapModifier::kMeta;
   Vector<String> names;
   for (const GrabbedTap& tap : taps_) {
-    if (tap.modifier == modifier) {
+    if (tap.modifier == modifier && held <= tap.longest) {
       names.push_back(tap.written);
     }
   }
@@ -1871,7 +2104,8 @@ void DomicileHost::Displays(
     described.push_back(MakeGarbageCollected<DomicileDisplay>(
         display->name, display->x, display->y, display->width, display->height,
         display->scale, display->mode_width, display->mode_height,
-        display->refresh_mhz, display->adaptive_sync,
+        display->refresh_mhz, display->adaptive_sync, display->hdr,
+        display->peak_luminance, display->sdr_white,
         TransformName(display->transform)));
   }
   displays_ = MakeGarbageCollected<FrozenArray<DomicileDisplay>>(
@@ -1894,17 +2128,35 @@ void DomicileHost::ExtensionsChanged(
         extension->id, extension->name, extension->title, extension->icon,
         extension->badge_text, extension->badge_color,
         extension->popup.empty() ? String() : extension->popup,
-        extension->enabled));
+        extension->enabled, extension->profile));
   }
   extensions_ =
       MakeGarbageCollected<FrozenArray<DomicileExtension>>(std::move(tray));
   DispatchEvent(*Event::Create(domicile_event_names::Extensionschanged()));
 }
 
+// Every installed extension, wholesale, as `extensions` is.
+void DomicileHost::InstalledChanged(
+    Vector<domicile::mojom::blink::InstalledExtensionPtr> extensions) {
+  HeapVector<Member<DomicileInstalledExtension>> installed;
+  installed.reserve(extensions.size());
+  for (const auto& extension : extensions) {
+    installed.push_back(
+        MakeGarbageCollected<DomicileInstalledExtension>(*extension));
+  }
+  installed_extensions_ =
+      MakeGarbageCollected<FrozenArray<DomicileInstalledExtension>>(
+          std::move(installed));
+  DispatchEvent(
+      *Event::Create(domicile_event_names::Installedextensionschanged()));
+}
+
 // Dispatched, not held: see onextensionpopuprequested in the IDL.
-void DomicileHost::PopupRequested(const String& id, const String& popup) {
+void DomicileHost::PopupRequested(const String& id,
+                                  const String& popup,
+                                  const String& profile) {
   DispatchEvent(*MakeGarbageCollected<DomicileExtensionPopupEvent>(
-      domicile_event_names::Extensionpopuprequested(), id, popup));
+      domicile_event_names::Extensionpopuprequested(), id, popup, profile));
 }
 
 // An answer to searchFiles(): it settles the promise that asked it.
@@ -1928,7 +2180,8 @@ void DomicileHost::Clipboard(
   history.reserve(entries.size());
   for (const auto& entry : entries) {
     history.push_back(MakeGarbageCollected<DomicileClipboardEntry>(
-        entry->id, entry->image, entry->preview, entry->thumbnail));
+        entry->id, entry->image, entry->preview, entry->thumbnail,
+        entry->current));
   }
   clipboard_ = MakeGarbageCollected<FrozenArray<DomicileClipboardEntry>>(
       std::move(history));
@@ -2081,14 +2334,16 @@ void DomicileHost::FocusRequested(const String& app_id) {
 void DomicileHost::openBrowserWindow(ScriptState*,
                                      const String& url,
                                      const String& partition,
+                                     const String& profile,
                                      ExceptionState& exception_state) {
-  OpenBrowserWindow(url, WindowKind::kBrowser, partition, exception_state);
+  OpenBrowserWindow(url, WindowKind::kBrowser, profile, partition,
+                    exception_state);
 }
 
 void DomicileHost::openPrivateBrowserWindow(ScriptState*,
                                             const String& url,
                                             ExceptionState& exception_state) {
-  OpenBrowserWindow(url, WindowKind::kPrivate, g_empty_string,
+  OpenBrowserWindow(url, WindowKind::kPrivate, g_empty_string, g_empty_string,
                     exception_state);
 }
 
@@ -2122,12 +2377,24 @@ void SettleBrowserWindowCount(ScriptPromiseResolver<IDLLong>* resolver,
   resolver->Resolve(*count);
 }
 
+void SettleBrowserWindowClick(ScriptPromiseResolver<IDLBoolean>* resolver,
+                              std::optional<bool> clicked) {
+  if (!clicked.has_value()) {
+    resolver->RejectWithDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "The browser window is gone, or its page gave no answer.");
+    return;
+  }
+  resolver->Resolve(*clicked);
+}
+
 }  // namespace
 
 void DomicileHost::openAppWindow(ScriptState*,
                                  const String& url,
                                  const String& app_id,
                                  const String& reuse,
+                                 const String& profile,
                                  ExceptionState& exception_state) {
   // Resolved against this document, as openBrowserWindow's is.
   const KURL resolved = window_->CompleteURL(url);
@@ -2149,7 +2416,7 @@ void DomicileHost::openAppWindow(ScriptState*,
     return;
   }
   if (Ready(exception_state)) {
-    windows_->OpenApp(resolved, app_id, *named);
+    windows_->OpenApp(resolved, app_id, *named, profile);
   }
 }
 
@@ -2176,8 +2443,31 @@ ScriptPromise<IDLLong> DomicileHost::countBrowserWindowMatches(
   return promise;
 }
 
+ScriptPromise<IDLBoolean> DomicileHost::clickBrowserWindowMatch(
+    ScriptState* script_state,
+    const String& id,
+    const String& selector,
+    ExceptionState& exception_state) {
+  // Parsed here, as countBrowserWindowMatches parses it.
+  window_->document()->QuerySelector(AtomicString(selector), exception_state);
+  if (exception_state.HadException()) {
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  windows_->ClickMatch(
+      id, selector,
+      BindOnce(&SettleBrowserWindowClick, WrapPersistent(resolver)));
+  return promise;
+}
+
 void DomicileHost::OpenBrowserWindow(const String& url,
                                      WindowKind kind,
+                                     const String& profile,
                                      const String& partition,
                                      ExceptionState& exception_state) {
   // Resolved against this document, as a <webview src> is. An unresolvable
@@ -2199,10 +2489,12 @@ void DomicileHost::OpenBrowserWindow(const String& url,
   if (Ready(exception_state)) {
     switch (kind) {
       case WindowKind::kBrowser:
-        windows_->Open(resolved, /*private_browsing=*/false, partition);
+        windows_->Open(resolved, /*private_browsing=*/false, profile,
+                       partition);
         break;
       case WindowKind::kPrivate:
-        windows_->Open(resolved, /*private_browsing=*/true, partition);
+        windows_->Open(resolved, /*private_browsing=*/true, profile,
+                       partition);
         break;
     }
   }
@@ -2217,6 +2509,204 @@ void DomicileHost::closeBrowserWindow(ScriptState*,
   }
   if (Ready(exception_state)) {
     windows_->Close(id);
+  }
+}
+
+namespace {
+
+// The browser's answer to browserProfileFor().
+void SettleBrowserProfile(ScriptPromiseResolver<IDLString>* resolver,
+                          const String& profile) {
+  resolver->Resolve(profile);
+}
+
+}  // namespace
+
+void DomicileHost::reopenBrowserWindow(ScriptState*,
+                                       const String& id,
+                                       const String& profile,
+                                       ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a browser window's id");
+    return;
+  }
+  if (profile.empty()) {
+    exception_state.ThrowTypeError("profile must be a browser profile's id");
+    return;
+  }
+  if (Ready(exception_state)) {
+    windows_->Reopen(id, profile);
+  }
+}
+
+ScriptPromise<IDLString> DomicileHost::browserProfileFor(
+    ScriptState* script_state,
+    const String& url,
+    ExceptionState& exception_state) {
+  // Resolved against this document, as openBrowserWindow's is.
+  const KURL resolved = window_->CompleteURL(url);
+  if (!resolved.IsValid()) {
+    exception_state.ThrowTypeError("url must be an address");
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  windows_->ProfileFor(
+      resolved, BindOnce(&SettleBrowserProfile, WrapPersistent(resolver)));
+  return promise;
+}
+
+namespace {
+
+// The browser's answer to browserSiteFor(): empty for none.
+void SettleBrowserSite(ScriptPromiseResolver<IDLString>* resolver,
+                       const String& site) {
+  resolver->Resolve(site.IsNull() ? g_empty_string : site);
+}
+
+}  // namespace
+
+ScriptPromise<IDLString> DomicileHost::browserSiteFor(
+    ScriptState* script_state,
+    const String& url,
+    ExceptionState& exception_state) {
+  // Resolved against this document, as browserProfileFor's is.
+  const KURL resolved = window_->CompleteURL(url);
+  if (!resolved.IsValid()) {
+    exception_state.ThrowTypeError("url must be an address");
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  windows_->SiteFor(resolved,
+                    BindOnce(&SettleBrowserSite, WrapPersistent(resolver)));
+  return promise;
+}
+
+ScriptPromise<IDLUndefined> DomicileHost::pinBrowserSite(
+    ScriptState* script_state,
+    const String& site,
+    const String& profile,
+    ExceptionState& exception_state) {
+  if (site.empty()) {
+    exception_state.ThrowTypeError("site must be a site, such as a host");
+    return EmptyPromise();
+  }
+  if (profile.empty()) {
+    exception_state.ThrowTypeError("profile must be a browser profile's id");
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  windows_->PinSite(site, profile,
+                    BindOnce(&ExtensionAnswered, WrapPersistent(resolver)));
+  return promise;
+}
+
+ScriptPromise<IDLUndefined> DomicileHost::setBrowserProfileExtensionEnabled(
+    ScriptState* script_state,
+    const String& profile,
+    const String& id,
+    bool enabled,
+    ExceptionState& exception_state) {
+  if (profile.empty()) {
+    exception_state.ThrowTypeError("profile must be a browser profile's id");
+    return EmptyPromise();
+  }
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a non-empty extension id");
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  windows_->SetExtensionEnabled(
+      profile, id, enabled,
+      BindOnce(&ExtensionAnswered, WrapPersistent(resolver)));
+  return promise;
+}
+
+void DomicileHost::clickBrowserWindowMenu(ScriptState*,
+                                          const String& id,
+                                          int32_t command,
+                                          ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a browser window's id");
+    return;
+  } else if (command < 1) {
+    exception_state.ThrowTypeError(
+        "command must be a menu entry's id, a whole number from 1");
+    return;
+  }
+  if (Ready(exception_state)) {
+    windows_->ClickMenu(id, command);
+  }
+}
+
+void DomicileHost::answerBrowserWindowPopupMenu(
+    ScriptState*,
+    const String& id,
+    int32_t command,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a browser window's id");
+    return;
+  } else if (command < 0) {
+    exception_state.ThrowTypeError(
+        "command must be an entry's id, or 0 for none chosen");
+    return;
+  }
+  if (Ready(exception_state)) {
+    windows_->AnswerPopupMenu(id, command);
+  }
+}
+
+void DomicileHost::setBrowserWindowState(ScriptState*,
+                                         const String& id,
+                                         bool maximized,
+                                         bool minimized,
+                                         bool fullscreen,
+                                         ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a browser window's id");
+    return;
+  }
+  if (Ready(exception_state)) {
+    windows_->SetWindowState(id, maximized, minimized, fullscreen);
+  }
+}
+
+void DomicileHost::answerBrowserWindowMessageBox(
+    ScriptState*,
+    const String& id,
+    int32_t response,
+    bool checkbox_checked,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a browser window's id");
+    return;
+  } else if (response < 0) {
+    exception_state.ThrowTypeError(
+        "response must be a button's index, a whole number from 0");
+    return;
+  }
+  if (Ready(exception_state)) {
+    windows_->AnswerMessageBox(id, response, checkbox_checked);
   }
 }
 
@@ -2299,6 +2789,79 @@ void DomicileHost::clearDownloads(ScriptState*,
 
 namespace {
 
+// A switch rather than a wire name, as for MojoTrayAction.
+domicile::mojom::blink::PictureInPictureAction MojoPictureInPictureAction(
+    V8DomicilePictureInPictureAction action) {
+  switch (action.AsEnum()) {
+    case V8DomicilePictureInPictureAction::Enum::kPlay:
+      return domicile::mojom::blink::PictureInPictureAction::kPlay;
+    case V8DomicilePictureInPictureAction::Enum::kPause:
+      return domicile::mojom::blink::PictureInPictureAction::kPause;
+    case V8DomicilePictureInPictureAction::Enum::kPreviousTrack:
+      return domicile::mojom::blink::PictureInPictureAction::kPreviousTrack;
+    case V8DomicilePictureInPictureAction::Enum::kNextTrack:
+      return domicile::mojom::blink::PictureInPictureAction::kNextTrack;
+    case V8DomicilePictureInPictureAction::Enum::kBackToPage:
+      return domicile::mojom::blink::PictureInPictureAction::kBackToPage;
+    case V8DomicilePictureInPictureAction::Enum::kClose:
+      return domicile::mojom::blink::PictureInPictureAction::kClose;
+  }
+}
+
+}  // namespace
+
+// An empty id throws, as cancelDownload's does: it is a shell that forgot to
+// say which video, rather than one that raced the video's end.
+void DomicileHost::actOnPictureInPictureVideo(
+    ScriptState*,
+    const String& id,
+    V8DomicilePictureInPictureAction action,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a picture-in-picture video's");
+    return;
+  }
+  if (Ready(exception_state)) {
+    picture_in_picture_->Act(id, MojoPictureInPictureAction(action));
+  }
+}
+
+void DomicileHost::seekPictureInPictureVideo(ScriptState*,
+                                             const String& id,
+                                             double seconds,
+                                             ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a picture-in-picture video's");
+    return;
+  }
+  if (seconds < 0) {
+    exception_state.ThrowRangeError("seconds must not be negative");
+    return;
+  }
+  if (Ready(exception_state)) {
+    picture_in_picture_->Seek(id, seconds);
+  }
+}
+
+void DomicileHost::resizePictureInPictureVideo(
+    ScriptState*,
+    const String& id,
+    uint32_t width,
+    uint32_t height,
+    ExceptionState& exception_state) {
+  if (id.empty()) {
+    exception_state.ThrowTypeError("id must be a picture-in-picture video's");
+    return;
+  }
+  if (Ready(exception_state)) {
+    picture_in_picture_->Resize(
+        id, gfx::Size(base::saturated_cast<int>(width),
+                      base::saturated_cast<int>(height)));
+  }
+}
+
+namespace {
+
 // The browser's answer to fetchWithCookies(): a response, or why there is
 // none.
 void Fetched(ScriptPromiseResolver<DomicileFetchResponse>* resolver,
@@ -2326,6 +2889,7 @@ ScriptPromise<DomicileFetchResponse> DomicileHost::fetchWithCookies(
     const HeapVector<Member<DomicileFetchHeader>>& headers,
     const String& body,
     const String& sapisid_hash_origin,
+    const String& profile,
     ExceptionState& exception_state) {
   const KURL resolved = window_->CompleteURL(url);
   if (!resolved.IsValid()) {
@@ -2355,7 +2919,7 @@ ScriptPromise<DomicileFetchResponse> DomicileHost::fetchWithCookies(
   auto promise = resolver->Promise();
   // The browser checks the method and the body: see shell_fetch.h.
   shell_fetch_->Fetch(resolved, method, std::move(sent), body,
-                      sapisid_hash_origin,
+                      sapisid_hash_origin, profile,
                       BindOnce(&Fetched, WrapPersistent(resolver)));
   return promise;
 }
@@ -2386,17 +2950,61 @@ void DomicileHost::ListBrowserWindows() {
     const auto toplevel_id = browser_toplevel_ids_.find(window->id);
     listed.push_back(MakeGarbageCollected<DomicileBrowserWindow>(
         window->id, window->url.GetString(), window->title,
-        window->popup_window == 0 ? std::nullopt
-                                  : std::optional<int32_t>(window->popup_window),
+        window->popup_window == 0
+            ? std::nullopt
+            : std::optional<int32_t>(window->popup_window),
         window->width, window->height, window->private_browsing,
-        window->partition, window->app, window->app_id, window->captured,
+        window->partition,
+        window->profile.empty() ? String() : String(window->profile),
+        window->app, window->app_id, window->captured,
         toplevel_id == browser_toplevel_ids_.end() ? String()
-                                                   : toplevel_id->value));
+                                                   : toplevel_id->value,
+        window->parent.empty() ? String() : String(window->parent), window->x,
+        window->y, window->hidden,
+        window->menu.empty() ? String() : window->menu,
+        window->menu_bar_visible, window->menu_bar_auto_hide,
+        window->message_box.empty() ? String() : window->message_box,
+        window->popup_menu.empty() ? String() : window->popup_menu,
+        window->wants_maximized, window->wants_minimized,
+        window->wants_fullscreen));
   }
   browser_windows_ = MakeGarbageCollected<FrozenArray<DomicileBrowserWindow>>(
       std::move(listed));
   DispatchEvent(
       *Event::Create(domicile_event_names::Browserwindowschanged()));
+}
+
+// Stored, like WindowsChanged.
+void DomicileHost::ProfilesChanged(
+    Vector<domicile::mojom::blink::BrowserProfilePtr> profiles,
+    const String& default_profile,
+    const String& default_private_profile) {
+  HeapVector<Member<DomicileBrowserProfile>> listed;
+  listed.reserve(profiles.size());
+  for (const auto& profile : profiles) {
+    Vector<String> extensions;
+    Vector<String> enabled;
+    Vector<String> locked;
+    for (const auto& extension : profile->extensions) {
+      extensions.push_back(extension->id);
+      if (extension->enabled) {
+        enabled.push_back(extension->id);
+      }
+      if (extension->locked) {
+        locked.push_back(extension->id);
+      }
+    }
+    listed.push_back(MakeGarbageCollected<DomicileBrowserProfile>(
+        profile->id, profile->name, profile->color, profile->private_browsing,
+        profile->id == default_profile,
+        profile->id == default_private_profile, profile->pinned_sites,
+        profile->config_sites, extensions, enabled, locked));
+  }
+  browser_profiles_ =
+      MakeGarbageCollected<FrozenArray<DomicileBrowserProfile>>(
+          std::move(listed));
+  DispatchEvent(
+      *Event::Create(domicile_event_names::Browserprofileschanged()));
 }
 
 // Stored, like WindowsChanged.
@@ -2445,6 +3053,22 @@ void DomicileHost::DownloadsChanged(
   downloads_ =
       MakeGarbageCollected<FrozenArray<DomicileDownload>>(std::move(listed));
   DispatchEvent(*Event::Create(domicile_event_names::Downloadschanged()));
+}
+
+// Stored, like WindowsChanged.
+void DomicileHost::VideosChanged(
+    Vector<domicile::mojom::blink::PictureInPictureVideoPtr> videos) {
+  HeapVector<Member<DomicilePictureInPictureVideo>> listed;
+  listed.reserve(videos.size());
+  for (const auto& video : videos) {
+    listed.push_back(
+        MakeGarbageCollected<DomicilePictureInPictureVideo>(*video));
+  }
+  picture_in_picture_videos_ =
+      MakeGarbageCollected<FrozenArray<DomicilePictureInPictureVideo>>(
+          std::move(listed));
+  DispatchEvent(*Event::Create(
+      domicile_event_names::Pictureinpicturevideoschanged()));
 }
 
 // A standard MessageEvent, so a line the page parses needs no event type of
@@ -2546,8 +3170,10 @@ ExecutionContext* DomicileHost::GetExecutionContext() const {
 void DomicileHost::Trace(Visitor* visitor) const {
   visitor->Trace(displays_);
   visitor->Trace(browser_windows_);
+  visitor->Trace(browser_profiles_);
   visitor->Trace(cast_sinks_);
   visitor->Trace(downloads_);
+  visitor->Trace(picture_in_picture_videos_);
   visitor->Trace(client_windows_);
   visitor->Trace(held_);
   visitor->Trace(file_search_);
@@ -2555,6 +3181,7 @@ void DomicileHost::Trace(Visitor* visitor) const {
   visitor->Trace(tray_items_);
   visitor->Trace(notifications_);
   visitor->Trace(extensions_);
+  visitor->Trace(installed_extensions_);
   visitor->Trace(window_);
   visitor->Trace(channel_);
   visitor->Trace(client_receiver_);
@@ -2571,6 +3198,8 @@ void DomicileHost::Trace(Visitor* visitor) const {
   visitor->Trace(cast_receiver_);
   visitor->Trace(downloads_remote_);
   visitor->Trace(downloads_receiver_);
+  visitor->Trace(picture_in_picture_);
+  visitor->Trace(picture_in_picture_receiver_);
   visitor->Trace(shell_fetch_);
   visitor->Trace(input_listeners_);
   EventTarget::Trace(visitor);

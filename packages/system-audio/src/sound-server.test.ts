@@ -5,7 +5,7 @@ import { Asked } from "./asked";
 import type { Audio, Meter as MeterType } from "./audio";
 import { Meter } from "./audio";
 import { AudioError } from "./audio-error";
-import { INFO, LIST } from "./pactl.fixture";
+import { FILTERED_LIST, INFO, LIST } from "./pactl.fixture";
 import type { Timing } from "./sound-server";
 import { soundServer } from "./sound-server";
 import type { Answer } from "./system.fixture";
@@ -229,6 +229,60 @@ describe("requests", () => {
       Err(AudioError.UnknownId("speakers")),
     );
     expect(system.ran).toStrictEqual([]);
+  });
+
+  it("unmutes a filter and the muted hardware behind it", async () => {
+    const { sound, system } = server((argv) =>
+      argv.at(-1) === "list" ? { stdout: FILTERED_LIST } : pactl(argv),
+    );
+
+    expect(
+      await sound.setMuted("output:audio_effect.laptop-convolver", false),
+    ).toStrictEqual(Ok(Asked.Done));
+    expect(system.ran.map(([argv]) => argv)).toStrictEqual([
+      ["pactl", "--", "set-sink-mute", "audio_effect.laptop-convolver", "0"],
+      ["pactl", "-f", "json", "info"],
+      ["pactl", "-f", "json", "list"],
+      ["pactl", "--", "set-sink-mute", "alsa_output.analog-stereo", "0"],
+    ]);
+  });
+
+  it("keeps a mute asked while an unmute reads the server last", async () => {
+    const { sound, system } = server();
+
+    await Promise.all([
+      sound.setMuted("output:alsa_output.analog-stereo", false),
+      sound.setMuted("output:alsa_output.analog-stereo", true),
+    ]);
+
+    expect(
+      system.ran
+        .map(([argv]) => argv.at(-1))
+        .filter((last) => /^[01]$/.test(last ?? "")),
+    ).toStrictEqual(["0", "1"]);
+  });
+
+  it("mutes only the filter", async () => {
+    const { sound, system } = server();
+
+    await sound.setMuted("output:audio_effect.laptop-convolver", true);
+
+    expect(system.ran.map(([argv]) => argv)).toStrictEqual([
+      ["pactl", "--", "set-sink-mute", "audio_effect.laptop-convolver", "1"],
+    ]);
+  });
+
+  it("unmutes no device the server does not list", async () => {
+    const { sound, system } = server();
+
+    expect(await sound.setMuted("output:gone", false)).toStrictEqual(
+      Err(AudioError.UnknownId("output:gone")),
+    );
+    expect(system.ran.map(([argv]) => argv.at(-1))).toStrictEqual([
+      "0",
+      "info",
+      "list",
+    ]);
   });
 
   it("skips volumes a later volume overtook while it waited", async () => {

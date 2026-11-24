@@ -213,6 +213,49 @@ TEST(ShortcutRegistryTest, LettingGoAlsoReleasesWhatAClosedPageLeft) {
   EXPECT_FALSE(registry.Press(AltTab(), kLeft));
 }
 
+// `domicile load-shell` to another shell: what the old one left over is not
+// the new one's.
+TEST(ShortcutRegistryTest, AnotherShellDropsWhatAClosedPageLeft) {
+  ShortcutRegistry registry;
+  auto old_shell = std::make_unique<RecordingChannel>(registry);
+  registry.Grab(old_shell->id(), AltTab());
+  registry.RemoveChannel(old_shell->id());
+  old_shell.reset();
+
+  registry.ShellChanged();
+
+  EXPECT_FALSE(registry.Press(AltTab(), kLeft));
+}
+
+// The old shell's page is still open when the swap starts. Its claims hold
+// until it closes, then go with it.
+TEST(ShortcutRegistryTest, AnotherShellDropsTheOpenPagesClaimsOnceItCloses) {
+  ShortcutRegistry registry;
+  auto old_shell = std::make_unique<RecordingChannel>(registry);
+  registry.Grab(old_shell->id(), AltTab());
+
+  registry.ShellChanged();
+  EXPECT_TRUE(registry.Press(AltTab(), kLeft));
+
+  registry.RemoveChannel(old_shell->id());
+  old_shell.reset();
+  EXPECT_FALSE(registry.Press(AltTab(), kLeft));
+}
+
+// The new shell's page opened after the change, so its reloads leave claims as
+// before.
+TEST(ShortcutRegistryTest, TheNewShellsPagesStillLeaveTheirClaims) {
+  ShortcutRegistry registry;
+  registry.ShellChanged();
+  auto new_shell = std::make_unique<RecordingChannel>(registry);
+  registry.Grab(new_shell->id(), AltTab());
+
+  registry.RemoveChannel(new_shell->id());
+  new_shell.reset();
+
+  EXPECT_TRUE(registry.Press(AltTab(), kLeft));
+}
+
 // Every key typed into a site would otherwise cross to the shell.
 TEST(ShortcutRegistryTest, AnyOtherKeyComingUpIsNotTold) {
   ShortcutRegistry registry;

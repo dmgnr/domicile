@@ -77,15 +77,17 @@ void DeskModifierTaps::RemoveChannel(ChannelId channel) {
 
 void DeskModifierTaps::Grab(ChannelId channel,
                             TapModifier modifier,
-                            bool while_inhibited) {
+                            bool while_inhibited,
+                            base::TimeDelta longest) {
   base::AutoLock held(lock_);
   auto found = std::ranges::find(channels_, channel, &Channel::id);
   CHECK(found != channels_.end());
   auto grab = std::ranges::find(found->grabs, modifier, &Grabbed::modifier);
   if (grab == found->grabs.end()) {
-    found->grabs.push_back(Grabbed{modifier, while_inhibited});
+    found->grabs.push_back(Grabbed{modifier, while_inhibited, longest});
   } else {
     grab->while_inhibited = while_inhibited;
+    grab->longest = longest;
   }
 }
 
@@ -120,8 +122,9 @@ ui::EventTypeSet DeskModifierTaps::Types() {
 void DeskModifierTaps::Heard(const ui::Event& event) {
   Tapped tell;
   TapModifier tapped = TapModifier::kMeta;
+  base::TimeDelta held;
   {
-    base::AutoLock held(lock_);
+    base::AutoLock locked(lock_);
     if (!event.IsKeyEvent()) {
       pressed_.reset();
       return;
@@ -129,7 +132,7 @@ void DeskModifierTaps::Heard(const ui::Event& event) {
     const ui::KeyEvent& key = *event.AsKeyEvent();
     const std::optional<TapModifier> modifier = TapModifierOf(key.code());
     if (key.type() == ui::EventType::kKeyPressed) {
-      if (key.is_repeat() && pressed_ == key.code()) {
+      if (key.is_repeat() && pressed_ && pressed_->code == key.code()) {
         return;
       }
       // Pressed with no other modifier held. A modifier key's own press
@@ -137,24 +140,25 @@ void DeskModifierTaps::Heard(const ui::Event& event) {
       if (modifier &&
           (key.flags() & kModifierFlags & ~FlagOf(*modifier)) == 0 &&
           !key.is_repeat()) {
-        pressed_ = key.code();
+        pressed_ = Pressed{key.code(), key.time_stamp()};
       } else {
         pressed_.reset();
       }
       return;
     }
     // A release.
-    if (!pressed_ || *pressed_ != key.code()) {
+    if (!pressed_ || pressed_->code != key.code()) {
       // Another key coming up, as from a chord pressed before the modifier,
       // leaves the modifier alone.
       return;
     }
+    held = key.time_stamp() - pressed_->at;
     pressed_.reset();
     tapped = *modifier;
-    tell = Taker(tapped);
+    tell = Taker(tapped, held);
   }
   if (!tell.is_null()) {
-    tell.Run(tapped);
+    tell.Run(tapped, held);
   }
 }
 
@@ -163,10 +167,11 @@ void DeskModifierTaps::Interrupt() {
   pressed_.reset();
 }
 
-DeskModifierTaps::Tapped DeskModifierTaps::Taker(TapModifier modifier) const {
+DeskModifierTaps::Tapped DeskModifierTaps::Taker(TapModifier modifier,
+                                                 base::TimeDelta held) const {
   for (const Channel& channel : channels_) {
     auto grab = std::ranges::find(channel.grabs, modifier, &Grabbed::modifier);
-    if (grab != channel.grabs.end() &&
+    if (grab != channel.grabs.end() && held <= grab->longest &&
         (!channel.inhibited || grab->while_inhibited)) {
       return channel.tapped;
     }

@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 
+import { Err, Ok } from "@cprussin/option-result";
+
 import type { KeyDesktop } from "./bind-keys";
 import { bindKeys } from "./bind-keys";
 import type { Gesture } from "./desktop/gestures";
 import { gestures } from "./desktop/gestures";
 import { keyboard } from "./desktop/keyboard";
+import { processes } from "./desktop/processes";
 import { shell } from "./desktop/shell";
 import { system } from "./desktop/system-calls";
 import type { DomicileHost } from "./domicile-host";
@@ -37,6 +40,11 @@ class FakeHost extends EventTarget {
   readonly grabbedGestures: string[] = [];
   readonly ungrabbedGestures: string[] = [];
   readonly calls: [id: number, request: unknown][] = [];
+  readonly spawned: (readonly string[])[] = [];
+
+  spawn(command: readonly string[]): void {
+    this.spawned.push(command);
+  }
 
   grabShortcut(chord: string, whileInhibited = false): void {
     this.grabbed.push(chord);
@@ -120,6 +128,7 @@ const keysOf = (fake: FakeHost): KeyDesktop => {
   return {
     gestures: gestures(host),
     keyboard: keyboard(host, calls),
+    processes: processes(host, calls),
     shell: shell(host, calls),
   };
 };
@@ -128,7 +137,23 @@ const keysOf = (fake: FakeHost): KeyDesktop => {
 type Heard =
   | readonly ["command", readonly string[]]
   | readonly ["mode", string]
-  | readonly ["report", unknown];
+  | readonly ["report", unknown]
+  | readonly ["refused", string];
+
+/** DESK's bindings, as `domicile list-bindings` prints them. */
+const DESK_BOUND = [
+  { action: "send-shell terminal", chord: "Meta+Return", mode: "default" },
+  { action: "mode resize", chord: "Meta+r", mode: "default" },
+  { action: "mode default", chord: "Meta+Escape", mode: "resize" },
+  {
+    action: "send-shell resize grow right",
+    chord: "Meta+Return",
+    mode: "resize",
+  },
+];
+
+/** The commands the shell in these tests describes. */
+const HELP = [{ description: "Open a terminal.", usage: "terminal" }];
 
 let unbind: () => void = () => undefined;
 
@@ -140,14 +165,29 @@ const bound = (own: ShellKeybindings = DESK) => {
   const host = new FakeHost();
   const heard: Heard[] = [];
   const binding = bindKeys(keysOf(host), own, {
+    commands: HELP,
     onCommand: (args) => {
       heard.push(["command", args]);
+      switch (args[0]) {
+        case "nonsense": {
+          return Err("no command `nonsense`");
+        }
+        case "get-tree": {
+          return Ok({ output: "[]" });
+        }
+        default: {
+          return Ok("ran");
+        }
+      }
     },
     onModeChanged: (mode) => {
       heard.push(["mode", mode]);
     },
     report: (error) => {
       heard.push(["report", error]);
+    },
+    reportRefusal: (why) => {
+      heard.push(["refused", why]);
     },
   });
   unbind = binding.unbind;
@@ -186,7 +226,8 @@ describe("bindKeys", () => {
         keysOf(host),
         { keybindings: { "Hyper+l": KeyAction.Mode("x") } },
         {
-          onCommand: () => undefined,
+          commands: HELP,
+          onCommand: () => Ok("ran"),
           onModeChanged: () => undefined,
           report: () => undefined,
         },
@@ -201,6 +242,34 @@ describe("bindKeys", () => {
     host.pressed("Meta+Return");
 
     expect(heard).toStrictEqual([["command", ["terminal"]]]);
+  });
+
+  it("starts the program an exec binding names, without the shell", () => {
+    const { heard, host } = bound({
+      keybindings: {
+        "Meta+Return": KeyAction.Exec(["foot", "--hold"]),
+        "swipe:3:up": KeyAction.Exec(["btop"]),
+      },
+    });
+
+    host.pressed("Meta+Return");
+    host.gestured("swipe", 3, { dy: -200 });
+
+    expect(host.spawned).toStrictEqual([["foot", "--hold"], ["btop"]]);
+    expect(heard).toStrictEqual([]);
+  });
+
+  it("reports a pressed binding whose command the shell does not run", () => {
+    const { heard, host } = bound({
+      keybindings: { "Meta+x": KeyAction.SendShell(["nonsense"]) },
+    });
+
+    host.pressed("Meta+x");
+
+    expect(heard).toStrictEqual([
+      ["command", ["nonsense"]],
+      ["refused", "no command `nonsense`"],
+    ]);
   });
 
   it("leaves a press grabbed as a keycode, or by somebody else, alone", () => {
@@ -236,19 +305,62 @@ describe("bindKeys", () => {
   });
 
   describe("commands from a terminal", () => {
-    it("runs a command `domicile send-shell` sent, as its binding would", async () => {
+    it("runs a command `domicile send-shell` sent, as its binding would, and says so", async () => {
       const { heard, host } = bound();
       host.answer({ reply: { kind: "started" }, type: "system_reply" });
       await host.settled();
 
       host.answer({
-        event: { command: ["focus", "right"], kind: "shell_command" },
+        event: { command: ["focus", "right"], kind: "shell_command", sent: 4 },
         type: "system_event",
       });
       await host.settled();
 
-      expect(host.calls).toStrictEqual([[1, { call: "shell_commands" }]]);
+      expect(host.calls).toStrictEqual([
+        [1, { bindings: DESK_BOUND, call: "shell_commands", commands: HELP }],
+        [2, { call: "answer_shell_command", sent: 4 }],
+      ]);
       expect(heard).toStrictEqual([["command", ["focus", "right"]]]);
+    });
+
+    it("answers with what a command printed, such as a query's JSON", async () => {
+      const { host } = bound();
+      host.answer({ reply: { kind: "started" }, type: "system_reply" });
+      await host.settled();
+
+      host.answer({
+        event: { command: ["get-tree"], kind: "shell_command", sent: 6 },
+        type: "system_event",
+      });
+      await host.settled();
+
+      expect(host.calls.at(-1)).toStrictEqual([
+        2,
+        { call: "answer_shell_command", output: "[]", sent: 6 },
+      ]);
+    });
+
+    it("says why it did not run a command it does not know", async () => {
+      // `domicile send-shell` fails with the reason, rather than a command
+      // dropped silently.
+      const { host } = bound();
+      host.answer({ reply: { kind: "started" }, type: "system_reply" });
+      await host.settled();
+
+      host.answer({
+        event: { command: ["nonsense"], kind: "shell_command", sent: 5 },
+        type: "system_event",
+      });
+      await host.settled();
+
+      expect(host.calls.at(-1)).toStrictEqual([
+        2,
+        {
+          call: "answer_shell_command",
+          refused: "no command `nonsense`",
+          sent: 5,
+        },
+      ]);
     });
 
     it("stops hearing them once unbound", async () => {

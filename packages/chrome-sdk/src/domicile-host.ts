@@ -70,6 +70,25 @@ export type DomicileCursorShape =
 export type DomicileDownloadState = "in-progress" | "complete" | "failed";
 
 /**
+ * A video in picture-in-picture, which the shell draws. See
+ * components/domicile/mojom/picture_in_picture.mojom.
+ *
+ * An interface for DomicileBrowserWindow's reason: these are read from the
+ * desktop's `pictureInPictureVideos` attribute.
+ *
+ * What actOnPictureInPictureVideo() asks of a video. "back-to-page" ends
+ * picture-in-picture and leaves the video playing in its page, whose window
+ * asks to come to the front; "close" ends it and pauses the video.
+ */
+export type DomicilePictureInPictureAction =
+  | "play"
+  | "pause"
+  | "previous-track"
+  | "next-track"
+  | "back-to-page"
+  | "close";
+
+/**
  * The desktop's light or dark theme.
  *
  * One of four copies of this set: `domicile_protocol::Theme`,
@@ -104,6 +123,24 @@ export type DomicileAppEventInit = EventInit & {
 export type DomicileExtensionPopupEventInit = EventInit & {
   extensionId?: string;
   popup?: string;
+  profile?: string;
+};
+
+/**
+ * What DomicileHost.configureExtension() sets on an extension: each member
+ * present is set, and the rest are left. The names and values are
+ * DomicileInstalledExtension's.
+ */
+export type DomicileExtensionSettings = {
+  fileAccess?: boolean;
+  userScripts?: boolean;
+  /** "on_click", "specific_sites" or "all_sites". */
+  siteAccess?: string;
+  /**
+   * With "specific_sites" only: hosts, each also as `*.host` for its
+   * subdomains.
+   */
+  sites?: readonly string[];
 };
 
 /** A request header `DomicileHost.fetchWithCookies()` sends. */
@@ -208,6 +245,57 @@ export type DomicileAppHost = {
 };
 
 /**
+ * One of the desk's browser profiles, in DomicileHost.browserProfiles: a set
+ * of sign-ins, site data and extensions, as the config's `browser.profiles`
+ * names it. A page is in one profile, and its new windows are in it too. See
+ * docs/architecture/BROWSER-PROFILES.md in the Domicile repository.
+ */
+export type DomicileBrowserProfile = {
+  /**
+   * Lowercase letters, digits and `-`. What DomicileBrowserWindow.profile
+   * and openBrowserWindow() name it by.
+   */
+  readonly id: string;
+  /** The name the user gave it. */
+  readonly name: string;
+  /** Its color, `#rrggbb`. */
+  readonly color: string;
+  /** Whether it keeps nothing past its last page, as private browsing does. */
+  readonly isPrivate: boolean;
+  /** Whether a site no profile lists opens here. Exactly one profile is. */
+  readonly isDefault: boolean;
+  /**
+   * Whether a private window that names no profile opens here. Exactly one
+   * profile is, and it is private.
+   */
+  readonly isDefaultPrivate: boolean;
+  /**
+   * The sites that open here because the user pinned them
+   * (DomicileHost.pinBrowserSite). Each is a host, `*.host`, or a host and
+   * path, as the config's `browser.sites` keys are.
+   */
+  readonly pinnedSites: readonly string[];
+  /**
+   * The sites that open here because the config's `browser.sites` names
+   * them. Only the config changes these.
+   */
+  readonly configSites: readonly string[];
+  /**
+   * The ids of the extensions in it, each switched on or off there; empty
+   * until it loads. Every profile has every extension the config names.
+   */
+  readonly extensions: readonly string[];
+  /** Those of `extensions` switched on here. */
+  readonly enabledExtensions: readonly string[];
+  /**
+   * Those of `extensions` the config switches here, because it names the
+   * profile's extensions. Only the config changes these
+   * (DomicileHost.setBrowserProfileExtensionEnabled refuses them).
+   */
+  readonly lockedExtensions: readonly string[];
+};
+
+/**
  * One of the desk's browser windows: a page the browser holds, drawn with
  * `<webview window="id">`. See components/domicile/mojom/browser_windows.mojom.
  *
@@ -232,16 +320,22 @@ export type DomicileBrowserWindow = {
   readonly popupWindow: number | null;
   /**
    * The size the popup window, or a page's window.open(), asked for, in CSS
-   * pixels. 0 on an axis it left unset.
+   * pixels. 0 on an axis it left unset. For a view, the size its app gave it.
    */
   readonly width: number;
   readonly height: number;
   /**
-   * Whether the page is private: in the off-the-record profile, sharing
-   * nothing with the user's pages and storing nothing past the last private
-   * page. A private window's new windows are private too.
+   * Whether the page is private: in a private profile, off the record,
+   * sharing nothing with the user's other pages and storing nothing past the
+   * profile's last page. A private window's new windows are private too.
    */
   readonly isPrivate: boolean;
+  /**
+   * The id of the browser profile the page is in, one of
+   * DomicileHost.browserProfiles; null for a page in none, such as an
+   * Electron app's. A window's new windows are in its profile.
+   */
+  readonly profile: string | null;
   /**
    * The page's storage partition, as a <webview>'s `partition` attribute
    * names it: "persist:<name>" on disk, any other name in memory. Empty for
@@ -271,6 +365,70 @@ export type DomicileBrowserWindow = {
    * until the compositor has listed the window.
    */
   readonly toplevelId: string | null;
+  /**
+   * For an Electron app's view (a WebContentsView): the id of the window
+   * that holds it. Null for every window. A view is part of its window, not a
+   * window: it is listed right after the window, bottom first, only while
+   * the window holds it, and is never a capture source of its own. Draw it
+   * with `<webview window>` as any window, where its app asks (`x`, `y`,
+   * `width`, `height`, in CSS pixels from the top left of the window's page)
+   * or wherever the shell lays it out. See docs/architecture/ELECTRON-APPS.md.
+   */
+  readonly parent: string | null;
+  readonly x: number;
+  readonly y: number;
+  /**
+   * Whether its Electron app hid it. Keep a hidden view laid out, out of
+   * sight, as a page draws only while laid out. A hidden window is open, its
+   * page running, but the app wants it out of sight (win.hide, or `show:
+   * false`): don't show it until it is shown again. Its app shows it and
+   * then asks for focus. False for every other window.
+   */
+  readonly isHidden: boolean;
+  /**
+   * An Electron app window's menu bar, for the shell to draw under its tab:
+   * the menu's entries as JSON, null for none. Each entry has a whole `id`
+   * from 1, a `type` (normal, separator, submenu, checkbox or radio), a
+   * `label` with Electron's `&` mnemonics, `enabled`, `visible` and
+   * `checked`, and maybe an `accelerator` as the app wrote it, an `icon` (a
+   * PNG data: URL) and a `submenu` of entries. Click an entry with
+   * DomicileHost.clickBrowserWindowMenu.
+   */
+  readonly menu: string | null;
+  /**
+   * Whether the bar shows, as setMenuBarVisibility says. With
+   * `menuBarAutoHide`, as Electron's autoHideMenuBar, it shows while Alt is
+   * held or after Alt is tapped. A window with no menu has true and false.
+   */
+  readonly menuBarVisible: boolean;
+  readonly menuBarAutoHide: boolean;
+  /**
+   * The message box an Electron app asks over this window, as JSON, null for
+   * none: `type` (none, info, error, question or warning), `title`,
+   * `message`, `detail`, `buttons` (1 to 16 labels, in the app's order),
+   * `defaultId` (the button Enter presses, -1 for none), `cancelId` (the
+   * button Escape presses), `checkboxLabel` (empty for no checkbox) and
+   * `checkboxChecked`. Show it over the window's page, and answer it with
+   * DomicileHost.answerBrowserWindowMessageBox; the window then lists its
+   * next box, if its app asked more.
+   */
+  readonly messageBox: string | null;
+  /**
+   * The popup menu an Electron app shows over this window (Menu.popup), as
+   * JSON, null for none: `menu`, its entries as `menu`'s are, and `x` and
+   * `y`, where it goes in CSS pixels from the page's top left. Draw it over
+   * the page there, and answer it with
+   * DomicileHost.answerBrowserWindowPopupMenu.
+   */
+  readonly popupMenu: string | null;
+  /**
+   * What an Electron app asks this window to be (win.maximize, minimize,
+   * setFullScreen). The shell decides, and says what it made the window with
+   * DomicileHost.setBrowserWindowState. Each is false for any other window.
+   */
+  readonly wantsMaximized: boolean;
+  readonly wantsMinimized: boolean;
+  readonly wantsFullscreen: boolean;
 };
 
 /**
@@ -301,7 +459,8 @@ export type DomicileCastSink = {
  */
 export type DomicileClipboardEntry = {
   /**
-   * What DomicileHost.copyClipboardEntry() names this row by.
+   * What DomicileHost.copyClipboardEntry() and removeClipboardEntry() name
+   * this row by.
    *
    * Assigned by the compositor and never reused, so an id a shell holds names
    * the row it was told about or nothing. Not a position: reordering the list
@@ -329,6 +488,11 @@ export type DomicileClipboardEntry = {
    * compositor could not read; its preview still names it.
    */
   readonly thumbnail: string;
+  /**
+   * Whether this is what the clipboard holds. Only the newest row can be, and
+   * none is after removeClipboardEntry() removes it, until the next copy.
+   */
+  readonly current: boolean;
 };
 
 /**
@@ -382,6 +546,22 @@ export type DomicileDisplay = {
    * window), `off` or `on`. A DOMString for the reason `transform` is.
    */
   readonly adaptiveSync: string;
+  /**
+   * Whether the panel is driven in HDR10: `unsupported` (its EDID takes no
+   * PQ, its connector cannot scan out in 10 bits, or Domicile runs in a
+   * window), `off` or `on`. A DOMString for the reason `transform` is.
+   */
+  readonly hdr: string;
+  /**
+   * The panel's peak luminance from its EDID, in cd/m². Zero when it reports
+   * none.
+   */
+  readonly peakLuminance: number;
+  /**
+   * While `hdr` is `on`, the luminance SDR content's white is shown at, in
+   * cd/m². Zero otherwise.
+   */
+  readonly sdrWhite: number;
   /**
    * The monitor's rotation: `normal`, `rotate-90`, `rotate-180` or
    * `rotate-270`, as the config file spells them.
@@ -448,6 +628,11 @@ export type DomicileExtension = {
   readonly popup: string | null;
   /** False after the extension's action.disable(). */
   readonly enabled: boolean;
+  /**
+   * The id of the browser profile it is in: the one setExtensionsProfile()
+   * named, once that has loaded. Its popup opens in a <webview> in it.
+   */
+  readonly profile: string;
 };
 
 /**
@@ -463,6 +648,11 @@ export type DomicileExtensionPopupEvent = Event & {
    * soon as the call answers.
    */
   readonly popup: string;
+  /**
+   * The id of the browser profile the extension is in, which the popup opens
+   * in, as a <webview>'s `profile`.
+   */
+  readonly profile: string;
 };
 
 /**
@@ -545,6 +735,11 @@ export type DomicileHostEventMap = {
    * did not see asked for is not one to open later.
    */
   extensionpopuprequested: DomicileExtensionPopupEvent;
+  /**
+   * Fires when one is installed, uninstalled, switched on or off, or
+   * reconfigured, or its icon loads.
+   */
+  installedextensionschanged: Event;
   idlechanged: Event;
   lockedchanged: Event;
   themechanged: Event;
@@ -558,6 +753,13 @@ export type DomicileHostEventMap = {
    */
   browserwindowschanged: Event;
   /**
+   * Fires when a profile is added, removed, renamed or recolored, the
+   * defaults move, a site is pinned, or an extension is installed,
+   * uninstalled or switched in one. Read `browserProfiles` for the current
+   * list.
+   */
+  browserprofileschanged: Event;
+  /**
    * Fires when a TV appears or goes, or a cast to one starts or ends. Read
    * `castSinks` for the current list.
    */
@@ -567,6 +769,12 @@ export type DomicileHostEventMap = {
    * list. Read `downloads` for the current list.
    */
   downloadschanged: Event;
+  /**
+   * Fires when a video enters or leaves picture-in-picture, plays, pauses,
+   * or changes shape or controls. Read `pictureInPictureVideos` for the
+   * current list.
+   */
+  pictureinpicturevideoschanged: Event;
   /**
    * An answer to callSystem(), as a MessageEvent whose `data` is the
    * compositor's `system_reply`, `system_event` or `system_end` line.
@@ -646,6 +854,14 @@ export type DomicileHost = {
    */
   copyClipboardEntry(entry: number): void;
   /**
+   * Drop a row of the clipboard's history and the copy it holds.
+   *
+   * Removing the current row also empties the clipboard, so nothing pastes it
+   * again. No answer: the next `clipboard` leaves the row out. An id the
+   * history has since dropped removes nothing.
+   */
+  removeClipboardEntry(entry: number): void;
+  /**
    * Click an icon in the system tray, with the button `action` names.
    *
    * It names an icon `tray` lists and a button. What the click does is the
@@ -717,6 +933,20 @@ export type DomicileHost = {
    */
   pointerConstrained(appId: string, active: boolean): void;
   /**
+   * Hold the pointer inside `boxes`, in this page's CSS pixels, for a window
+   * whose `pointerConstraint` is "confine": the pointer stops at their edges,
+   * even where a box reaches onto another monitor. An empty list lets go; so
+   * does this page going away. A later call replaces the boxes. Clipped to
+   * this page's own box.
+   *
+   * Resolves true once the pointer is held, and false where this engine does
+   * not move the pointer itself -- nested in another compositor, or headless
+   * -- or none of the boxes is on this page. The shell still answers
+   * `pointerConstrained` either way; the client's own motion stays its own.
+   * A box with a NaN or infinite edge throws.
+   */
+  confinePointer(boxes: readonly DOMRectReadOnly[]): Promise<boolean>;
+  /**
    * Where the page put an <app>, in the page's CSS pixels. The client draws at
    * the scale of the monitor holding most of that box. Layout still places the
    * window; this only tells the compositor where it ended up.
@@ -787,12 +1017,19 @@ export type DomicileHost = {
    * `Shift`, in any spelling a chord takes), is a tap of it: either side's key
    * pressed and let go with nothing else in between. Another key, a click, a
    * scroll, a pinch, a touch or a touchpad gesture the shell takes makes it no
-   * tap, so `Meta+Return` and Super-dragging a window still work. A tap comes
-   * back as a `shortcut` and then a `shortcutrelease` with `keyCode` 0, once
-   * the key is up. The engine hears it before any page or window does, and
-   * the key still reaches the focused client as it always did.
+   * tap, so `Meta+Return` and Super-dragging a window still work. Nor does a
+   * hold longer than `longestTap` milliseconds, 300 unless given, as on
+   * GNOME: Super held and let go does nothing. A tap comes back as a
+   * `shortcut` and then a `shortcutrelease` with `keyCode` 0, once the key is
+   * up. The engine hears it before any page or window does, and the key still
+   * reaches the focused client as it always did. `longestTap` means nothing
+   * to a chord.
    */
-  grabShortcut(chord: string, whileInhibited?: boolean): void;
+  grabShortcut(
+    chord: string,
+    whileInhibited?: boolean,
+    longestTap?: number,
+  ): void;
   /**
    * Answer one grabShortcut() of that name. Once every grab of it is
    * answered, its key reaches the focused client or site again, so two parts
@@ -838,18 +1075,56 @@ export type DomicileHost = {
    */
   activateExtension(id: string): void;
   /**
+   * Show the actions of browser profile `profile`'s extensions in
+   * `extensions`, and have activateExtension() click them there, on the
+   * active tab of its pages: as Chrome's toolbar shows its window's
+   * profile's. A shell names the profile of the page it last focused. The
+   * default profile's until called, and while `profile` loads; one the desk
+   * does not have shows the default's. Each entry's `profile` says which it
+   * is. Over the tray's pipe, as activateExtension(). An empty id throws.
+   */
+  setExtensionsProfile(profile: string): void;
+  /**
+   * Switch installed extension `id` on or off, as chrome://extensions does.
+   * Resolves once switched; `installedExtensions` and `extensions` follow.
+   * Rejects with an OperationError saying why, in words to show, when it is
+   * not. Over the tray's pipe, as activateExtension().
+   */
+  setExtensionEnabled(id: string, enabled: boolean): Promise<void>;
+  /**
+   * Set each of `settings` present on installed extension `id`, or none.
+   * Rejects with an OperationError saying why, in words to show: a setting
+   * the extension cannot use, one the desk's config sets (its `configured`),
+   * or a site that is not a host. Throws a TypeError for a `siteAccess` that
+   * is not one of its three, or `sites` without "specific_sites".
+   */
+  configureExtension(
+    id: string,
+    settings: DomicileExtensionSettings,
+  ): Promise<void>;
+  /**
+   * Uninstall extension `id`, as its user would. Rejects with an
+   * OperationError saying why, in words to show: one the config installed
+   * (its `fromConfig`) is only the config's to remove.
+   */
+  uninstallExtension(id: string): Promise<void>;
+  /**
    * Opens a browser window at `url`, for the shell's own UI such as a `+`
    * button or a launcher. It appears in the next `browserwindowschanged`. A
    * domicile:// address shows blocked, as in a <webview>.
    *
    * `partition` gives its page storage of its own, as a <webview>'s
    * `partition` attribute does. Throws TypeError for "persist:" with no name.
+   *
+   * `profile` opens it in that browser profile, one of `browserProfiles`;
+   * empty for the one `url`'s site opens in (browserProfileFor). A profile
+   * the desk no longer has opens in the default one.
    */
-  openBrowserWindow(url: string, partition?: string): void;
+  openBrowserWindow(url: string, partition?: string, profile?: string): void;
   /**
-   * Opens a private browser window at `url`, as openBrowserWindow does. Its
-   * page is in the off-the-record profile; see DomicileBrowserWindow's
-   * `isPrivate`.
+   * Opens a private browser window at `url`, as openBrowserWindow does, in
+   * the default private profile; see DomicileBrowserWindow's `isPrivate`. To
+   * open one in another private profile, name it to openBrowserWindow.
    */
   openPrivateBrowserWindow(url: string): void;
   /**
@@ -864,8 +1139,17 @@ export type DomicileHost = {
    * The browser matches the window, so two quick calls never open two.
    * Throws TypeError for another `reuse`, and for "focus" or "navigate" with
    * no `appId`.
+   *
+   * `profile` opens a new window in that browser profile, one of
+   * `browserProfiles`; empty for the one `url`'s site opens in
+   * (browserProfileFor), as for openBrowserWindow.
    */
-  openAppWindow(url: string, appId?: string, reuse?: string): void;
+  openAppWindow(
+    url: string,
+    appId?: string,
+    reuse?: string,
+    profile?: string,
+  ): void;
   /**
    * How many elements in browser window `id`'s main document match the CSS
    * `selector`, as a <webview>'s countMatches() counts them. A hidden window
@@ -875,11 +1159,108 @@ export type DomicileHost = {
    */
   countBrowserWindowMatches(id: string, selector: string): Promise<number>;
   /**
+   * Clicks the first shown element in browser window `id`'s main document that
+   * matches the CSS `selector`, as a <webview>'s clickMatch() clicks it. A
+   * hidden window is clicked too. Resolves whether an element matched. Throws
+   * SyntaxError for a selector that does not parse. Rejects with
+   * InvalidStateError for an unknown window, and when the page gave no answer,
+   * as when it navigated first.
+   */
+  clickBrowserWindowMatch(id: string, selector: string): Promise<boolean>;
+  /**
    * Closes window `id`; it leaves the next `browserwindowschanged`. A page
    * with a `beforeunload` handler may first ask to stay, as a `domicile-dialog`
    * on its <webview>; Cancel keeps the window. An unknown id does nothing.
    */
   closeBrowserWindow(id: string): void;
+  /**
+   * Moves window `id`'s page to browser profile `profile`, one of
+   * `browserProfiles`, as a new page under the same id: the window keeps its
+   * place, its <webview> shows the new page, and its back and forward list
+   * comes along as addresses. The page reloads; what was typed into it is
+   * not kept. Throws TypeError for an empty id or profile. An unknown window
+   * or profile, or an app window, does nothing: the shell's lists may be a
+   * change behind.
+   */
+  reopenBrowserWindow(id: string, profile: string): void;
+  /**
+   * The browser profile `url` opens in: the most specific of the config's
+   * `browser.sites` that matches it, else the default profile. The engine
+   * routes every new window and every page the user takes to another site
+   * by this. Throws TypeError for a `url` that is no address.
+   */
+  browserProfileFor(url: string): Promise<string>;
+  /**
+   * The site that routes `url` to its profile: the entry of the config's
+   * `browser.sites`, or of the sites the user pinned, that browserProfileFor
+   * matched. Empty when none did, so it opens in the default profile.
+   * Throws TypeError for a `url` that is no address.
+   */
+  browserSiteFor(url: string): Promise<string>;
+  /**
+   * Opens `site` in browser profile `profile` from now on, kept across
+   * restarts; the default profile unpins it. `site` is a host, `*.host`, or
+   * a host and path, as the config's `browser.sites` keys are; it shows in
+   * the profile's `pinnedSites` from the next `browserprofileschanged`.
+   * Pages already open stay where they are. Throws TypeError for an empty
+   * site or profile. Rejects with an OperationError saying why for a site
+   * the config's sites name, which only the config changes, for one that is
+   * no such key, and for a profile the desk does not have.
+   */
+  pinBrowserSite(site: string, profile: string): Promise<void>;
+  /**
+   * Switches extension `id` on or off in browser profile `profile`, kept
+   * across restarts: it runs in that profile's pages, or nowhere in them, and
+   * keeps its data while off. The profile's `enabledExtensions` shows it from
+   * the next `browserprofileschanged`. Throws TypeError for an empty profile
+   * or id. Rejects with an OperationError saying why for a profile the desk
+   * does not have or has not loaded, an extension it does not have, and one
+   * in its `lockedExtensions`, which only the config switches.
+   */
+  setBrowserProfileExtensionEnabled(
+    profile: string,
+    id: string,
+    enabled: boolean,
+  ): Promise<void>;
+  /**
+   * The user clicked entry `command` of window `id`'s menu bar
+   * (DomicileBrowserWindow.menu); its Electron app runs the entry. Throws a
+   * TypeError for a `command` below 1. A window that closed meanwhile, or has
+   * no menu, does nothing.
+   */
+  clickBrowserWindowMenu(id: string, command: number): void;
+  /**
+   * The user chose entry `command` (its `id`) of the popup menu window `id`
+   * shows (DomicileBrowserWindow.popupMenu), or put it away with nothing
+   * chosen for 0. Throws a TypeError for a negative `command`. A window that
+   * closed meanwhile, or shows no popup menu, does nothing.
+   */
+  answerBrowserWindowPopupMenu(id: string, command: number): void;
+  /**
+   * The shell made browser window `id` maximized, minimized and fullscreen as
+   * these say, whether or not its app asked (DomicileBrowserWindow.
+   * wantsMaximized and the rest). An Electron app's window tells its app of
+   * each change; any other window, or one that closed meanwhile, does
+   * nothing.
+   */
+  setBrowserWindowState(
+    id: string,
+    maximized: boolean,
+    minimized: boolean,
+    fullscreen: boolean,
+  ): void;
+  /**
+   * The user answered the message box window `id` shows
+   * (DomicileBrowserWindow.messageBox) with button `response`, an index into
+   * its `buttons`, leaving its checkbox `checkboxChecked`. Throws a TypeError
+   * for a negative `response`. A window that closed meanwhile, or shows no
+   * box, does nothing.
+   */
+  answerBrowserWindowMessageBox(
+    id: string,
+    response: number,
+    checkboxChecked: boolean,
+  ): void;
   /**
    * Casts the desktop to TV `id`: its picture is what the desktop's ScreenCast
    * portal picks, which asks this page, and its sound is the desktop's.
@@ -906,9 +1287,30 @@ export type DomicileHost = {
   /** Removes every download not in progress from `downloads`. The files stay. */
   clearDownloads(): void;
   /**
+   * Acts on video `id`, as its controls do. "back-to-page" and "close" end
+   * picture-in-picture; it leaves the next `pictureinpicturevideoschanged`.
+   * An unknown id does nothing.
+   */
+  actOnPictureInPictureVideo(
+    id: string,
+    action: DomicilePictureInPictureAction,
+  ): void;
+  /**
+   * Moves video `id` to `seconds` in, as its progress bar does. Throws
+   * RangeError for a negative time. An unknown id does nothing.
+   */
+  seekPictureInPictureVideo(id: string, seconds: number): void;
+  /**
+   * Says video `id` is shown `width` by `height` CSS pixels big; its page
+   * hears it as its PictureInPictureWindow's size. An unknown id does
+   * nothing.
+   */
+  resizePictureInPictureVideo(id: string, width: number, height: number): void;
+  /**
    * Sends `method`, "GET" or "POST", to `url` from the browser process with
-   * the cookies of the profile the ordinary browser windows use, so a bar
-   * item can read a site the user is signed in to. A POST sends `body`, as a
+   * the cookies of browser profile `profile`, one of `browserProfiles`, or
+   * for an empty one the default profile's, so a bar item can read a site
+   * the user is signed in to. A POST sends `body`, as a
    * same-origin CORS request from `url`'s own origin.
    * Resolves with the response, whatever its status. Rejects with a
    * NetworkError for a network failure or a refusal: an address that is not
@@ -922,6 +1324,9 @@ export type DomicileHost = {
    * SAPISIDHASH` header Google's first-party APIs take, computed from the
    * SAPISID cookie, and follows no redirect. The page never sees the cookie.
    *
+   * Also rejects with a NetworkError for a profile the desk does not have,
+   * or a private one, which keeps no sign-ins to fetch with.
+   *
    * Handled by the browser process, over its own pipe: see
    * components/domicile/mojom/shell_fetch.mojom.
    */
@@ -931,6 +1336,7 @@ export type DomicileHost = {
     headers: readonly DomicileFetchHeader[],
     body: string | null,
     sapisidHashOrigin: string | null,
+    profile?: string,
   ): Promise<DomicileFetchResponse>;
   /**
    * The screens of the desktop.
@@ -968,6 +1374,13 @@ export type DomicileHost = {
   readonly tray: readonly DomicileTrayItem[] | null;
   readonly notifications: readonly DomicileNotification[] | null;
   readonly extensions: readonly DomicileExtension[] | null;
+  /**
+   * Every extension installed in the shell's profile, switched on or off,
+   * with its settings, for a menu that manages them. Null until the browser
+   * lists them, which it does as soon as this page listens. No [SameObject],
+   * for `displays`' reason.
+   */
+  readonly installedExtensions: readonly DomicileInstalledExtension[] | null;
   readonly idle: boolean | null;
   readonly locked: boolean | null;
   readonly theme: DomicileTheme | null;
@@ -1010,6 +1423,13 @@ export type DomicileHost = {
    */
   readonly browserWindows: readonly DomicileBrowserWindow[] | null;
   /**
+   * The desk's browser profiles, in the config's order: sets of sign-ins,
+   * site data and extensions, as the config's `browser.profiles` names them.
+   * Null until the browser lists them. No [SameObject], for `displays`'
+   * reason. See docs/architecture/BROWSER-PROFILES.md.
+   */
+  readonly browserProfiles: readonly DomicileBrowserProfile[] | null;
+  /**
    * The TVs the desktop can cast to: the Google Cast receivers the browser
    * finds, by name. Null until the browser lists them, which it does as soon
    * as this page listens; empty when the profile turns casting off. No
@@ -1026,6 +1446,17 @@ export type DomicileHost = {
    */
   readonly downloads: readonly DomicileDownload[] | null;
   /**
+   * The videos in picture-in-picture, oldest first: each one a page's
+   * `requestPictureInPicture()` or its video controls' button, until it
+   * leaves picture-in-picture. Null until the browser lists them, which it
+   * does as soon as this page listens. Show one with
+   * `<app picture-in-picture="id">`. No [SameObject], for `displays`'
+   * reason. See components/domicile/mojom/picture_in_picture.mojom.
+   */
+  readonly pictureInPictureVideos:
+    | readonly DomicilePictureInPictureVideo[]
+    | null;
+  /**
    * Typed by the event map rather than by inheriting `EventTarget`, whose
    * overloads take any name and type every listener's event as `Event`.
    * `dispatchEvent` is left out: a page does not dispatch to it.
@@ -1038,6 +1469,51 @@ export type DomicileHost = {
     type: T,
     listener: (event: DomicileHostEventMap[T]) => void,
   ): void;
+};
+
+/**
+ * One extension installed in the shell's profile, switched on or off, as a
+ * shell's menu of extensions draws it. Apps, themes and Chrome's own are left
+ * out, as chrome://extensions leaves them out.
+ *
+ * An interface rather than a dictionary for DomicileExtension's reason: these
+ * are read off DomicileHost.installedExtensions.
+ */
+export type DomicileInstalledExtension = {
+  /**
+   * What setExtensionEnabled(), configureExtension() and uninstallExtension()
+   * name it by, and the id of its entry in `extensions` when it has an action.
+   */
+  readonly id: string;
+  readonly name: string;
+  /**
+   * The manifest's icon as data:image/png;base64,..., drawn at this page's
+   * device pixel ratio. Chrome's placeholder until the icon loads.
+   */
+  readonly icon: string;
+  /** Switched on. Only a switched-on extension has an action in `extensions`. */
+  readonly enabled: boolean;
+  /**
+   * Its chrome://extensions settings. Each is null where the extension cannot
+   * use it: local files and sites where it asks for none, user scripts where
+   * it does not ask for chrome.userScripts. Private windows are a private
+   * browser profile's, whose switches say what runs there.
+   */
+  readonly fileAccess: boolean | null;
+  readonly userScripts: boolean | null;
+  /** "on_click", "specific_sites" or "all_sites". */
+  readonly siteAccess: string | null;
+  /** With "specific_sites": hosts, each also as `*.host` for its subdomains. */
+  readonly sites: readonly string[];
+  /**
+   * The settings the desk's config sets, by the names above. Only the config
+   * changes them: configureExtension() refuses them.
+   */
+  readonly configured: readonly string[];
+  /** The config installed it, so only the config uninstalls it. */
+  readonly fromConfig: boolean;
+  /** Its options page, or null if it has none. */
+  readonly optionsUrl: string | null;
 };
 
 /**
@@ -1106,6 +1582,44 @@ export type DomicileNotificationAction = {
   readonly key: string;
   /** The button's label, or the reply field's. */
   readonly label: string;
+};
+
+export type DomicilePictureInPictureVideo = {
+  /**
+   * The id actOnPictureInPictureVideo(), resizePictureInPictureVideo() and
+   * `<app picture-in-picture>` take.
+   */
+  readonly id: string;
+  /**
+   * The browser window whose page plays it, as a DomicileBrowserWindow's
+   * `id`; empty for a <webview> that is not one.
+   */
+  readonly window: string;
+  /** The video's own size, in pixels: its shape. */
+  readonly width: number;
+  readonly height: number;
+  /**
+   * Where the video was in its page when it entered picture-in-picture, in
+   * CSS pixels from the page's top left, so the shell can grow it out of that
+   * place; null when the page was drawn nowhere.
+   */
+  readonly source: DOMRectReadOnly | null;
+  readonly playing: boolean;
+  /**
+   * Which controls the page takes: play and pause, and its media session's
+   * previous and next track.
+   */
+  readonly canPlay: boolean;
+  readonly canPreviousTrack: boolean;
+  readonly canNextTrack: boolean;
+  /**
+   * Where the video is, as its page last said: its length and position in
+   * seconds, and how fast the position moves while it plays. A `duration` of
+   * 0 is unknown, or a live stream: there is no progress to show.
+   */
+  readonly duration: number;
+  readonly position: number;
+  readonly playbackRate: number;
 };
 
 /**
@@ -1284,4 +1798,11 @@ export type DomicileWindow = {
    * DomicileHost.pointerConstrained(); only then is the client told.
    */
   readonly pointerConstraint: string | null;
+  /**
+   * The part of the window `pointerConstraint` holds the pointer to, as boxes
+   * in the window's own coordinates, which `width` and `height` measure; null
+   * for all of it. The client sets it for a confinement, and for a lock it
+   * says where the pointer may be when the lock takes hold.
+   */
+  readonly pointerRegion: readonly DOMRectReadOnly[] | null;
 };

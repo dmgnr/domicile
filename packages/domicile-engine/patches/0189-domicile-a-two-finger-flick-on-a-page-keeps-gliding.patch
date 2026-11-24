@@ -30,7 +30,7 @@ job builds it on `crux`.
  4 files changed, 54 insertions(+), 4 deletions(-)
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index c48df6a..91d42b9 100644
+index 738817b..f698574 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -52,6 +52,8 @@ component("evdev") {
@@ -162,10 +162,10 @@ index 0c2ab6f..9717e38 100644
    std::optional<double> pinch_scale_;
    NativeGestureSequence shell_gesture_;
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index e130c57..87dbb0c 100644
+index 2db439d..9d7e0b3 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -303,6 +303,7 @@ source_set("gbm_unittests") {
+@@ -305,6 +305,7 @@ source_set("gbm_unittests") {
      # console is the one platform whose touchpad goes through libinput.
      "//ui/events/ozone/evdev/domicile/absolute_mouse_event_converter_evdev_unittest.cc",
      "//ui/events/ozone/evdev/domicile/active_scroll_axes_unittest.cc",

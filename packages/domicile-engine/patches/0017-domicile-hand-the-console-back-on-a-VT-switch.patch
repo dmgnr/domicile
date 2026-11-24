@@ -57,7 +57,7 @@ same two edges, keys typed at another VT still reach this one.
  2 files changed, 34 insertions(+)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 32d7a04..ae469db 100644
+index 2a3e35d..234de70 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -124,6 +124,8 @@ source_set("gbm") {
@@ -69,7 +69,7 @@ index 32d7a04..ae469db 100644
      "host/drm_window_host_manager.h",
      "host/gpu_thread_adapter.h",
      "host/gpu_thread_observer.h",
-@@ -234,6 +236,7 @@ source_set("gbm_unittests") {
+@@ -236,6 +238,7 @@ source_set("gbm_unittests") {
      "gpu/proxy_helpers_unittest.cc",
      "domicile/drm_modeset_unittest.cc",
      "domicile/drm_screen_unittest.cc",

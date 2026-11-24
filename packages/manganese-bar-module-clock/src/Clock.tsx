@@ -4,7 +4,7 @@ import { css } from "../styled-system/css";
 import { ClockOptionsContext } from "./clock-options";
 import { reading } from "./reading";
 import type { wallClock } from "./useNow";
-import { useNow } from "./useNow";
+import { MINUTE_MS, SECOND_MS, useNow } from "./useNow";
 
 type Props = {
   now?: typeof wallClock | undefined;
@@ -15,8 +15,8 @@ type Props = {
  * told as {@link ClockOptionsContext} says.
  */
 export const Clock = ({ now }: Props) => {
-  const time = useNow(now);
   const options = use(ClockOptionsContext);
+  const time = useNow(now, options.seconds ? SECOND_MS : MINUTE_MS);
 
   return (
     <time className={clockStyles} dateTime={time.toISOString()}>

@@ -40,7 +40,7 @@ builds it on `crux`.
  6 files changed, 93 insertions(+), 3 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 0bd25cb..aafbf66 100644
+index d723671..951a3f6 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -273,6 +273,7 @@ source_set("gbm_unittests") {
@@ -52,7 +52,7 @@ index 0bd25cb..aafbf66 100644
      "domicile/drm_pointer_targets_unittest.cc",
      "domicile/drm_screen_unittest.cc",
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
-index 27e98e1..3a9e8d8 100644
+index 8f40bc3..382ae44 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
 @@ -16,6 +16,7 @@
@@ -90,7 +90,7 @@ index 27e98e1..3a9e8d8 100644
    }
    std::move(callback).Run(presentation_feedback);
  }
-@@ -285,6 +296,19 @@ void HardwareDisplayController::SchedulePageFlip(
+@@ -287,6 +298,19 @@ void HardwareDisplayController::SchedulePageFlip(
        }
      }
  
@@ -110,7 +110,7 @@ index 27e98e1..3a9e8d8 100644
      // No outdated buffers detected which makes this a true page flip failure.
      // Alert the watchdog.
      watchdog_.ArmForFailedCommit();
-@@ -311,14 +335,44 @@ void HardwareDisplayController::SchedulePageFlip(
+@@ -313,14 +337,44 @@ void HardwareDisplayController::SchedulePageFlip(
        .Run(gfx::SwapResult::SWAP_ACK, std::move(release_fence));
  
    watchdog_.OnSuccessfulPageFlip();
@@ -155,7 +155,7 @@ index 27e98e1..3a9e8d8 100644
  bool HardwareDisplayController::TestPageFlip(
      const DrmOverlayPlaneList& plane_list) {
    TRACE_EVENT0("drm", "HDC::TestPageFlip");
-@@ -583,10 +637,13 @@ scoped_refptr<DrmDevice> HardwareDisplayController::GetDrmDevice() const {
+@@ -585,10 +639,13 @@ scoped_refptr<DrmDevice> HardwareDisplayController::GetDrmDevice() const {
  }
  
  void HardwareDisplayController::OnPageFlipComplete(
@@ -170,7 +170,7 @@ index 27e98e1..3a9e8d8 100644
      return;  // Modeset occurred during this page flip.
  
    time_of_last_flip_ = presentation_feedback.timestamp;
-@@ -635,6 +692,8 @@ gfx::Size HardwareDisplayController::CurrentCursorSizeForTesting() const {
+@@ -637,6 +694,8 @@ gfx::Size HardwareDisplayController::CurrentCursorSizeForTesting() const {
  
  void HardwareDisplayController::OnModesetComplete(
      const DrmOverlayPlaneList& modeset_planes) {
@@ -219,7 +219,7 @@ index 65b8851..1cdf54e 100644
    // Stores all the supported sizes for cursor plane.
    std::vector<gfx::Size> supported_cursor_sizes_;
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc b/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
-index 44617dc..be2a2d2 100644
+index 5597a38..c3d8c30 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
 @@ -1026,11 +1026,13 @@ TEST_F(HardwareDisplayControllerTest,

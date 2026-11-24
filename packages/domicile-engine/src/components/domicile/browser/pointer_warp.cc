@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <vector>
 
 #include "base/numerics/safe_conversions.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 
 namespace domicile {
 namespace {
@@ -40,6 +42,27 @@ bool PointerAlreadyOver(const std::optional<gfx::PointF>& pointer,
   return pointer.has_value() && pointer->x() >= box.x() &&
          pointer->x() <= box.right() && pointer->y() >= box.y() &&
          pointer->y() <= box.bottom();
+}
+
+std::optional<std::vector<gfx::RectF>> PointerConfinementBoxes(
+    const gfx::Rect& page,
+    const std::vector<gfx::RectF>& boxes) {
+  std::vector<gfx::RectF> held;
+  for (const gfx::RectF& box : boxes) {
+    if (!std::isfinite(box.x()) || !std::isfinite(box.y()) ||
+        !std::isfinite(box.width()) || !std::isfinite(box.height())) {
+      return std::nullopt;
+    }
+    gfx::RectF in_root = box + gfx::Vector2dF(page.x(), page.y());
+    in_root.Intersect(gfx::RectF(page));
+    if (!in_root.IsEmpty()) {
+      held.push_back(in_root);
+    }
+  }
+  if (!boxes.empty() && held.empty()) {
+    return std::nullopt;
+  }
+  return held;
 }
 
 }  // namespace domicile

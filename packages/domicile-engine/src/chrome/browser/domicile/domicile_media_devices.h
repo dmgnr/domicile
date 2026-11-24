@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "base/types/expected.h"
 #include "components/domicile/browser/command_protocol.h"
 
@@ -28,10 +29,15 @@ base::expected<void, std::string> PreferMediaDevice(PrefService& prefs,
                                                     MediaDeviceKind kind,
                                                     const std::string& id);
 
-// Starts Chrome listing devices. It lists them only once something asks, and
-// the list arrives later, so asking at startup means the first listing finds
-// them.
-void StartListingMediaDevices();
+// Hears every device list Chrome makes from now on. Lists nothing itself:
+// listing starts Chrome's audio service, which then stays up for the session.
+// Called once, at startup.
+void HearMediaDeviceLists();
+
+// Runs `listed` once Chrome has listed the cameras and the microphones: at
+// once if it has, else when its first list of each arrives. The first call
+// starts Chrome listing them. Needs HearMediaDeviceLists first.
+void WhenMediaDevicesListed(base::OnceClosure listed);
 
 }  // namespace domicile
 

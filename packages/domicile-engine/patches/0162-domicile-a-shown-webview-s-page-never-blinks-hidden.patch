@@ -27,7 +27,7 @@ Claude-Session: https://claude.ai/code/session_01LWjcAM9vCo1cXxDgc7DtNy
  2 files changed, 78 insertions(+), 1 deletion(-)
 
 diff --git a/third_party/blink/renderer/core/frame/remote_frame_view.cc b/third_party/blink/renderer/core/frame/remote_frame_view.cc
-index 5ebc498..b5c2456 100644
+index 0c955f1..b82f793 100644
 --- a/third_party/blink/renderer/core/frame/remote_frame_view.cc
 +++ b/third_party/blink/renderer/core/frame/remote_frame_view.cc
 @@ -8,6 +8,7 @@
@@ -130,9 +130,9 @@ index 5ebc498..b5c2456 100644
 +}
 +
  bool RemoteFrameView::CanThrottleRendering() const {
-   return IsHiddenForThrottling() || IsSubtreeThrottled() || IsDisplayLocked();
- }
-@@ -521,6 +582,7 @@ uint32_t RemoteFrameView::CapturePaintPreview(const gfx::Rect& rect,
+   return IsHiddenForThrottling() || IsSubtreeThrottled() ||
+          IsDisplayLockThrottled();
+@@ -522,6 +583,7 @@ uint32_t RemoteFrameView::CapturePaintPreview(const gfx::Rect& rect,
  
  void RemoteFrameView::Trace(Visitor* visitor) const {
    visitor->Trace(remote_frame_);

@@ -10,8 +10,10 @@ use std::collections::HashMap;
 use std::collections::BTreeMap;
 
 use domicile_protocol::{
-    AppFrame, Appearance, BoundShortcut, Capturing, ChromeMessage, DisplayInfo, ExtensionSettings,
-    HostMessage, Notification, Owner, PortalRequest, PortalWallpaper, Theme, TrayItem,
+    AppFrame, Appearance, BoundShortcut, BrowserProfile, Capturing, ChromeMessage, DesktopStatus,
+    DisplayInfo, ExtensionSettings, HostMessage, ListedDisplay, ListedInput, ListedView,
+    ListedWindow, MonitorInfo, Notification, Owner, PortalRequest, PortalWallpaper, Theme,
+    TrayItem, WindowKind,
 };
 
 pub mod app_names;
@@ -25,6 +27,7 @@ pub mod data_dirs;
 pub mod data_url;
 pub mod dbus_json;
 pub mod desk_terminal;
+pub mod electron_entries;
 pub mod fanout;
 pub mod file_changes;
 pub mod file_filters;
@@ -43,6 +46,7 @@ pub mod ipc;
 pub mod ipp;
 pub mod keymaps;
 pub mod launcher_icon;
+pub mod links;
 mod lock_screen_readouts;
 pub mod mime_apps;
 pub mod notifications;
@@ -145,6 +149,32 @@ pub struct Popup {
     pub frame: u32,
 }
 
+/// A browser window as the engine reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserWindow {
+    /// The engine's id for it.
+    pub id: String,
+    /// The page's title, or empty.
+    pub title: String,
+    /// The app window's id, or empty for any other window.
+    pub app_id: String,
+    /// The address it shows, or the one it is opening.
+    pub url: String,
+    /// Whether it is a private window.
+    pub private: bool,
+    /// The views it holds and shows, bottom first.
+    pub views: Vec<ListedView>,
+}
+
+/// Which monitors are off. See [`Host::describe_darkness`].
+#[derive(Debug, Clone, Default)]
+struct Darkness {
+    /// Every one: blanked or slept together.
+    all: bool,
+    /// The ones slept by name.
+    asleep: Vec<String>,
+}
+
 /// The config's look in each theme. The two differ only where the config
 /// gives a mode its own value, such as the cursor theme.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -176,6 +206,9 @@ pub struct Host {
     /// Empty until described. The `domicile` daemon never describes one, so
     /// it reports no screens rather than an invented display.
     displays: Vec<DisplayInfo>,
+    /// The lit monitors' names and HDR states. Empty until described, like
+    /// `displays`.
+    monitors: Vec<MonitorInfo>,
     /// The compiled keymap, for the browser process rather than the page.
     ///
     /// `None` until set. The `domicile` daemon and unit tests have no
@@ -191,6 +224,12 @@ pub struct Host {
     /// Host names of sites the browser draws dark, for
     /// [`HostMessage::ForceDark`].
     force_dark: Vec<String>,
+    /// The [`HostMessage::Spellcheck`] the config's `spellcheck` makes.
+    /// `None` until set; a host without a config sends none.
+    spellcheck: Option<HostMessage>,
+    /// The [`HostMessage::BrowserProfiles`] the config's `browser` makes.
+    /// `None` until set; a host without a config sends none.
+    browser_profiles: Option<HostMessage>,
     /// The keysyms the keymap types, with their keys, and the config's shell
     /// options as JSON text, for [`HostMessage::ShellConfig`]. `None` until
     /// set, as for `keymap`.
@@ -226,6 +265,12 @@ pub struct Host {
     /// Each browser window's identifier on `ext-foreign-toplevel-list-v1`, by
     /// the engine's window id.
     browser_toplevel_ids: BTreeMap<String, String>,
+    /// The browser windows, in the engine's order.
+    browser_windows: Vec<BrowserWindow>,
+    /// The input devices, in the engine's order.
+    inputs: Vec<ListedInput>,
+    /// Which monitors are off.
+    darkness: Darkness,
 }
 
 impl Host {
@@ -246,9 +291,203 @@ impl Host {
         self.displays = displays;
     }
 
-    /// The display named `name`, if the desktop has it.
-    pub fn display(&self, name: &str) -> Option<&DisplayInfo> {
-        self.displays.iter().find(|display| display.name == name)
+    /// Replace the lit monitors' names and HDR states, for
+    /// [`HostMessage::Monitors`].
+    pub fn describe_monitors(&mut self, monitors: Vec<MonitorInfo>) {
+        self.monitors = monitors;
+    }
+
+    /// The monitors message, answering `which_monitors`.
+    pub fn monitors(&self) -> HostMessage {
+        HostMessage::Monitors {
+            monitors: self.monitors.clone(),
+        }
+    }
+
+    /// Record which monitors are off: every one when `all`, else those named
+    /// in `asleep`.
+    pub fn describe_darkness(&mut self, all: bool, asleep: Vec<String>) {
+        self.darkness = Darkness { all, asleep };
+    }
+
+    /// Every display with the names it answers to and whether it is lit,
+    /// answering `which_displays`.
+    pub fn list_displays(&self) -> HostMessage {
+        HostMessage::DisplayList {
+            displays: self
+                .displays
+                .iter()
+                .map(|display| {
+                    let names = self
+                        .monitors
+                        .iter()
+                        .find(|monitor| monitor.names.contains(&display.name))
+                        .map_or_else(
+                            || vec![display.name.clone()],
+                            |monitor| monitor.names.clone(),
+                        );
+                    let lit = !self.darkness.all
+                        && !names.iter().any(|name| self.darkness.asleep.contains(name));
+                    ListedDisplay {
+                        display: display.clone(),
+                        names,
+                        lit,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Every drawn native window in the order they opened, then every browser
+    /// window the engine listed, answering `which_windows`.
+    pub fn list_windows(&self) -> HostMessage {
+        let focused = self.focus_holder();
+        let mut native: Vec<&App> = self
+            .apps
+            .values()
+            .filter(|app| app.mapped.is_some())
+            .collect();
+        native.sort_by_key(|app| app.arrival);
+        let browser = self.browser_windows.iter().filter_map(|window| {
+            Some(ListedWindow {
+                id: self.browser_toplevel_ids.get(&window.id)?.clone(),
+                kind: WindowKind::Browser,
+                title: window.title.clone(),
+                app: (!window.app_id.is_empty()).then(|| window.app_id.clone()),
+                pid: None,
+                size: None,
+                focused: false,
+                urgent: false,
+                // An older engine says no address.
+                url: (!window.url.is_empty()).then(|| window.url.clone()),
+                private: window.private,
+                engine_id: Some(window.id.clone()),
+                views: window.views.clone(),
+            })
+        });
+        HostMessage::WindowList {
+            windows: native
+                .into_iter()
+                .map(|app| ListedWindow {
+                    id: app.toplevel_id.clone(),
+                    kind: WindowKind::Native,
+                    title: app.title.clone().unwrap_or_default(),
+                    app: app.desktop_id.clone(),
+                    pid: Some(app.owner.pid),
+                    size: app.size.map(|(width, height)| [width, height]),
+                    focused: focused.as_ref() == Some(&app.app_id),
+                    urgent: app.urgent,
+                    url: None,
+                    private: false,
+                    engine_id: None,
+                    views: Vec::new(),
+                })
+                .chain(browser)
+                .collect(),
+        }
+    }
+
+    /// How the desktop is, answering `which_status`. The lock, the keymap and
+    /// the idle holds are the compositor's, so it passes them.
+    pub fn status(
+        &self,
+        locked: bool,
+        keymap: Option<String>,
+        held_awake_by: Vec<String>,
+    ) -> HostMessage {
+        HostMessage::Status(DesktopStatus {
+            theme: self.theme,
+            locked,
+            keymap,
+            screens_off: self.darkness.all,
+            held_awake_by,
+            capturing: self
+                .portal_requests
+                .as_ref()
+                .map(|(_, capturing)| capturing.clone())
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Replace the browser windows, as the engine reports them.
+    pub fn browser_windows(&mut self, windows: Vec<BrowserWindow>) {
+        self.browser_windows = windows;
+    }
+
+    /// The native window whose `ext-foreign-toplevel-list-v1` identifier is
+    /// `id`: its app id and its client's process. Errs saying why there is
+    /// none, as `domicile focus-window` and the like print it.
+    pub fn native_window(&self, id: &str) -> Result<(AppId, i32), String> {
+        if let Some(app) = self
+            .apps
+            .values()
+            .find(|app| app.toplevel_id == id && app.mapped.is_some())
+        {
+            return Ok((app.app_id.clone(), app.owner.pid));
+        }
+        if self
+            .browser_toplevel_ids
+            .values()
+            .any(|listed| listed == id)
+        {
+            return Err(format!(
+                "{id} is a browser window, which the shell shows and closes; \
+                 only a native window can be focused, closed or killed here"
+            ));
+        }
+        Err(format!("no window {id}; domicile list-windows lists them"))
+    }
+
+    /// Replace the input devices, as the engine reports them.
+    pub fn input_devices(&mut self, inputs: Vec<ListedInput>) {
+        self.inputs = inputs;
+    }
+
+    /// Every input device the engine reads, answering `which_inputs`.
+    pub fn list_inputs(&self) -> HostMessage {
+        HostMessage::InputList {
+            inputs: self.inputs.clone(),
+        }
+    }
+
+    /// The output name of the monitor `name` calls, which may be any name a
+    /// profile matches: its output name, connector or panel.
+    ///
+    /// Errs with a message listing every monitor's names when no monitor, or
+    /// more than one, answers to `name`: identical monitors with no serial
+    /// share a panel name.
+    pub fn display_named(&self, name: &str) -> Result<&str, String> {
+        let named: Vec<&MonitorInfo> = self
+            .monitors
+            .iter()
+            .filter(|monitor| monitor.names.iter().any(|own| own == name))
+            .collect();
+        match named.as_slice() {
+            [monitor] => Ok(monitor.names[0].as_str()),
+            [] => Err(format!("no display {name:?}; {}", self.listed_displays())),
+            several => Err(format!(
+                "{} displays are {name:?}; {}",
+                several.len(),
+                self.listed_displays()
+            )),
+        }
+    }
+
+    /// Every monitor by its names, for an error that names none or several.
+    fn listed_displays(&self) -> String {
+        let displays: Vec<String> = self
+            .monitors
+            .iter()
+            .map(|monitor| {
+                monitor
+                    .names
+                    .iter()
+                    .map(|own| format!("{own:?}"))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            })
+            .collect();
+        format!("displays: {}", displays.join(", "))
     }
 
     /// The displays message, sent on handshake and broadcast on change.
@@ -292,6 +531,27 @@ impl Host {
         self.extensions.clone()
     }
 
+    /// Replace the browser profiles, for chromes that connect later.
+    pub fn set_browser_profiles(
+        &mut self,
+        profiles: Vec<BrowserProfile>,
+        default_profile: String,
+        default_private_profile: String,
+        sites: BTreeMap<String, String>,
+    ) {
+        self.browser_profiles = Some(HostMessage::BrowserProfiles {
+            profiles,
+            default_profile,
+            default_private_profile,
+            sites,
+        });
+    }
+
+    /// The browser profiles message, or `None` if none were set.
+    pub fn describe_browser_profiles(&self) -> Option<HostMessage> {
+        self.browser_profiles.clone()
+    }
+
     /// Replace the sites the browser draws dark, for chromes that connect
     /// later.
     pub fn set_force_dark(&mut self, sites: Vec<String>) {
@@ -303,6 +563,17 @@ impl Host {
         HostMessage::ForceDark {
             sites: self.force_dark.clone(),
         }
+    }
+
+    /// Replace whether and in which languages the browser checks spelling,
+    /// for chromes that connect later.
+    pub fn set_spellcheck(&mut self, enabled: bool, languages: Vec<String>) {
+        self.spellcheck = Some(HostMessage::Spellcheck { enabled, languages });
+    }
+
+    /// The spell checking message, or `None` if none was set.
+    pub fn describe_spellcheck(&self) -> Option<HostMessage> {
+        self.spellcheck.clone()
     }
 
     /// Replace the keysym-to-keycode map and the shell's options, for
@@ -623,6 +894,15 @@ impl Host {
             .collect()
     }
 
+    /// The window under the popup `app_id`, however many popups deep, or
+    /// `app_id` itself if it names no popup.
+    pub fn window_under_popups<'a>(&'a self, app_id: &'a str) -> &'a str {
+        match self.popups.get(app_id) {
+            Some(popup) => self.window_under_popups(&popup.parent),
+            None => app_id,
+        }
+    }
+
     /// Whether the chromes have heard of the window `app_id`.
     fn is_announced(&self, app_id: &str) -> bool {
         self.apps
@@ -886,11 +1166,14 @@ impl Host {
                 // size.
             }
             ChromeMessage::FocusApp { app_id } => {
-                // Any mapped window can take focus. See `Scene::focus_app`.
-                if !self.apps.contains_key(&app_id) {
+                // Any mapped window can take focus. See `Scene::focus_app`. A
+                // popup's window takes it for the popup: a press on a menu is
+                // a press in its window, and the menu's grab holds.
+                let window = self.window_under_popups(&app_id).to_string();
+                if !self.apps.contains_key(&window) {
                     return Err(HostError::UnknownApp(app_id));
                 }
-                self.scene.focus_app(&app_id);
+                self.scene.focus_app(&window);
             }
             ChromeMessage::FocusChrome => {
                 self.scene.focus_chrome();
@@ -899,14 +1182,30 @@ impl Host {
             // when the client destroys it.
             ChromeMessage::CloseApp { .. }
             | ChromeMessage::Spawn { .. }
+            | ChromeMessage::Exec { .. }
             | ChromeMessage::SearchFiles { .. }
             | ChromeMessage::CopyClipboardEntry { .. }
+            | ChromeMessage::RemoveClipboardEntry { .. }
             | ChromeMessage::ActivateTrayItem { .. }
             | ChromeMessage::DismissNotifications { .. }
             | ChromeMessage::InvokeNotificationAction { .. }
             | ChromeMessage::ReplyToNotification { .. }
             | ChromeMessage::SetTheme { .. }
             | ChromeMessage::WhichTheme
+            | ChromeMessage::WhichMonitors
+            | ChromeMessage::WhichDisplays
+            | ChromeMessage::WhichWindows
+            | ChromeMessage::WhichStatus
+            | ChromeMessage::WhichShellCommands
+            | ChromeMessage::WhichShellBindings
+            | ChromeMessage::WhichInputs
+            | ChromeMessage::WhichIdleTime
+            | ChromeMessage::Watch { .. }
+            | ChromeMessage::ActOnWindow { .. }
+            | ChromeMessage::ConfigureDisplay { .. }
+            | ChromeMessage::SetLogLevels { .. }
+            | ChromeMessage::ShootDesk { .. }
+            | ChromeMessage::Emulate { .. }
             | ChromeMessage::ThemeCaptured { .. }
             | ChromeMessage::PointerMotion { .. }
             | ChromeMessage::PointerRelative { .. }
@@ -922,6 +1221,7 @@ impl Host {
             | ChromeMessage::Unlock { .. }
             | ChromeMessage::Lock
             | ChromeMessage::Activity { .. }
+            | ChromeMessage::EngineFault { .. }
             | ChromeMessage::DeskPointer { .. }
             | ChromeMessage::DeskCursor { .. }
             | ChromeMessage::TextInput { .. }

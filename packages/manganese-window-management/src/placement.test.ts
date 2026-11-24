@@ -1,9 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
+import { token } from "../styled-system/tokens";
 import { Axis, Direction } from "./direction";
 import type { Geometry } from "./placement";
 import {
   contentsOf,
+  FULLSCREEN,
+  GRABBING,
   leaving,
   placementsOf,
   raised,
@@ -550,7 +553,6 @@ describe("the focus box", () => {
       WindowAction.LayoutSet(Layout.SplitH),
       WindowAction.ContainerSplit(Axis.Vertical),
       WindowAction.AppAppeared("mail", "mail"),
-      WindowAction.LayoutSet(Layout.Tabbed),
     );
 
     expect(focusBoxOf(state)).toEqual({
@@ -569,7 +571,6 @@ describe("the focus box", () => {
       WindowAction.LayoutSet(Layout.SplitH),
       WindowAction.ContainerSplit(Axis.Vertical),
       WindowAction.AppAppeared("mail", "mail"),
-      WindowAction.LayoutSet(Layout.Tabbed),
       WindowAction.ParentFocused(),
     );
 
@@ -642,5 +643,15 @@ describe("wellDepthOf", () => {
 
   it("keeps a float's well at its float's depth", () => {
     expect(wellDepthOf(4)).toBe(4);
+  });
+});
+
+describe("window depths", () => {
+  // A window's menus, tooltips and dialogs are portaled to the page's root,
+  // so they stack against every window's depth, a fullscreen one's included.
+  it("stay under the shell's popups and dialogs", () => {
+    const under = Number.parseInt(token("zIndex.modalBackdrop"), 10);
+
+    expect(Math.max(FULLSCREEN, GRABBING)).toBeLessThan(under);
   });
 });

@@ -131,6 +131,12 @@ describe("NotificationCard", () => {
       expect(pressed).toEqual(["mute"]);
     });
 
+    it("names an unlabeled reply Reply", () => {
+      card({ actions: [{ key: "inline-reply", label: "" }] });
+
+      expect(screen.getByRole("button", { name: "Reply" })).toBeVisible();
+    });
+
     describe("replying", () => {
       /** A card offering a reply and Mute, with its presses in `pressed`. */
       const replyCard = (pressed: string[] = []) =>

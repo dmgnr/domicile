@@ -73,6 +73,7 @@ See [docs/ELEMENTS.md](docs/ELEMENTS.md) for `<app>` input and focus, and the
 | `./system` | The types of the compositor's system calls: `SystemError`, `FileType`, `Listening`, … The calls are the desktop's `files`, `processes`, `dbus` and the rest; the compositor refuses most while the desktop is locked. See [SHELL-SYSTEM-ACCESS.md](/docs/SHELL-SYSTEM-ACCESS.md). |
 | `./portal` | The types of application dialogs from `xdg-desktop-portal` (`PortalRequest`, `PortalAnswer`, …) and of running sessions that record the screen or control or capture input (`Capturing`). The desktop's `portals` lists and answers them, and pauses, resumes and discards the shell's own recording; `hideFromCaptures` leaves an element of the shell's out of every capture of the desk; `<PortalDialogs />` in component-library draws them. See [PORTALS.md](/docs/PORTALS.md). |
 | `./global-shortcuts` | `fireGlobalShortcuts`: grab the chords applications hold through the GlobalShortcuts portal and report each press and release. `<PortalDialogs />` calls it. |
+| `./logger` | `logger(subsystem)`: a shell's logs by part, each line starting `[subsystem]`. Errors show by default; `domicile set-log-level debug shell` shows the rest. See [LOGGING.md](/docs/LOGGING.md#a-shells-logs). |
 | `./options` | `defineOptions` and `option`: the options a shell declares as its `options` export, which the Settings app edits. `watchShellOptions` reads the config's values of them, live. See [WRITING-A-SHELL.md](/docs/WRITING-A-SHELL.md#options). |
 | `./icon-theme` | `readIconTheme(domicile)`: the config's `theme.icon_theme`, read from the compositor's Settings portal, or `None` for `hicolor` only. `watchIconTheme` reads it and follows `SettingChanged`. `@domicile-desktop/system-apps/app-icons` takes it. |
 | `./extension`, `./tray`, `./notification`, `./theme`, `./display-transform` | Data types and Zod schemas for what the desktop holds. |
@@ -146,14 +147,18 @@ bun run generate    # after changing the IDL or domicile-config
 - `packages/domicile-engine/tests/test-host-types-match-the-idl.sh` fails when the file is stale.
 
 `config.schema.json` is the JSON Schema `schemars` derives from
-`domicile-config`'s Rust types, and `src/config.ts` is generated from it, with
-the Rust doc comments as its docs. `bun run generate` writes both and needs
-`cargo`.
+`domicile-config`'s Rust types. Generated from it, with the Rust doc comments
+as their docs:
+
+- `src/config.ts`: the config's types.
+- `src/config-schema.ts`: a Zod schema that reads a config as the compositor
+  does, defaults filled in. Read a config with it, never a copy of the schema.
+
+`bun run generate` writes all three and needs `cargo`.
 
 - `codegen/json-schema.ts` parses the schema subset `schemars` emits. It
   throws on a keyword outside it.
-- `tests/test-config-types-match-the-schema.sh` fails when either file is
-  stale.
+- `tests/test-config-types-match-the-schema.sh` fails when any file is stale.
 
 ### Dependencies
 

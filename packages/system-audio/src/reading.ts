@@ -7,7 +7,13 @@ import type { Result } from "@cprussin/option-result";
 import { Err, Ok } from "@cprussin/option-result";
 import { z } from "zod";
 
-import type { Audio, AudioCard, AudioDevice, AudioStream } from "./audio";
+import type {
+  Audio,
+  AudioCard,
+  AudioDevice,
+  AudioLink,
+  AudioStream,
+} from "./audio";
 import { Meter } from "./audio";
 import { Target, targetId } from "./ids";
 
@@ -141,14 +147,28 @@ const audioOf = (info: Info, list: List): Audio => {
   );
   const listed = (stream: Stream) =>
     !isAMixers(stream) && !isPlumbing(stream, plumbing);
+  const outputs: Side = {
+    at: (stream) => stream.sink,
+    device: Target.Output,
+    devices: list.sinks,
+    stream: Target.Playback,
+    streams: list.sink_inputs,
+  };
+  const inputs: Side = {
+    at: (stream) => stream.source,
+    device: Target.Input,
+    devices: list.sources,
+    stream: Target.Recording,
+    streams: list.source_outputs,
+  };
   return {
     cards: list.cards.map(card),
     inputs: list.sources.map((source) =>
-      device(source, Target.Input, info.default_source_name),
+      device(source, inputs, plumbing, info.default_source_name),
     ),
     meters: meters(list),
     outputs: list.sinks.map((sink) =>
-      device(sink, Target.Output, info.default_sink_name),
+      device(sink, outputs, plumbing, info.default_sink_name),
     ),
     playback: list.sink_inputs
       .filter(listed)
@@ -200,24 +220,77 @@ const meters = (list: List): ReadonlyMap<string, Meter> =>
     ),
   ]);
 
+/** One direction: outputs and their playback, or inputs and their recording. */
+type Side = {
+  device: Target;
+  stream: Target;
+  devices: readonly Device[];
+  streams: readonly Stream[];
+  /** The index of the device a stream plays to or records from. */
+  at: (stream: Stream) => number | undefined;
+};
+
 const device = (
   from: Device,
-  kind: Target,
+  side: Side,
+  plumbing: ReadonlySet<string>,
   defaultName: string | null | undefined,
-): AudioDevice => ({
-  default: defaultName === from.name,
-  description: from.description ?? from.name,
-  id: targetId(kind, from.name),
-  monitor: kind === Target.Input && isAMonitor(from),
-  muted: from.mute,
-  port: from.active_port ?? undefined,
-  ports: from.ports.map((port) => ({
-    available: port.availability !== "not available",
-    description: port.description,
-    name: port.name,
-  })),
-  volume: loudest(from.volume),
-});
+): AudioDevice => {
+  const monitor = side.device === Target.Input && isAMonitor(from);
+  // A monitor carries its sink's link group, but records the sink, not the
+  // filter's input chain.
+  const links = monitor ? [] : through(side, from, new Set([from.index]));
+  return {
+    default: defaultName === from.name,
+    description: from.description ?? from.name,
+    filtered: side.streams.some(
+      (stream) =>
+        isPlumbing(stream, plumbing) && side.at(stream) === from.index,
+    ),
+    id: targetId(side.device, from.name),
+    monitor,
+    muted: from.mute || links.some((link) => link.muted),
+    port: from.active_port ?? undefined,
+    ports: from.ports.map((port) => ({
+      available: port.availability !== "not available",
+      description: port.description,
+      name: port.name,
+    })),
+    through: links,
+    volume: loudest(from.volume),
+  };
+};
+
+/**
+ * What a filter's sound passes through: each stream in its link group, the
+ * device that stream plays to or records from, and that device's own links.
+ * `seen` holds the devices already in the chain, so a loop ends.
+ */
+const through = (
+  side: Side,
+  from: Device,
+  seen: ReadonlySet<number>,
+): AudioLink[] => {
+  const group = from.properties[LINK_GROUP];
+  return group === undefined
+    ? []
+    : side.streams
+        .filter((stream) => stream.properties[LINK_GROUP] === group)
+        .flatMap((stream) => {
+          const next = side.devices.find(
+            (candidate) => candidate.index === side.at(stream),
+          );
+          return [
+            { id: targetId(side.stream, stream.index), muted: stream.mute },
+            ...(next === undefined || seen.has(next.index)
+              ? []
+              : [
+                  { id: targetId(side.device, next.name), muted: next.mute },
+                  ...through(side, next, new Set([...seen, next.index])),
+                ]),
+          ];
+        });
+};
 
 /**
  * Whether a source monitors a sink. Uses `device.class` when the server sets

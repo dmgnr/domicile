@@ -10,6 +10,7 @@ can be configured without a project or build step. See
 ```sh
 domicile-builder (--entry <file> | --package <spec> | --evaluate <config>) \
   --domicile <install> --cache <dir>
+domicile-builder --serve <file> --socket <path> --domicile <install> --cache <dir>
 ```
 
 - **`--entry`**: build a local file, such as `~/.config/domicile/domicile.tsx`.
@@ -18,6 +19,10 @@ domicile-builder (--entry <file> | --package <spec> | --evaluate <config>) \
   `"domicile": { "shell": "…" }`, or build its entry.
 - **`--evaluate`**: run a config module and write every export except `Shell`
   and `options` as the compositor's JSON config.
+- **`--serve`**: serve a local file with Vite's dev server on the unix socket
+  `--socket`, for `domicile dev`, until stopped. Updates go out over
+  requests, since the shell's page cannot open a WebSocket
+  ([DOMICILE-SCHEME.md](../../docs/architecture/DOMICILE-SCHEME.md#dev-server)).
 - **`--domicile`**: Domicile's install, laid out like this repo:
   `packages/shell-manganese` with its `node_modules` and `styled-system`.
 
@@ -31,7 +36,10 @@ Each step is one JSON line on stdout. Other stdout lines are tool logs.
 {"step":"bundling"}
 {"cached":false,"module":"shell.js","root":"<cache>/<key>","step":"built"}
 {"cached":false,"config":"<cache>/configs/<key>.json","step":"evaluated"}
+{"module":"domicile-dev-shell.js","socket":"<socket>","step":"serving"}
 ```
+
+`serving` comes once the dev server listens; it then runs until stopped.
 
 On failure it prints `{"step":"failed","why":"…"}` and exits non-zero.
 

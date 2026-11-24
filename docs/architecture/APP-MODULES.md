@@ -41,6 +41,9 @@ With React, `mount(App)` from `@domicile-desktop/react/mount` is a `main`;
   fails to load, has no `main`, or whose `main` throws is reported on the page.
 - Packaging is a shell's ([SHELL-PACKAGING.md](/docs/SHELL-PACKAGING.md)),
   without the forced CSP. An app that wants a CSP sets one.
+- Cross-origin isolated with no headers, as the shell is: `SharedArrayBuffer`
+  works and nothing is checked for CORP
+  ([DOMICILE-SCHEME.md](DOMICILE-SCHEME.md#cross-origin-isolation)).
 
 ### Origin
 

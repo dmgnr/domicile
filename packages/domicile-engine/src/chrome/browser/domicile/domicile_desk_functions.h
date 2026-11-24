@@ -29,9 +29,10 @@ namespace domicile {
 //   windows.remove                a popup window's tab, the same way. The
 //                                 desk's own window is refused
 //   tabs.setZoom, getZoom         the guest's zoom, as its element's setZoom
-//                                 sets it: per site, through HostZoomMap
-//   tabs.getZoomSettings,         automatic and per-origin, the guest's one
-//   setZoomSettings               mode; setting any other is refused
+//                                 sets it: per site, through HostZoomMap, or
+//                                 per tab in its zoom mode
+//   tabs.getZoomSettings,         the guest's zoom mode, which Chrome's
+//   setZoomSettings               ZoomController keeps, as for a Chrome tab
 //   windows.get, getCurrent,      the desk's window and its popup windows.
 //   getLastFocused, getAll        "Current" is the caller's tab's window, or
 //                                 the desk's for a caller in no tab

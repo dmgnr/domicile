@@ -3,6 +3,7 @@
 
 module domicile.mojom;
 
+import "mojo/public/mojom/base/time.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
 
 enum PointerAxisSource { kWheel, kFinger, kContinuous, kWheelTilt };
@@ -220,6 +221,15 @@ struct DisplayInfo {
   // `unsupported`, `off` or `on`, as the wire spells it. The browser maps any
   // other value to `unsupported`.
   string adaptive_sync;
+  // Whether the monitor is driven in HDR10: `unsupported`, `off` or `on`, as
+  // the wire spells it. The browser maps any other value to `unsupported`.
+  string hdr;
+  // The panel's peak luminance from its EDID in cd/m², or zero when it
+  // reports none.
+  uint32 peak_luminance;
+  // While `hdr` is `on`, the luminance SDR white is shown at in cd/m²; zero
+  // otherwise.
+  uint32 sdr_white;
   DisplayTransform transform;
 };
 
@@ -280,6 +290,9 @@ struct ClipboardEntry {
   // A small picture of an image with no text, as a PNG `data:` URL. Empty for
   // text, and for an image the compositor could not read.
   string thumbnail;
+  // What the clipboard holds. Only the newest row can be, and none is once
+  // RemoveClipboardEntry removes it.
+  bool current;
 };
 
 // One icon in the system tray: an application's StatusNotifierItem, as the
@@ -392,6 +405,10 @@ interface ControlChannel {
   // which the page never sees.
   CopyClipboardEntry(uint32 entry);
 
+  // Drop a row of the clipboard's history and the copy it holds. Removing the
+  // current row also empties the clipboard.
+  RemoveClipboardEntry(uint32 entry);
+
   // Click an icon in the system tray. `id` is one a Tray message carried. What
   // the click does is the application's.
   ActivateTrayItem(string id, TrayAction action);
@@ -499,12 +516,13 @@ interface ControlChannel {
   // This page no longer wants `grab`. See DeskGestures::Ungrab.
   UngrabGesture(GestureGrab grab);
 
-  // A tap of `modifier` alone to hand the page, as `Meta` for a tap of
-  // Super. Under a shortcuts inhibitor it is the window's unless
-  // `while_inhibited`. It stops in the browser process, in DeskModifierTaps,
-  // which hears every key aura does. A second grab sets `while_inhibited`
-  // anew: the page counts its own grabs and sends what they add up to.
-  GrabModifierTap(TapModifier modifier, bool while_inhibited);
+  // A tap of `modifier` alone, held no longer than `longest`, to hand the
+  // page, as `Meta` for a tap of Super. Under a shortcuts inhibitor it is the
+  // window's unless `while_inhibited`. It stops in the browser process, in
+  // DeskModifierTaps, which hears every key aura does. A second grab sets
+  // both anew: the page counts its own grabs and sends what they add up to.
+  GrabModifierTap(TapModifier modifier, bool while_inhibited,
+                  mojo_base.mojom.TimeDelta longest);
 
   // This page no longer wants taps of `modifier`.
   UngrabModifierTap(TapModifier modifier);
@@ -530,6 +548,15 @@ interface ControlChannel {
   // this process can. See `PointerAlreadyOver`.
   WarpPointer(double x, double y, gfx.mojom.RectF? unless_over);
 
+  // Keep a hand's pointer inside `boxes`, in the page's coordinates, for a
+  // game that confined it to its window; none lets it go. Stops in the
+  // browser process for WarpPointer's reason: the pointer is this process's.
+  // A box may reach onto any monitor the page spans. `confined` is false
+  // where the platform cannot hold the pointer: a nested desktop, whose
+  // pointer is the host session's, or a headless one, whose pointer the
+  // compositor moves. The browser lets go when the page goes away.
+  ConfinePointer(array<gfx.mojom.RectF> boxes) => (bool confined);
+
   // The shell's module ran: its `Shell` returned. Or it did not, and `why` is
   // what the page's error screen says. `serial` is the ShellSource serial the
   // document names, so the browser hears only the page it served. Sent once
@@ -548,9 +575,12 @@ interface ControlChannel {
   // at the desk.
   PointerMotion(string app_id, double x, double y, bool moved);
   // How far a hand moved the pointer over `app_id`, in its surface-local
-  // units, after the PointerMotion that took it there. Not sent for a still
-  // pointer or a shell's warp. For zwp_relative_pointer_v1.
-  PointerRelative(string app_id, double dx, double dy);
+  // units, after the PointerMotion that took it there: `dx`/`dy` after pointer
+  // acceleration, `dx_unaccel`/`dy_unaccel` before it. A device that reports
+  // no unaccelerated motion gives the accelerated deltas for both. Not sent
+  // for a still pointer or a shell's warp. For zwp_relative_pointer_v1.
+  PointerRelative(string app_id, double dx, double dy, double dx_unaccel,
+                  double dy_unaccel);
   // The page took (`active`) or let go of the pointer for `app_id`'s ask to
   // lock or confine it (AppPointerConstraint). Only then is the client told.
   PointerConstrained(string app_id, bool active);
@@ -618,8 +648,11 @@ interface ControlChannelClient {
 
   // The window under the pointer asked to lock or confine it, or null once
   // that ask ended: the client withdrew it or the pointer left the window.
-  // The page answers with PointerConstrained.
-  AppPointerConstraint(string app_id, PointerConstraint? constraint);
+  // The page answers with PointerConstrained. `region` is the part of the
+  // window the ask holds to, as boxes in the window's own coordinates; null
+  // for all of it, and always null with no constraint.
+  AppPointerConstraint(string app_id, PointerConstraint? constraint,
+                       array<gfx.mojom.RectF>? region);
 
   // The compositor marked a window `suspended`, or cleared it.
   AppSuspended(string app_id, bool suspended);
@@ -662,9 +695,9 @@ interface ControlChannelClient {
   // socket.
   GesturePerformed(Gesture gesture);
 
-  // `modifier` was tapped alone, and this page grabbed it. Matched in the
-  // browser process (DeskModifierTaps), like a gesture.
-  ModifierTapped(TapModifier modifier);
+  // `modifier` was tapped alone, held `held`, and this page grabbed it.
+  // Matched in the browser process (DeskModifierTaps), like a gesture.
+  ModifierTapped(TapModifier modifier, mojo_base.mojom.TimeDelta held);
 
   // The seat's modifier state. One seat, outliving every window, which is why
   // a dropped key release latches modifiers into clients that never saw it.

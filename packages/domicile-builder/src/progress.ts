@@ -8,6 +8,7 @@ export enum StepKind {
   Bundling,
   Built,
   Evaluated,
+  Serving,
   Failed,
 }
 
@@ -36,6 +37,15 @@ export const Step = {
   }),
   /** Reading what the entry imports. */
   Resolving: () => ({ kind: StepKind.Resolving as const }),
+  /**
+   * The entry is served with hot module replacement; the engine serves
+   * `module` from the dev server listening on `socket`.
+   */
+  Serving: (socket: string, module: string) => ({
+    kind: StepKind.Serving as const,
+    module,
+    socket,
+  }),
 };
 
 export type Step = ReturnType<(typeof Step)[keyof typeof Step]>;
@@ -68,6 +78,13 @@ export const line = (step: Step): string => {
         cached: step.cached,
         config: step.config,
         step: "evaluated",
+      });
+    }
+    case StepKind.Serving: {
+      return JSON.stringify({
+        module: step.module,
+        socket: step.socket,
+        step: "serving",
       });
     }
     case StepKind.Failed: {

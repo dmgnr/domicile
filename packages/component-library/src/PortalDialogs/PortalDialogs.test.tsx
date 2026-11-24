@@ -32,6 +32,7 @@ import userEvent from "@testing-library/user-event";
 
 import { token } from "../../styled-system/tokens";
 import { Button } from "../Button/Button";
+import { ModalDialog } from "../ModalDialog/ModalDialog";
 import { DisplayProvider } from "../Screen/DisplayProvider";
 import type { DisplaySource } from "../Screen/display-source";
 import type { DialogDesktop, PortalDialogsDesktop } from "./PortalDialogs";
@@ -429,13 +430,26 @@ const browserWindow = (id: string, title: string) => ({
   id,
   isApp: false,
   isCaptured: false,
+  isHidden: false,
   isPrivate: false,
+  menu: null,
+  menuBarAutoHide: false,
+  menuBarVisible: true,
+  messageBox: null,
+  parent: null,
   partition: "",
+  popupMenu: null,
   popupWindow: null,
+  profile: "default",
   title,
   toplevelId: null,
   url: "https://example.com",
+  wantsFullscreen: false,
+  wantsMaximized: false,
+  wantsMinimized: false,
   width: 0,
+  x: 0,
+  y: 0,
 });
 
 /** Draws `element` 150x50 at (10, 20), as layout would. */
@@ -465,6 +479,25 @@ const dragOnScreen = (
   fireEvent.pointerDown(page, { clientX: from[0], clientY: from[1] });
   fireEvent.pointerMove(page, { clientX: to[0], clientY: to[1] });
   fireEvent.pointerUp(page, { clientX: to[0], clientY: to[1] });
+};
+
+/**
+ * A browser window's `<webview>`, focused as when its page has the keyboard.
+ * Keys sent to a focused page never reach the document.
+ */
+/** Ends `element`'s transition of `propertyName`. */
+const transitionEnd = (element: Element, propertyName: string): void => {
+  const event = new Event("transitionend", { bubbles: true });
+  Object.defineProperty(event, "propertyName", { value: propertyName });
+  fireEvent(element, event);
+};
+
+const focusedPage = (): HTMLElement => {
+  const page = document.createElement("webview");
+  page.tabIndex = -1;
+  document.body.append(page);
+  page.focus();
+  return page;
 };
 
 /** The selected area's handle at `corner`, which has no role to find it by. */
@@ -865,6 +898,22 @@ describe("PortalDialogs", () => {
 
       await waitFor(() => {
         expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      });
+    });
+
+    it("animates out as the request goes", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([access(1)]);
+      host.push([]);
+
+      expect(screen.getByRole("dialog", { hidden: true })).toHaveAttribute(
+        "data-closed",
+      );
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("dialog", { hidden: true }),
+        ).not.toBeInTheDocument();
       });
     });
 
@@ -1437,6 +1486,203 @@ describe("PortalDialogs", () => {
     });
   });
 
+  describe("agent", () => {
+    const agent = (id: number) => ({
+      app_id: "",
+      body: {
+        agent: "Claude Code",
+        windows: [
+          { id: "n1", kind: "native", title: "Notes" },
+          { id: "w1", kind: "browser", title: "Pull requests" },
+          { id: "n2", kind: "native", title: "" },
+        ],
+      },
+      id,
+      kind: "agent",
+    });
+
+    it("asks in the agent's own name, offering the entire desktop first", () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([agent(1)]);
+
+      expect(screen.getByRole("dialog")).toHaveTextContent(
+        "Let Claude Code use your desktop?",
+      );
+      expect(
+        screen.getByRole("radio", { name: /Entire desktop/u }),
+      ).toBeChecked();
+      expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    });
+
+    it("lets the entire desktop in", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([agent(1)]);
+      await userEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+      expect(host.answers).toEqual([
+        [1, { kind: "agent", reach: { type: "desk" } }],
+      ]);
+    });
+
+    it("lists the windows, none checked, under only these windows", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([agent(1)]);
+      await userEvent.click(
+        screen.getByRole("radio", { name: /Only these windows/u }),
+      );
+
+      const windows = screen.getAllByRole("checkbox");
+      expect(windows.map((window) => window.textContent)).toEqual([
+        "NotesWindow",
+        "Pull requestsBrowser",
+        "Untitled windowWindow",
+      ]);
+      for (const window of windows) {
+        expect(window).not.toBeChecked();
+      }
+      expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
+      expect(screen.getByRole("dialog")).toHaveTextContent(
+        "Private windows are never shared.",
+      );
+    });
+
+    it("lets only the checked windows in", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([agent(1)]);
+      await userEvent.click(
+        screen.getByRole("radio", { name: /Only these windows/u }),
+      );
+      await userEvent.click(
+        screen.getByRole("checkbox", { name: /Pull requests/u }),
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+      expect(host.answers).toEqual([
+        [
+          1,
+          {
+            kind: "agent",
+            reach: {
+              type: "windows",
+              windows: [{ id: "w1", kind: "browser", title: "Pull requests" }],
+            },
+          },
+        ],
+      ]);
+    });
+
+    it("cancels", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([agent(1)]);
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(host.answers).toEqual([[1, { kind: "canceled" }]]);
+    });
+
+    it("remembers an agent let into the entire desktop, when asked to", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([agent(1)]);
+      const remember = screen.getByRole("switch", {
+        name: "Remember for Claude Code",
+      });
+      expect(remember).not.toBeChecked();
+      await userEvent.click(remember);
+      await userEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+      expect(host.answers).toEqual([
+        [1, { kind: "agent", reach: { type: "desk" }, remember: true }],
+      ]);
+    });
+
+    it("offers no remembering for only some windows", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([agent(1)]);
+      await userEvent.click(
+        screen.getByRole("radio", { name: /Only these windows/u }),
+      );
+
+      expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    });
+
+    it("changes an agent from what it reaches now, and saves", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      const asked = agent(1);
+      host.push([
+        {
+          ...asked,
+          body: {
+            ...asked.body,
+            current: {
+              type: "windows",
+              windows: [{ id: "n1", kind: "native", title: "Notes" }],
+            },
+          },
+        },
+      ]);
+
+      expect(screen.getByRole("dialog")).toHaveTextContent(
+        "Change what Claude Code can use",
+      );
+      expect(
+        screen.getByRole("radio", { name: /Only these windows/u }),
+      ).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: /Notes/u })).toBeChecked();
+      await userEvent.click(screen.getByRole("radio", { name: /Entire/u }));
+      expect(
+        screen.getByRole("switch", { name: "Remember for Claude Code" }),
+      ).not.toBeChecked();
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(host.answers).toEqual([
+        [1, { kind: "agent", reach: { type: "desk" } }],
+      ]);
+    });
+
+    it("starts a remembered agent's change with Remember on", () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      const asked = agent(1);
+      host.push([
+        {
+          ...asked,
+          body: { ...asked.body, current: { type: "desk" }, remembered: true },
+        },
+      ]);
+
+      expect(
+        screen.getByRole("switch", { name: "Remember for Claude Code" }),
+      ).toBeChecked();
+    });
+
+    it("is listed while in control, unless the shell shows agents itself", async () => {
+      const session = {
+        app_id: "",
+        body: { actions: [], agent: "Claude Code", reach: { type: "desk" } },
+        id: 9,
+        kind: "agent",
+      };
+      const host = new FakeHost();
+      const { rerender } = render(<PortalDialogs domicile={host.domicile} />);
+      host.push([], [session]);
+      expect(screen.getByRole("listitem")).toHaveTextContent(
+        "In control: Claude Code — your desktop",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Change" }));
+      expect(host.answers).toEqual([[9, { kind: "change" }]]);
+
+      rerender(<PortalDialogs domicile={host.domicile} omitAgents />);
+      expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+    });
+  });
+
   describe("input capture", () => {
     it("names the application and the devices it would take", () => {
       const host = new FakeHost();
@@ -1753,6 +1999,30 @@ describe("PortalDialogs", () => {
       expect(within(blank).queryByRole("presentation")).not.toBeInTheDocument();
     });
 
+    it("names an app window by its app, with the app's icon over its page's", async () => {
+      const host = new FakeHost();
+      host.fake.set({
+        browserWindows: [
+          { ...browserWindow("1", "Notes"), appId: "firefox", isApp: true },
+        ],
+      });
+      const element = iconed("1", "data:image/png;base64,page");
+      render(<PortalDialogs domicile={host.with(desktop())} />);
+      host.push([frozen(1, "screenshot")]);
+
+      const notes = await screen.findByRole("radio", {
+        name: "Firefox: Notes",
+      });
+      // The radio can carry the app's name before the app's icon has loaded,
+      // while it still shows the page's (seen in CI).
+      await waitFor(() => {
+        expect(
+          within(notes).getByRole("presentation").getAttribute("src"),
+        ).toStartWith("data:image/svg+xml");
+      });
+      element.remove();
+    });
+
     it("saves a window the shell shows from its own frame, without what is over it", async () => {
       const host = new FakeHost();
       render(
@@ -2046,6 +2316,17 @@ describe("PortalDialogs", () => {
       ]);
     });
 
+    it("copies nothing more with Ctrl+C as it animates out", async () => {
+      const host = new FakeHost();
+      render(<PortalDialogs domicile={host.domicile} />);
+      host.push([frozen(1, "screenshot")]);
+      await userEvent.keyboard("{Control>}c{/Control}");
+      host.push([]);
+      fireEvent.keyDown(document, { ctrlKey: true, key: "c" });
+
+      expect(host.answers).toHaveLength(1);
+    });
+
     it("copies an area dragged on the desk with Ctrl+C", async () => {
       const host = new FakeHost();
       render(<PortalDialogs domicile={host.domicile} />);
@@ -2173,23 +2454,170 @@ describe("PortalDialogs", () => {
 
       it("takes the keyboard from the window focused before", async () => {
         const host = new FakeHost();
-        render(
-          <>
-            <button type="button">Window</button>
-            <PortalDialogs domicile={host.domicile} />
-          </>,
-        );
-        screen.getByRole("button", { name: "Window" }).focus();
+        const page = focusedPage();
+        render(<PortalDialogs domicile={host.domicile} />);
         host.push([frozen(1, "screenshot")]);
         await userEvent.click(
           screen.getByRole("button", { name: "Select on screen" }),
         );
-        const page = screen.getByRole("application", {
+
+        expect(
+          screen.getByRole("application", { name: "Drag to select an area" }),
+        ).toHaveFocus();
+        page.remove();
+      });
+
+      it("takes the keyboard back from a window's page", async () => {
+        const host = new FakeHost();
+        const page = focusedPage();
+        render(<PortalDialogs domicile={host.domicile} />);
+        host.push([frozen(1, "screenshot")]);
+        await userEvent.click(
+          screen.getByRole("button", { name: "Select on screen" }),
+        );
+        page.focus();
+
+        expect(
+          screen.getByRole("application", { name: "Drag to select an area" }),
+        ).toHaveFocus();
+        page.remove();
+      });
+
+      it("fades the dialog out as the picker comes up", () => {
+        const host = new FakeHost();
+        render(<PortalDialogs domicile={host.domicile} />);
+        host.push([frozen(1, "screenshot")]);
+        fireEvent.click(
+          screen.getByRole("button", { name: "Select on screen" }),
+        );
+
+        expect(screen.getByRole("dialog", { hidden: true })).toHaveAttribute(
+          "data-closed",
+        );
+        expect(
+          screen.getByRole("application", { name: "Drag to select an area" }),
+        ).toBeInTheDocument();
+      });
+
+      it("draws over a dialog already up, such as the launcher", async () => {
+        const host = new FakeHost();
+        render(
+          <>
+            <ModalDialog open title="Launcher">
+              <input aria-label="Search" />
+            </ModalDialog>
+            <PortalDialogs domicile={host.domicile} />
+          </>,
+        );
+        host.push([frozen(1, "screenshot")]);
+        await userEvent.click(
+          await screen.findByRole("button", { name: "Select on screen" }),
+        );
+        const picker = screen.getByRole("application", {
           name: "Drag to select an area",
         });
-        await userEvent.pointer({ keys: "[MouseLeft]", target: page });
+        const launcher = screen.getByRole("dialog", {
+          hidden: true,
+          name: "Launcher",
+        });
+
+        // Last on the body, so it stacks above the launcher's layer.
+        expect(picker.parentElement).toBe(document.body);
+        expect(
+          launcher.compareDocumentPosition(picker) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      });
+
+      it("fades out on Escape, then shows the dialog", async () => {
+        const host = new FakeHost();
+        render(<PortalDialogs domicile={host.domicile} />);
+        host.push([frozen(1, "screenshot")]);
+        await userEvent.click(
+          screen.getByRole("button", { name: "Select on screen" }),
+        );
+        // Taken while up: the dialog back over it hides it from the tree.
+        const picker = screen.getByRole("application", {
+          name: "Drag to select an area",
+        });
+        await userEvent.keyboard("{Escape}");
+
+        expect(picker).toHaveAttribute("data-leaving");
+        transitionEnd(picker, "opacity");
+        expect(picker).not.toBeInTheDocument();
+        expect(
+          await screen.findByRole("button", { name: "Select on screen" }),
+        ).toBeInTheDocument();
+      });
+
+      it("fades out once answered", async () => {
+        const host = new FakeHost();
+        render(<PortalDialogs domicile={host.domicile} />);
+        host.push([frozen(1, "screenshot")]);
+        await userEvent.click(
+          screen.getByRole("button", { name: "Select on screen" }),
+        );
+        host.push([]);
+        const picker = screen.getByRole("application", {
+          hidden: true,
+          name: "Drag to select an area",
+        });
+
+        expect(picker).toHaveAttribute("data-leaving");
+        transitionEnd(picker, "opacity");
+        expect(picker).not.toBeInTheDocument();
+        expect(
+          screen.queryByRole("dialog", { hidden: true }),
+        ).not.toBeInTheDocument();
+      });
+
+      it("copies nothing more with Ctrl+C as it fades out", async () => {
+        const host = new FakeHost();
+        render(<PortalDialogs domicile={host.domicile} />);
+        host.push([frozen(1, "screenshot")]);
+        await userEvent.click(
+          screen.getByRole("button", { name: "Select on screen" }),
+        );
+        dragOnScreen([0, 10], [40, 30]);
+        await userEvent.keyboard("{Control>}c{/Control}");
+        host.push([]);
+        fireEvent.keyDown(document, { ctrlKey: true, key: "c" });
+
+        expect(host.answers).toHaveLength(1);
+      });
+
+      it("lets a window's page have the keyboard back as it fades out", async () => {
+        const host = new FakeHost();
+        const page = focusedPage();
+        render(<PortalDialogs domicile={host.domicile} />);
+        host.push([frozen(1, "screenshot")]);
+        await userEvent.click(
+          screen.getByRole("button", { name: "Select on screen" }),
+        );
+        host.push([]);
+        page.focus();
 
         expect(page).toHaveFocus();
+        page.remove();
+      });
+
+      it("leaves focus that moves to the shell", async () => {
+        const host = new FakeHost();
+        render(
+          <>
+            <input aria-label="Passphrase" />
+            <PortalDialogs domicile={host.domicile} />
+          </>,
+        );
+        host.push([frozen(1, "screenshot")]);
+        await userEvent.click(
+          screen.getByRole("button", { name: "Select on screen" }),
+        );
+        screen.getByRole("textbox", { name: "Passphrase" }).focus();
+
+        expect(
+          screen.getByRole("textbox", { name: "Passphrase" }),
+        ).toHaveFocus();
       });
     });
 
@@ -3128,12 +3556,15 @@ describe("screen cast", () => {
         displays: [
           {
             adaptiveSync: "unsupported",
+            hdr: "unsupported",
             height: 1080,
             modeHeight: 1080,
             modeWidth: 1920,
             name: "drm-2",
+            peakLuminance: 0,
             refreshMhz: 60_000,
             scale: 1,
+            sdrWhite: 0,
             transform: "normal",
             width: 1920,
             x: 0,

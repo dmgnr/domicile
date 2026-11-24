@@ -8,6 +8,7 @@ import { gfm } from "micromark-extension-gfm";
 import { css } from "../../styled-system/css";
 import { CodeBlock } from "../code/CodeBlock";
 import type { Language } from "../code/highlight";
+import { Carousel } from "../media/Carousel";
 import { Media } from "../media/Media";
 import { DocTabs } from "./DocTabs";
 import type { Routed } from "./links";
@@ -105,7 +106,23 @@ const Node = ({ node, context }: { node: RootContent; context: Context }) => {
       );
     }
     case "paragraph": {
-      return <p className={paragraphStyles}>{nodes(node.children, context)}</p>;
+      const pictures = node.children.filter((child) => child.type === "image");
+      const onlyPictures = node.children.every(
+        (child) =>
+          child.type === "image" ||
+          (child.type === "text" && child.value.trim() === ""),
+      );
+      return onlyPictures && pictures.length > 1 ? (
+        <Carousel
+          slides={pictures.map((picture) => ({
+            caption: picture.alt ?? "",
+            key: picture.url,
+            media: <Node context={context} node={picture} />,
+          }))}
+        />
+      ) : (
+        <p className={paragraphStyles}>{nodes(node.children, context)}</p>
+      );
     }
     case "text": {
       return node.value;

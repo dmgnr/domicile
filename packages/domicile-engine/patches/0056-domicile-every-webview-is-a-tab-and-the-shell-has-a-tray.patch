@@ -33,7 +33,7 @@ and both blobs are that file's.
  3 files changed, 37 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index aa74f14..78dc322 100644
+index 1ccf46e..42092d7 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -6,7 +6,9 @@
@@ -46,7 +46,7 @@ index aa74f14..78dc322 100644
  #include "components/domicile/browser/color_scheme.h"
  #include "components/domicile/browser/control_channel.h"
  #include "components/domicile/browser/keyboard_layout.h"
-@@ -603,7 +605,32 @@ void PopulateChromeFrameBinders(
+@@ -635,7 +637,32 @@ void PopulateChromeFrameBinders(
                "domicile: only a domicile:// document may ask for a guest.");
            return;
          }
@@ -81,7 +81,7 @@ index aa74f14..78dc322 100644
  
    map->Add<image_annotation::mojom::Annotator>(&BindImageAnnotator);
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index f415fa5..0f54421 100644
+index 5e88845..cadd117 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -285,6 +285,8 @@ generated_dictionary_sources_in_modules = [
@@ -93,7 +93,7 @@ index f415fa5..0f54421 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_file_preview_event_init.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_file_preview_event_init.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_files_event_init.cc",
-@@ -2364,6 +2366,10 @@ generated_interface_sources_in_modules = [
+@@ -2368,6 +2370,10 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_clipboard_entry.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_clipboard_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_clipboard_event.h",

@@ -1,10 +1,11 @@
-//! Files, watches, processes, D-Bus, screenshots, shell commands, idle
+//! Files, watches, processes, D-Bus, screenshots, shell commands, links, idle
 //! watches and holds, the lock's refusals, window states and keymaps for one
 //! chrome connection.
 //! The compositor takes the screenshots ([`System::screenshotting_with`]),
 //! sets window states ([`System::setting_window_states_with`]), adds virtual
 //! monitors ([`System::adding_virtual_monitors_with`]), shares the
-//! shell commands ([`System::sharing_shell_commands`]), idle watches
+//! shell commands ([`System::sharing_shell_commands`]), the pages that open
+//! links ([`System::sharing_links`]), idle watches
 //! ([`System::sharing_idle_watches`]), idle holds
 //! ([`System::sharing_idle_holds`]) and window requests
 //! ([`System::sharing_window_requests`]) between connections, sends the
@@ -26,15 +27,16 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use domicile_protocol::{
-    Bus, DirEntry, FileType, HostMessage, InhibitorAction, KeymapChoice, PreviewedWindow, Scale,
-    Signal, Stream, SystemEnd, SystemError, SystemErrorKind, SystemEvent, SystemReply,
-    SystemRequest, WindowState,
+    AgentReach, Bus, DirEntry, FileType, HostMessage, InhibitorAction, KeymapChoice, KnownAgents,
+    PreviewedWindow, Scale, Signal, Stream, SystemEnd, SystemError, SystemErrorKind, SystemEvent,
+    SystemReply, SystemRequest, WindowState,
 };
 use notify::{EventKindMask, RecursiveMode, Watcher};
 use zbus::blocking::{Connection, MessageIterator};
@@ -47,6 +49,7 @@ use crate::fanout::Listener;
 use crate::idle_holds::{self, IdleHolds};
 use crate::idle_watches::{IdleWatches, Mark};
 use crate::keymaps::Keymaps;
+use crate::links::Links;
 use crate::lock_screen_readouts::is_a_readout;
 use crate::priority;
 use crate::shell_commands::ShellCommands;
@@ -93,6 +96,8 @@ pub struct System {
     preview: Option<Preview>,
     /// The pages that hear a `SystemRequest::SendShell`.
     shell_commands: ShellCommands,
+    /// The pages that open links, by scheme.
+    links: Links,
     /// The pages watching for the desk to go idle.
     idle_watches: IdleWatches,
     /// What holds the desktop awake, and the pages that hear it change.
@@ -113,6 +118,8 @@ pub struct System {
     shortcuts_inhibitor: Option<ShortcutsInhibitor>,
     /// Adds virtual monitors; `None` on a system that adds none.
     add_virtual_monitor: Option<AddVirtualMonitor>,
+    /// Lets agents in; `None` on a system that lets none in.
+    agents: Option<Arc<dyn Agents>>,
     /// Sets every monitor's white point; `None` on a system that sets none.
     set_white_point: Option<SetWhitePoint>,
     /// Turns the monitors off and on; `None` on a system that powers none.
@@ -146,6 +153,57 @@ pub trait MonitorLease: Send {
     /// Gives the monitor a new mode. See
     /// [`SystemRequest::ResizeVirtualMonitor`].
     fn resize(&self, size: (u32, u32), refresh_mhz: u32, scale: Scale);
+}
+
+/// Why a system with no [`Agents`] refuses one.
+fn no_agents() -> SystemError {
+    SystemError {
+        kind: SystemErrorKind::Other,
+        message: "this desktop lets in no agents".into(),
+    }
+}
+
+/// The agents the desk lets in. See `docs/AGENTS.md`.
+pub trait Agents: Send + Sync {
+    /// Asks the user whether agent `agent` may see and use the desk, unless
+    /// it is remembered, and lists it while it may. Blocks while the user
+    /// decides. See [`SystemRequest::Agent`].
+    fn let_in(&self, agent: String, told: AgentTold) -> Result<LetIn, SystemError>;
+    /// The agents let in now and those remembered. See
+    /// [`SystemRequest::Agents`].
+    fn known(&self) -> KnownAgents;
+    /// Ends agent session `session`, as the shell's stop does.
+    fn stop(&self, session: u32) -> Result<(), SystemError>;
+    /// Makes the remembered agent `agent` ask again next time.
+    fn forget(&self, agent: &str) -> Result<(), SystemError>;
+}
+
+/// How an agent let in hears what the user does to it.
+pub struct AgentTold {
+    /// Runs once when the user stops it.
+    pub stopped: AgentStopped,
+    /// Runs each time the user changes what it may reach.
+    pub changed: AgentChanged,
+}
+
+/// Runs once when the user stops an agent.
+pub type AgentStopped = Box<dyn FnOnce() + Send>;
+
+/// Runs each time the user changes what an agent may reach.
+pub type AgentChanged = Box<dyn Fn(AgentReach) + Send + Sync>;
+
+/// An agent the user let in.
+pub struct LetIn {
+    pub reach: AgentReach,
+    pub lease: Box<dyn AgentLease>,
+}
+
+/// A page's hold on the agent it let in, which takes it off the shell's list
+/// when dropped.
+pub trait AgentLease: Send {
+    /// Lists `said` as what the agent did last. See
+    /// [`SystemRequest::AgentDid`].
+    fn did(&self, said: String);
 }
 
 /// Switches every keyboard to the keymap a page chose.
@@ -215,6 +273,8 @@ enum Running {
     Listening(Listener),
     /// The page's virtual monitor, removed when this drops.
     VirtualMonitor(Box<dyn MonitorLease>),
+    /// The agent the page let in, taken off the shell's list when this drops.
+    Agent(Box<dyn AgentLease>),
 }
 
 /// What [`System::handle`] did with a request.
@@ -267,9 +327,10 @@ pub enum Reach {
 /// calls `crate::lock_screen_readouts` lists.
 pub fn reach(request: &SystemRequest) -> Reach {
     match request {
-        SystemRequest::Unwatch | SystemRequest::CloseStdin | SystemRequest::Kill { .. } => {
-            Reach::Stops
-        }
+        SystemRequest::Unwatch
+        | SystemRequest::CloseStdin
+        | SystemRequest::Kill { .. }
+        | SystemRequest::StopAgent { .. } => Reach::Stops,
         SystemRequest::ReadFile { path, .. }
         | SystemRequest::ReadDir { path }
         | SystemRequest::Stat { path }
@@ -290,7 +351,10 @@ pub fn reach(request: &SystemRequest) -> Reach {
             true => Reach::Readout,
             false => Reach::Acts,
         },
-        SystemRequest::ShellCommands
+        // Answering a command is part of listening for it.
+        SystemRequest::ShellCommands { .. }
+        | SystemRequest::AnswerShellCommand { .. }
+        | SystemRequest::ClaimLinks { .. }
         | SystemRequest::IdleAfter { .. }
         | SystemRequest::IdleBeforeBlanking { .. }
         | SystemRequest::IdleHolds
@@ -313,7 +377,12 @@ pub fn reach(request: &SystemRequest) -> Reach {
         | SystemRequest::ScreenRecord
         | SystemRequest::PreviewWindow { .. }
         | SystemRequest::SendShell { .. }
-        | SystemRequest::VirtualMonitor { .. } => Reach::Acts,
+        | SystemRequest::OpenLink { .. }
+        | SystemRequest::VirtualMonitor { .. }
+        | SystemRequest::Agent { .. }
+        | SystemRequest::AgentDid { .. }
+        | SystemRequest::Agents
+        | SystemRequest::ForgetAgent { .. } => Reach::Acts,
     }
 }
 
@@ -337,7 +406,10 @@ pub fn locked_out(id: u32, request: &SystemRequest) -> Option<HostMessage> {
         | SystemRequest::Screenshot { .. }
         | SystemRequest::ScreenRecord
         | SystemRequest::PreviewWindow { .. }
-        | SystemRequest::ShellCommands
+        | SystemRequest::ShellCommands { .. }
+        | SystemRequest::AnswerShellCommand { .. }
+        | SystemRequest::ClaimLinks { .. }
+        | SystemRequest::OpenLink { .. }
         | SystemRequest::IdleAfter { .. }
         | SystemRequest::IdleBeforeBlanking { .. }
         | SystemRequest::IdleHolds
@@ -350,6 +422,10 @@ pub fn locked_out(id: u32, request: &SystemRequest) -> Option<HostMessage> {
         | SystemRequest::WindowRequests
         | SystemRequest::Bells
         | SystemRequest::VirtualMonitor { .. }
+        | SystemRequest::Agent { .. }
+        | SystemRequest::Agents
+        | SystemRequest::StopAgent { .. }
+        | SystemRequest::ForgetAgent { .. }
         | SystemRequest::Keymaps
         | SystemRequest::SelectKeymap { .. }
         | SystemRequest::ShortcutsInhibitor { .. } => Some(HostMessage::SystemReply {
@@ -365,7 +441,8 @@ pub fn locked_out(id: u32, request: &SystemRequest) -> Option<HostMessage> {
         | SystemRequest::Stdin { .. }
         | SystemRequest::CloseStdin
         | SystemRequest::Kill { .. }
-        | SystemRequest::ResizeVirtualMonitor { .. } => None,
+        | SystemRequest::ResizeVirtualMonitor { .. }
+        | SystemRequest::AgentDid { .. } => None,
     }
 }
 
@@ -392,8 +469,11 @@ pub fn refused_to_an_app(id: u32, request: &SystemRequest) -> Option<HostMessage
         SystemRequest::Screenshot { .. }
         | SystemRequest::ScreenRecord
         | SystemRequest::PreviewWindow { .. }
-        | SystemRequest::ShellCommands
+        | SystemRequest::ShellCommands { .. }
+        | SystemRequest::AnswerShellCommand { .. }
         | SystemRequest::SendShell { .. }
+        | SystemRequest::ClaimLinks { .. }
+        | SystemRequest::OpenLink { .. }
         | SystemRequest::IdleAfter { .. }
         | SystemRequest::IdleBeforeBlanking { .. }
         | SystemRequest::IdleHolds
@@ -406,6 +486,11 @@ pub fn refused_to_an_app(id: u32, request: &SystemRequest) -> Option<HostMessage
         | SystemRequest::Bells
         | SystemRequest::VirtualMonitor { .. }
         | SystemRequest::ResizeVirtualMonitor { .. }
+        | SystemRequest::Agent { .. }
+        | SystemRequest::AgentDid { .. }
+        | SystemRequest::Agents
+        | SystemRequest::StopAgent { .. }
+        | SystemRequest::ForgetAgent { .. }
         | SystemRequest::Keymaps
         | SystemRequest::SelectKeymap { .. }
         | SystemRequest::ShortcutsInhibitor { .. } => Some(HostMessage::SystemReply {
@@ -447,6 +532,7 @@ impl System {
             screen_record: None,
             preview: None,
             shell_commands: ShellCommands::default(),
+            links: Links::default(),
             idle_watches: IdleWatches::new(|| {}),
             idle_holds: IdleHolds::default(),
             unlock_refusals: UnlockRefusals::default(),
@@ -454,6 +540,7 @@ impl System {
             window_requests: WindowRequests::default(),
             bells: Bells::default(),
             add_virtual_monitor: None,
+            agents: None,
             keymaps: Keymaps::default(),
             select_keymap: None,
             shortcuts_inhibitor: None,
@@ -517,6 +604,13 @@ impl System {
         self
     }
 
+    /// This system, claiming and handing over links through `links` instead
+    /// of only its own.
+    pub fn sharing_links(mut self, links: Links) -> System {
+        self.links = links;
+        self
+    }
+
     /// This system, watching for idle through `watches` instead of its own,
     /// which no clock settles.
     pub fn sharing_idle_watches(mut self, watches: IdleWatches) -> System {
@@ -559,6 +653,12 @@ impl System {
         add: impl Fn(VirtualMonitor) -> Result<AddedMonitor, SystemError> + Send + Sync + 'static,
     ) -> System {
         self.add_virtual_monitor = Some(Arc::new(add));
+        self
+    }
+
+    /// This system, letting agents in through `agents`.
+    pub fn letting_agents_in(mut self, agents: impl Agents + 'static) -> System {
+        self.agents = Some(Arc::new(agents));
         self
     }
 
@@ -808,6 +908,15 @@ impl System {
                         drop(lease);
                         Handled::Done
                     }
+                    Some(Running::Agent(lease)) => {
+                        (self.tell)(HostMessage::SystemEnd {
+                            id,
+                            end: SystemEnd::Stopped,
+                        });
+                        drop(running);
+                        drop(lease);
+                        Handled::Done
+                    }
                     Some(process) => {
                         running.insert(id, process);
                         Handled::Malformed
@@ -853,7 +962,8 @@ impl System {
                     Running::Watch(_)
                     | Running::Match(_)
                     | Running::Listening(_)
-                    | Running::VirtualMonitor(_),
+                    | Running::VirtualMonitor(_)
+                    | Running::Agent(_),
                 ) => Handled::Malformed,
                 None => Handled::NothingRunning,
             },
@@ -869,7 +979,8 @@ impl System {
                     Running::Watch(_)
                     | Running::Match(_)
                     | Running::Listening(_)
-                    | Running::VirtualMonitor(_),
+                    | Running::VirtualMonitor(_)
+                    | Running::Agent(_),
                 ) => Handled::Malformed,
                 None => Handled::NothingRunning,
             },
@@ -912,26 +1023,77 @@ impl System {
                     })
                 })
             }
-            SystemRequest::ShellCommands => self.starting(id, |system| {
+            SystemRequest::ShellCommands { commands, bindings } => self.starting(id, |system| {
                 let (tell, running) = (system.tell.clone(), Arc::downgrade(&system.running));
-                let listener = system.shell_commands.listen(Arc::new(move |command| {
-                    let Some(running) = running.upgrade() else {
-                        return;
-                    };
-                    // Under the lock, so no command is told before the reply
-                    // or after `Unwatch` ends it.
-                    let running = running.lock().unwrap();
-                    if matches!(running.get(&id), Some(Running::Listening(_))) {
-                        tell(HostMessage::SystemEvent {
-                            id,
-                            event: SystemEvent::ShellCommand {
-                                command: command.to_vec(),
-                            },
-                        });
-                    }
-                }));
+                let listener = system.shell_commands.listen(
+                    commands,
+                    bindings,
+                    Arc::new(move |(command, sent): &(Vec<String>, u64)| {
+                        let Some(running) = running.upgrade() else {
+                            return;
+                        };
+                        // Under the lock, so no command is told before the reply
+                        // or after `Unwatch` ends it.
+                        let running = running.lock().unwrap();
+                        if matches!(running.get(&id), Some(Running::Listening(_))) {
+                            tell(HostMessage::SystemEvent {
+                                id,
+                                event: SystemEvent::ShellCommand {
+                                    command: command.clone(),
+                                    sent: *sent,
+                                },
+                            });
+                        }
+                    }),
+                );
                 Ok((Running::Listening(listener), Box::new(|| {})))
             }),
+            SystemRequest::AnswerShellCommand {
+                sent,
+                refused,
+                output,
+            } => {
+                self.shell_commands.answer(sent, refused, output);
+                (self.tell)(HostMessage::SystemReply {
+                    id,
+                    reply: SystemReply::Set,
+                });
+                Handled::Done
+            }
+            SystemRequest::ClaimLinks { schemes } => self.starting(id, |system| {
+                let (tell, running) = (system.tell.clone(), Arc::downgrade(&system.running));
+                let listener = system.links.listen(
+                    schemes,
+                    Arc::new(move |(url, app_id): &(String, Option<String>)| {
+                        let Some(running) = running.upgrade() else {
+                            return;
+                        };
+                        // Under the lock, as for shell commands.
+                        let running = running.lock().unwrap();
+                        if matches!(running.get(&id), Some(Running::Listening(_))) {
+                            tell(HostMessage::SystemEvent {
+                                id,
+                                event: SystemEvent::Link {
+                                    url: url.clone(),
+                                    app_id: app_id.clone(),
+                                },
+                            });
+                        }
+                    }),
+                );
+                Ok((Running::Listening(listener), Box::new(|| {})))
+            }),
+            SystemRequest::OpenLink { url, app_id } => {
+                let reply = match self.links.open(&url, app_id.as_deref()) {
+                    true => SystemReply::Sent { output: None },
+                    false => failed(SystemError {
+                        kind: SystemErrorKind::NotFound,
+                        message: format!("no page of this desktop opens {url}"),
+                    }),
+                };
+                (self.tell)(HostMessage::SystemReply { id, reply });
+                Handled::Done
+            }
             SystemRequest::UnlockRefusals => self.starting(id, |system| {
                 let (tell, running) = (system.tell.clone(), Arc::downgrade(&system.running));
                 let listener = system.unlock_refusals.listen(Arc::new(move |refused| {
@@ -958,16 +1120,31 @@ impl System {
                 Mark::BeforeBlanking(Duration::from_secs(seconds)),
             ),
             SystemRequest::SendShell { command } => {
-                let reply = match self.shell_commands.send(&command) {
-                    0 => failed(SystemError {
-                        kind: SystemErrorKind::Other,
-                        message: "no page of this desktop listens for commands; a shell hears \
-                                  them through bindKeys"
-                            .into(),
+                let tell = self.tell.clone();
+                let sent = self.shell_commands.send(
+                    &command,
+                    Box::new(move |outcome| {
+                        let reply = match outcome {
+                            Ok(output) => SystemReply::Sent { output },
+                            Err(message) => failed(SystemError {
+                                kind: SystemErrorKind::Other,
+                                message,
+                            }),
+                        };
+                        tell(HostMessage::SystemReply { id, reply });
                     }),
-                    _ => SystemReply::Sent,
-                };
-                (self.tell)(HostMessage::SystemReply { id, reply });
+                );
+                if !sent {
+                    (self.tell)(HostMessage::SystemReply {
+                        id,
+                        reply: failed(SystemError {
+                            kind: SystemErrorKind::Other,
+                            message: "no page of this desktop listens for commands; a shell \
+                                      hears them through bindKeys"
+                                .into(),
+                        }),
+                    });
+                }
                 Handled::Done
             }
             SystemRequest::SetWindowStates { app_id, states } => {
@@ -1023,6 +1200,44 @@ impl System {
                 (self.tell)(HostMessage::SystemReply { id, reply });
                 Handled::Done
             }
+            SystemRequest::Agent { agent } => self.letting_in(id, agent),
+            SystemRequest::Agents => {
+                let reply = match &self.agents {
+                    Some(agents) => SystemReply::Agents(agents.known()),
+                    None => SystemReply::Agents(KnownAgents::default()),
+                };
+                (self.tell)(HostMessage::SystemReply { id, reply });
+                Handled::Done
+            }
+            SystemRequest::StopAgent { session } => {
+                let reply = match &self.agents {
+                    Some(agents) => agents
+                        .stop(session)
+                        .map_or_else(failed, |()| SystemReply::Set),
+                    None => failed(no_agents()),
+                };
+                (self.tell)(HostMessage::SystemReply { id, reply });
+                Handled::Done
+            }
+            SystemRequest::ForgetAgent { agent } => {
+                let reply = match &self.agents {
+                    Some(agents) => agents
+                        .forget(&agent)
+                        .map_or_else(failed, |()| SystemReply::Set),
+                    // Nothing is remembered where nothing is let in.
+                    None => SystemReply::Set,
+                };
+                (self.tell)(HostMessage::SystemReply { id, reply });
+                Handled::Done
+            }
+            SystemRequest::AgentDid { said } => match self.running.lock().unwrap().get(&id) {
+                Some(Running::Agent(lease)) => {
+                    lease.did(said);
+                    Handled::Done
+                }
+                Some(_) => Handled::Malformed,
+                None => Handled::NothingRunning,
+            },
             SystemRequest::SetColorTemperature { kelvin, display } => {
                 let reply = match (&self.set_white_point, (WARMEST..=NEUTRAL).contains(&kelvin)) {
                     (_, false) => failed(SystemError {
@@ -1255,6 +1470,107 @@ impl System {
         })
     }
 
+    /// Ask the user to let agent `agent` in, on a thread, and hold it under
+    /// `id` while it is in.
+    fn letting_in(&self, id: u32, agent: String) -> Handled {
+        let fail = |message: String, kind| {
+            (self.tell)(HostMessage::SystemReply {
+                id,
+                reply: failed(SystemError { kind, message }),
+            });
+            Handled::Done
+        };
+        let Some(agents) = self.agents.clone() else {
+            let error = no_agents();
+            return fail(error.message, error.kind);
+        };
+        if self.running.lock().unwrap().contains_key(&id) {
+            return fail(
+                format!("{id} is already running"),
+                SystemErrorKind::InvalidInput,
+            );
+        }
+        let (tell, running) = (self.tell.clone(), Arc::downgrade(&self.running));
+        thread::spawn(move || {
+            // Set before the stop looks for the lease, so a stop that comes
+            // before the lease is held still ends it.
+            let stopped = Arc::new(AtomicBool::new(false));
+            let stop: AgentStopped = {
+                let (tell, running, stopped) = (tell.clone(), running.clone(), stopped.clone());
+                Box::new(move || {
+                    stopped.store(true, Ordering::SeqCst);
+                    let Some(running) = running.upgrade() else {
+                        return;
+                    };
+                    let mut running = running.lock().unwrap();
+                    if let Some(Running::Agent(lease)) = running.remove(&id) {
+                        tell(HostMessage::SystemEnd {
+                            id,
+                            end: SystemEnd::Stopped,
+                        });
+                        drop(running);
+                        drop(lease);
+                    }
+                })
+            };
+            let changed: AgentChanged = {
+                let (tell, running) = (tell.clone(), running.clone());
+                Box::new(move |reach| {
+                    let Some(running) = running.upgrade() else {
+                        return;
+                    };
+                    // Held under the lock, so it comes after the reply.
+                    let running = running.lock().unwrap();
+                    if matches!(running.get(&id), Some(Running::Agent(_))) {
+                        tell(HostMessage::SystemEvent {
+                            id,
+                            event: SystemEvent::AgentReach { reach },
+                        });
+                    }
+                })
+            };
+            let let_in = match agents.let_in(
+                agent,
+                AgentTold {
+                    stopped: stop,
+                    changed,
+                },
+            ) {
+                Ok(let_in) => let_in,
+                Err(error) => {
+                    tell(HostMessage::SystemReply {
+                        id,
+                        reply: failed(error),
+                    });
+                    return;
+                }
+            };
+            // The page went away while the user decided; dropping the lease
+            // takes the agent off the list.
+            let Some(running) = running.upgrade() else {
+                return;
+            };
+            let mut running = running.lock().unwrap();
+            tell(HostMessage::SystemReply {
+                id,
+                reply: SystemReply::Agent {
+                    reach: let_in.reach,
+                },
+            });
+            if stopped.load(Ordering::SeqCst) {
+                tell(HostMessage::SystemEnd {
+                    id,
+                    end: SystemEnd::Stopped,
+                });
+                drop(running);
+                drop(let_in.lease);
+            } else {
+                running.insert(id, Running::Agent(let_in.lease));
+            }
+        });
+        Handled::Done
+    }
+
     fn starting(
         &self,
         id: u32,
@@ -1416,6 +1732,7 @@ impl Drop for System {
                 }
                 Running::Listening(listener) => drop(listener),
                 Running::VirtualMonitor(lease) => drop(lease),
+                Running::Agent(lease) => drop(lease),
             }
         }
     }

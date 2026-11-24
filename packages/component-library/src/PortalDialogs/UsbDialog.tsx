@@ -8,12 +8,15 @@ import { css } from "../../styled-system/css";
 import { flex } from "../../styled-system/patterns";
 import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
+import type { Presence } from "./presence";
 
 type Props = {
   answer: (answer: PortalAnswer) => void;
   /** Who asks, as the dialog names them. */
   asker: string;
   body: UsbBody;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -21,7 +24,7 @@ type Props = {
  * USB devices an application would open, each with how it would use it.
  * Allowing grants them all; dismissing denies.
  */
-export const UsbDialog = ({ answer, asker, body, screen }: Props) => (
+export const UsbDialog = ({ answer, asker, body, presence, screen }: Props) => (
   <ModalDialog
     closeButton={false}
     footer={
@@ -48,7 +51,7 @@ export const UsbDialog = ({ answer, asker, body, screen }: Props) => (
         answer(Answer.Canceled());
       }
     }}
-    open
+    {...presence}
     screen={screen}
     title={`${asker} wants to use USB devices`}
   >

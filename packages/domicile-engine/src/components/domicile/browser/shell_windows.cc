@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/check.h"
+
 namespace domicile {
 namespace {
 
@@ -35,6 +37,14 @@ ShellWindowPlan ShellWindowsFor(const std::vector<display::Display>& displays,
       plan.close.push_back(held);
     }
   }
+  // Pair the two in order: a window moves where a new one would open.
+  const size_t moved = std::min(plan.open.size(), plan.close.size());
+  for (size_t index = 0; index < moved; ++index) {
+    plan.move.push_back(
+        ShellWindowMove{.from = plan.close[index], .to = plan.open[index]});
+  }
+  plan.open.erase(plan.open.begin(), plan.open.begin() + moved);
+  plan.close.erase(plan.close.begin(), plan.close.begin() + moved);
   // Keep the last window if nothing replaces it: closing it exits the browser.
   // A closed laptop lid with no external monitor reports no displays.
   if (plan.open.empty() && plan.close.size() == windowed.size() &&
@@ -50,6 +60,12 @@ ShellWindowPlaces::~ShellWindowPlaces() = default;
 
 void ShellWindowPlaces::Place(uintptr_t window, int64_t display) {
   placed_.insert_or_assign(window, Record{.display = display, .seen = false});
+}
+
+void ShellWindowPlaces::Move(uintptr_t window, int64_t display) {
+  const auto known = placed_.find(window);
+  CHECK(known != placed_.end()) << "moved a shell window nobody placed";
+  known->second.display = display;
 }
 
 std::vector<int64_t> ShellWindowPlaces::Update(

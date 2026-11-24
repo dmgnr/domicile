@@ -196,8 +196,20 @@ const timeStyles = css({
 });
 
 // The favicon on a tile, which turns into a check box under the pointer and
-// fills with the accent when checked.
+// fills with the accent when checked. The ring round a checked one is its own
+// layer, which fades.
 const checkStyles = css({
+  _after: {
+    borderRadius: "inherit",
+    boxShadow:
+      "0 0 0 {spacing.1} color-mix(in oklab, {colors.accent} 22%, transparent)",
+    content: '""',
+    inset: "-1px",
+    opacity: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    transition: "opacity {durations.normal} {easings.out}",
+  },
   "&:hover [data-favicon], &[aria-checked=true] [data-favicon]": {
     opacity: 0,
     transform: "scale(0.6)",
@@ -210,9 +222,8 @@ const checkStyles = css({
     borderColor: "color-mix(in oklab, {colors.accent} 70%, transparent)",
   },
   "&[aria-checked=true]": {
+    _after: { opacity: 1 },
     backgroundColor: "accent",
-    boxShadow:
-      "0 0 0 {spacing.1} color-mix(in oklab, {colors.accent} 22%, transparent)",
   },
   "&[aria-checked=true] [data-tick]": {
     color: "background",
@@ -230,8 +241,9 @@ const checkStyles = css({
   inlineSize: 8,
   justifyItems: "center",
   padding: 0,
+  position: "relative",
   transition:
-    "background-color {durations.fast} {easings.out}, border-color {durations.fast} {easings.out}, box-shadow {durations.normal} {easings.out}",
+    "background-color {durations.fast} {easings.out}, border-color {durations.fast} {easings.out}",
 });
 
 const faviconStyles = css({

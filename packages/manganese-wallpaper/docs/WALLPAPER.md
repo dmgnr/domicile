@@ -10,6 +10,8 @@ A photograph behind the whole desktop, changing every minute. Source:
   for light. CSS shows the current theme's, and only it
   rotates. The other holds its loaded photo, so a theme switch shows it at
   once.
+- **Still**: manganese's `wallpaper.rotate` option, off, keeps the photo on
+  screen and stops the minute timer, so nothing redraws an idle desktop.
 - **Held during a theme wipe**: a photograph due mid-wipe fades in once the
   wipe ends, so no crossfade shows through the new theme's frame.
 - **Mounted**: only the photo on screen, the one fading out and the next one.
@@ -28,7 +30,10 @@ A photograph behind the whole desktop, changing every minute. Source:
 - **Paths** are read through `domicile.files` only while mounted, so at most
   three photos are held at once.
 - **Built-in photos**: `photos.ts` lists Wikimedia Commons files by title,
-  fetched via `Special:FilePath?width=3840`. Each is public domain or CC0, so
+  fetched via `Special:FilePath?width=3840`. Their `srcset` also offers
+  `width=1920`, and `sizes` is what covering each screen takes, so a 1080p
+  screen fetches and decodes a quarter of the pixels. Commons serves only
+  set widths and rounds others up. Each is public domain or CC0, so
   no credit line is needed. Each was checked for:
   - at least 3840px wide, landscape;
   - brightness that suits its theme: mostly dark with few bright areas for

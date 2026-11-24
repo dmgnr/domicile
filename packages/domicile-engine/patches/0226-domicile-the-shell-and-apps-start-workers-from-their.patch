@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the shell and apps start workers from their own
+ files
+
+The browser fetches a dedicated or shared worker's main script itself,
+through the factories
+`RegisterNonNetworkWorkerMainResourceURLLoaderFactories` returns, not
+the page's. domicile:// was not among them, so every worker the shell
+or an app started aborted with net::ERR_ABORTED while fetch() of the
+same file worked.
+
+- `ChromeContentBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories`
+  adds `ShellURLLoaderFactory`, which serves a file only to its own
+  origin (`MayReadFiles`).
+- A worker's own imports already go through
+  `RegisterNonNetworkSubresourceURLLoaderFactories` (patch 0008).
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ chrome/browser/chrome_content_browser_client.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index a893213..27f9c93 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -6640,6 +6640,14 @@ void ChromeContentBrowserClient::
+   CHECK(browser_context, base::NotFatalUntil::M163);
+   CHECK(factories, base::NotFatalUntil::M163);
+ 
++  // Domicile's engine fork. The browser fetches a worker's main script itself,
++  // through these factories rather than the page's, so without domicile://
++  // here every worker the shell or an app starts aborts while fetch() of the
++  // same file works. ShellURLLoaderFactory serves it only to its own origin.
++  factories->emplace(
++      domicile::kDomicileScheme,
++      domicile::ShellURLLoaderFactory::Create(DomicileShellRoot()));
++
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS)
+   if (content::AreIsolatedWebAppsEnabled(browser_context) &&

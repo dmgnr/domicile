@@ -52,10 +52,10 @@ See components/domicile/browser/web_view_guest.h in the Domicile repository.
  5 files changed, 39 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index dc52d90..a0e0632 100644
+index cb4fc50..4756f75 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2710,6 +2710,7 @@ source_set("browser") {
+@@ -2721,6 +2721,7 @@ source_set("browser") {
      "//chrome/browser/domicile",
      "//components/domicile:control_channel",
      "//components/domicile:shell_scheme",
@@ -64,7 +64,7 @@ index dc52d90..a0e0632 100644
      "//components/download/content/factory",
      "//components/embedder_support:user_agent",
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index da12a14..3ed96e9 100644
+index 6e77240..0580433 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -5,6 +5,7 @@
@@ -75,7 +75,7 @@ index da12a14..3ed96e9 100644
  #include "content/public/browser/browser_thread.h"
  #include "mojo/public/cpp/bindings/message.h"
  #include "components/domicile/common/domicile_scheme.h"
-@@ -532,6 +533,30 @@ void PopulateChromeFrameBinders(
+@@ -564,6 +565,30 @@ void PopulateChromeFrameBinders(
                                        std::move(receiver)));
        }));
  
@@ -107,10 +107,10 @@ index da12a14..3ed96e9 100644
  
    map->Add<blink::mojom::ScriptToolHost>(
 diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
-index bf9c2c4..e82b270 100644
+index c1e08ec..7931938 100644
 --- a/third_party/blink/renderer/core/BUILD.gn
 +++ b/third_party/blink/renderer/core/BUILD.gn
-@@ -411,6 +411,11 @@ component("core") {
+@@ -412,6 +412,11 @@ component("core") {
      ":make_deprecation_info",
      ":xml_ffi",
      "//base",
@@ -123,10 +123,10 @@ index bf9c2c4..e82b270 100644
      "//components/performance_manager/public/mojom:mojom_blink",
      "//components/shared_highlighting/core/common",
 diff --git a/third_party/blink/renderer/core/DEPS b/third_party/blink/renderer/core/DEPS
-index db7a924..0ac2815 100644
+index ee50cfd..d3db9aa 100644
 --- a/third_party/blink/renderer/core/DEPS
 +++ b/third_party/blink/renderer/core/DEPS
-@@ -69,6 +69,8 @@ include_rules = [
+@@ -73,6 +73,8 @@ include_rules = [
      "+cc/trees/target_property.h",
      "+cc/trees/ukm_manager.h",
      "+components/subresource_filter/core/common/scoped_rule.h",

@@ -19,7 +19,7 @@ job builds it on `crux`.
  1 file changed, 16 insertions(+)
 
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 9742b24..5fbac18 100644
+index d0b0271..cfdb46b 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -104,6 +104,20 @@ struct DomicileDisplayLayout {

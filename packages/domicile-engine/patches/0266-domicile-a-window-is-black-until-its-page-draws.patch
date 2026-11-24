@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Mon, 19 Oct 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a window is black until its page draws
+
+Until a page's first frame, a window shows kColorWebContentsBackground:
+Chrome's new-tab background, white in a light theme and gray in a dark
+one. On a tty the shell window showed it between the boot screen and
+the shell's first frame, a white flash on every start (#2467). The
+engine has no new-tab page, so it is black.
+
+Verified: reproduced on the pinned engine nested in a headless sway; a
+theme whose new-tab background is blue turned the flash blue. Not
+built here; the engine job builds it on crux.
+---
+ chrome/browser/ui/color/chrome_color_mixer.cc | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/ui/color/chrome_color_mixer.cc b/chrome/browser/ui/color/chrome_color_mixer.cc
+index 8e3c1d6..0095079 100644
+--- a/chrome/browser/ui/color/chrome_color_mixer.cc
++++ b/chrome/browser/ui/color/chrome_color_mixer.cc
+@@ -862,8 +862,9 @@ void AddChromeColorMixer(ui::ColorProvider* provider,
+       GetToolbarTopSeparatorColorTransform(kColorToolbar,
+                                            ui::kColorFrameInactive);
+   mixer[kColorSettingsWebuiPageBackground] = {ui::kColorSysSurface2};
+-  mixer[kColorWebContentsBackground] =
+-      ui::SetAlpha(kColorNewTabPageBackground, SK_AlphaOPAQUE);
++  // Domicile: a window shows this until its page's first frame. There is no
++  // new-tab page, so it is black, as the screen is before the desktop starts.
++  mixer[kColorWebContentsBackground] = {SK_ColorBLACK};
+   mixer[kColorWebContentsBackgroundLetterboxing] =
+       ui::AlphaBlend(kColorWebContentsBackground, SK_ColorBLACK, 0x33);
+   mixer[kColorWindowControlButtonBackgroundActive] = {ui::kColorFrameActive};

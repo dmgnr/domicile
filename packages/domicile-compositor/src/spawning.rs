@@ -2,11 +2,14 @@
 //! them at it.
 
 use std::ffi::{OsStr, OsString};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::thread;
 
-use tracing::debug;
+use std::os::fd::AsFd as _;
+use tracing::{debug, warn};
 
 use domicile_host::desk_terminal;
 use domicile_host::priority;
@@ -17,14 +20,17 @@ use crate::launches::Launches;
 use crate::portals::CURRENT_DESKTOP;
 use crate::{app_scope, engine};
 
-/// Spawn a client process onto Domicile's display.
+/// Spawn a client process onto Domicile's display, or say why it did not
+/// start.
 ///
-/// A reaper thread waits on the child so it doesn't become a zombie.
-/// `scoped` starts it in its own systemd scope; see [`crate::app_scope`]. It
-/// starts at nice value `nice`; see [`client_command`]. `activation_token`
-/// lets it raise its window; see [`client_command`]. A client in `launches`
-/// is launched again by the next compositor if a crash takes it; see
-/// [`crate::launches`].
+/// `command[0]` is found on the compositor's `PATH` first, so a missing
+/// program is this error rather than `systemd-run`'s, which only its log
+/// would hear. A reaper thread waits on the child so it doesn't become a
+/// zombie. `scoped` starts it in its own systemd scope; see
+/// [`crate::app_scope`]. It starts at nice value `nice`; see
+/// [`client_command`]. `activation_token` lets it raise its window; see
+/// [`client_command`]. A client in `launches` is launched again by the next
+/// compositor if a crash takes it; see [`crate::launches`].
 pub fn spawn_client(
     command: &[String],
     wayland_display: &OsStr,
@@ -32,46 +38,130 @@ pub fn spawn_client(
     nice: i32,
     activation_token: Option<&str>,
     launches: Option<&Arc<Launches>>,
-) {
-    let Some(mut child) = client_command(
-        command,
+) -> Result<(), String> {
+    let (program, args) = command
+        .split_first()
+        .ok_or("there was nothing to start: the command is empty")?;
+    let found = on_the_path(program, std::env::var_os("PATH").as_deref())?;
+    let mut child = client_command(
+        &[vec![found], args.to_vec()].concat(),
         wayland_display,
         std::env::var_os("LD_LIBRARY_PATH").as_deref(),
         scoped.then(app_scope::random),
         nice,
         activation_token,
-    ) else {
-        return;
-    };
-    match child.spawn() {
-        Ok(mut child) => {
-            // Logged after the fork for the pid, which pairs this line with
-            // `app client connected`. See `peer_process`.
-            debug!(
-                pid = child.id(),
-                ?command,
-                ?wayland_display,
-                "{}",
-                grepped::SPAWNING
-            );
-            let launches = launches.cloned();
-            if let Some(launches) = &launches {
-                launches.launched(child.id(), command);
-            }
-            thread::spawn(move || {
-                let _ = child.wait();
-                if let Some(launches) = launches {
-                    launches.ended(child.id());
-                }
-            });
-        }
-        Err(err) => tracing::error!(
-            %err,
-            program = ?child.get_program(),
-            ?command,
-            "failed to spawn client"
-        ),
+    )
+    .expect("the command has a program");
+    own_stream(&mut child, program);
+    let mut child = child
+        .spawn()
+        .map_err(|err| format!("{program} could not be started: {err}"))?;
+    // Logged after the fork for the pid, which pairs this line with
+    // `app client connected`. See `peer_process`.
+    debug!(
+        pid = child.id(),
+        ?command,
+        ?wayland_display,
+        "{}",
+        grepped::SPAWNING
+    );
+    let launches = launches.cloned();
+    if let Some(launches) = &launches {
+        launches.launched(child.id(), command);
     }
+    thread::spawn(move || {
+        let _ = child.wait();
+        if let Some(launches) = launches {
+            launches.ended(child.id());
+        }
+    });
+    Ok(())
+}
+
+/// Gives an app its own journal stream, named by [`stream_name`], at `info`,
+/// when the desktop's logs are in the journal. Otherwise an app writes to the
+/// compositor's stderr, and its chatter (an editor's startup, a toolkit's
+/// warnings) would read as the compositor's errors.
+///
+/// An app that can't have a stream writes where the compositor does, which
+/// is logged.
+pub fn own_stream(child: &mut Command, program: &str) {
+    if !domicile_launch::journal::is_the_journal(std::io::stdout().as_fd()) {
+        return;
+    }
+    let name = stream_name(program);
+    if let Err(why) = domicile_launch::journal::give_stream(
+        child,
+        Path::new(domicile_launch::journal::STREAM_SOCKET),
+        &name,
+    ) {
+        warn!("{name} writes to the compositor's stderr: no journal stream: {why}");
+    }
+}
+
+/// The journal name for what `program` writes: its file name. The `domicile`
+/// command, which a binding may run, is `domicile-cli`, apart from the
+/// launcher's own `domicile`.
+fn stream_name(program: &str) -> String {
+    let name = Path::new(program).file_name().map_or_else(
+        || program.to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    match name.as_str() {
+        "domicile" => "domicile-cli".to_string(),
+        _ => name,
+    }
+}
+
+/// [`spawn_client`] for a start nobody waits on, such as the config's startup
+/// commands: a failure is logged as an error.
+pub fn start_client(
+    command: &[String],
+    wayland_display: &OsStr,
+    scoped: bool,
+    nice: i32,
+    activation_token: Option<&str>,
+    launches: Option<&Arc<Launches>>,
+) {
+    if let Err(why) = spawn_client(
+        command,
+        wayland_display,
+        scoped,
+        nice,
+        activation_token,
+        launches,
+    ) {
+        tracing::error!(why, ?command, "failed to spawn client");
+    }
+}
+
+/// The program `program` runs: itself when it names a path, or the first
+/// executable of that name in `path`, the `PATH` variable. Errs saying it is
+/// not there.
+fn on_the_path(program: &str, path: Option<&OsStr>) -> Result<String, String> {
+    if program.contains('/') {
+        return match is_executable(Path::new(program)) {
+            true => Ok(program.to_string()),
+            false => Err(format!("{program} is not a program that can be run")),
+        };
+    }
+    path.into_iter()
+        .flat_map(std::env::split_paths)
+        .map(|directory| directory.join(program))
+        .find(|candidate| is_executable(candidate))
+        .map(|found| {
+            found
+                .into_os_string()
+                .into_string()
+                .expect("a UTF-8 directory of PATH joined to a UTF-8 name")
+        })
+        .ok_or_else(|| format!("{program} is not on the desktop's PATH; give its full path"))
+}
+
+/// Whether `file` is a file someone may execute.
+fn is_executable(file: &Path) -> bool {
+    file.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 /// Build the command for a spawned client.
@@ -224,7 +314,24 @@ pub fn home_directory() -> Option<std::path::PathBuf> {
 mod tests {
     use std::ffi::{OsStr, OsString};
 
-    use super::client_command;
+    use super::{client_command, stream_name};
+
+    #[test]
+    fn an_app_logs_under_its_programs_name() {
+        assert_eq!(stream_name("/run/current-system/sw/bin/emacs"), "emacs");
+        assert_eq!(stream_name("foot"), "foot");
+    }
+
+    #[test]
+    fn the_domicile_command_logs_apart_from_the_launcher() {
+        // `domicile` is the launcher's own name. A command a binding runs,
+        // such as a screen recording, says its output under its own.
+        assert_eq!(stream_name("domicile"), "domicile-cli");
+        assert_eq!(
+            stream_name("/nix/store/x-domicile/bin/domicile"),
+            "domicile-cli"
+        );
+    }
 
     /// The value `client_command` sets for `name`; `None` means cleared.
     fn child_env(command: &[String], display: &str, name: &str) -> Option<OsString> {
@@ -245,6 +352,48 @@ mod tests {
             .find(|(key, _)| *key == OsStr::new(name))
             .map(|(_, value)| value.map(OsStr::to_os_string))
             .expect("the variable is one this sets or clears")
+    }
+
+    /// A directory holding an executable `name` and a file `plain` that is
+    /// not executable.
+    fn bin_directory(name: &str, plain: &str) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let program = directory.path().join(name);
+        std::fs::write(&program, b"#!/bin/sh\n").expect("the program is written");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("the program is made executable");
+        std::fs::write(directory.path().join(plain), b"").expect("the file is written");
+        directory
+    }
+
+    #[test]
+    fn a_program_is_found_on_the_path_as_a_full_path() {
+        let bin = bin_directory("kitty", "notes");
+        let path = std::env::join_paths(["/nowhere".as_ref(), bin.path()]).expect("joinable");
+        assert_eq!(
+            super::on_the_path("kitty", Some(&path)),
+            Ok(bin.path().join("kitty").display().to_string())
+        );
+    }
+
+    #[test]
+    fn a_program_not_on_the_path_is_refused_naming_it() {
+        let bin = bin_directory("foot", "kitty");
+        let path = bin.path().as_os_str();
+        let why = super::on_the_path("kitty", Some(path)).unwrap_err();
+        assert!(why.contains("kitty") && why.contains("PATH"), "{why}");
+        assert!(super::on_the_path("kitty", None).is_err());
+    }
+
+    #[test]
+    fn a_program_named_by_path_must_be_executable_there() {
+        let bin = bin_directory("foot", "notes");
+        let foot = bin.path().join("foot").display().to_string();
+        let notes = bin.path().join("notes").display().to_string();
+        assert_eq!(super::on_the_path(&foot, None), Ok(foot.clone()));
+        assert!(super::on_the_path(&notes, None).is_err());
+        assert!(super::on_the_path("/nowhere/foot", None).is_err());
     }
 
     fn kitty() -> Vec<String> {

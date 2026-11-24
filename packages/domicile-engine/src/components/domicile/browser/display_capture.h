@@ -73,17 +73,24 @@ class DisplayCapture : public mojom::DisplayCapture,
   void OnNewCaptureVersion(
       const media::CaptureVersion& capture_version) override {}
   void OnFrameWithEmptyRegionCapture() override {}
-  void OnStopped() override {}
+  // Viz stops a capture it cannot go on with, such as one whose first frame
+  // it could not allocate.
+  void OnStopped() override;
+  // WebRTC's diagnostic log of each capture step. Viz reports failures
+  // through OnStopped, not here.
   void OnLog(const std::string& message) override {}
 
-  // Stops the capture and tells the owner, logging `why` when it is not the
-  // producer's own choice.
+  // Stops the capture and tells the owner. A `why` that is not empty, for an
+  // ending the producer did not choose, is logged and closes both pipes with
+  // it as the reason.
   void End(const std::string& why);
 
   viz::ClientFrameSinkVideoCapturer capturer_;
   mojo::Receiver<mojom::DisplayCapture> control_;
   mojo::Remote<mojom::DisplayCaptureObserver> observer_;
   base::OnceClosure ended_;
+  const bool gpu_;
+  bool captured_ = false;
 };
 
 }  // namespace domicile

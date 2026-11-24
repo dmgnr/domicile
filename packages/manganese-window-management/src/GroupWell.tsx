@@ -1,13 +1,15 @@
-import { useRef } from "react";
+import { useContext, useRef } from "react";
 
 import { cva, cx } from "../styled-system/css";
 import type { Rect } from "./rect";
 import type { Restack } from "./restacking";
+import { SlidingScreen } from "./sliding-screen";
 import { useLowered } from "./useLowered";
 import { useSettling } from "./useSettling";
 import type { WindowMotion } from "./window-motion";
 import { isMoving } from "./window-motion";
 import {
+  clippedAlong,
   heldStyles,
   movingStyles,
   originOf,
@@ -58,6 +60,7 @@ export const GroupWell = ({
 }: Props) => {
   const element = useRef<HTMLDivElement>(null);
   const lowered = useLowered(depth);
+  const sliding = useContext(SlidingScreen);
   useSettling({
     element,
     origin: originOf(rect, rect),
@@ -76,6 +79,7 @@ export const GroupWell = ({
       ref={element}
       style={{
         ...placedAt(rect, depth),
+        ...clippedAlong(sliding, rect),
         ...scaledAbout(rect, rect),
         ...shuffledBy(restack),
       }}

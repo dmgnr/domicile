@@ -37,3 +37,21 @@ fn a_gtk3_window_asking_to_draw_its_own_frame_is_told_the_shell_draws_it() {
         client.trace()
     );
 }
+
+/// GTK3 and Firefox answer `mode(Server)` by asking for client side again. The
+/// compositor must not answer each ask, or the two ping-pong forever and burn
+/// CPU (#2466). The test client insists the same way.
+#[test]
+fn a_gtk3_window_insisting_on_its_own_frame_is_told_server_side_once() {
+    let compositor = Compositor::started_with("{}");
+    let _chrome = compositor.chrome();
+    let mut client = compositor.client("app");
+
+    assert!(
+        client.wait_for_trace("insisted on drawing its own frame", 1),
+        "the client never insisted on drawing its own frame; it traced:\n{}",
+        client.trace()
+    );
+    let trace = client.trace();
+    assert_eq!(trace.matches("mode(Server)").count(), 1, "{trace}");
+}

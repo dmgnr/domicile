@@ -22,6 +22,11 @@ fn tree(entries: &'static [(&'static str, bool)]) -> impl Fn(&Path) -> Option<bo
     }
 }
 
+/// A filesystem with no file contents to read.
+fn no_files(_: &Path) -> Option<String> {
+    None
+}
+
 #[test]
 fn the_module_named_is_the_module_loaded_and_its_directory_is_served() {
     // The named module is loaded, not a `shell.js` beside it. The tree has a
@@ -37,6 +42,7 @@ fn the_module_named_is_the_module_loaded_and_its_directory_is_served() {
         Path::new(HERE),
         Some(Path::new(HOME)),
         &fs,
+        &no_files,
     )
     .unwrap();
     assert_eq!(shell.root, PathBuf::from("/d/dist"));
@@ -54,6 +60,7 @@ fn a_relative_path_is_resolved_against_where_it_was_typed() {
         Path::new(HERE),
         Some(Path::new(HOME)),
         &fs,
+        &no_files,
     )
     .unwrap();
     assert_eq!(shell.root, PathBuf::from("/work/dist"));
@@ -72,6 +79,7 @@ fn a_module_with_no_directory_in_front_of_it_is_served_from_here() {
         Path::new(HERE),
         Some(Path::new(HOME)),
         &fs,
+        &no_files,
     )
     .unwrap();
     assert_eq!(shell.root, PathBuf::from("/work"));
@@ -89,6 +97,7 @@ fn a_tilde_is_the_home_directory() {
         Path::new(HERE),
         Some(Path::new(HOME)),
         &fs,
+        &no_files,
     )
     .unwrap();
     assert_eq!(shell.root, PathBuf::from("/home/me/desk"));
@@ -101,7 +110,14 @@ fn a_bare_tilde_is_a_path_and_a_home_directory_is_not_a_shell() {
     // directory, so the directory rule refuses it.
     let fs = tree(&[("/home/me", true)]);
     assert_eq!(
-        shell_module("~", None, Path::new(HERE), Some(Path::new(HOME)), &fs),
+        shell_module(
+            "~",
+            None,
+            Path::new(HERE),
+            Some(Path::new(HOME)),
+            &fs,
+            &no_files
+        ),
         Err(ShellPathError::Directory("/home/me".to_string()))
     );
 }
@@ -112,7 +128,14 @@ fn a_tilde_with_no_home_behind_it_is_refused() {
     // nobody asked for either.
     let fs = tree(&[("/home/me/desk/shell.js", false)]);
     assert_eq!(
-        shell_module("~/desk/shell.js", None, Path::new(HERE), None, &fs),
+        shell_module(
+            "~/desk/shell.js",
+            None,
+            Path::new(HERE),
+            None,
+            &fs,
+            &no_files
+        ),
         Err(ShellPathError::NoHome("~/desk/shell.js".to_string()))
     );
 }
@@ -129,7 +152,8 @@ fn a_tilde_that_names_somebody_else_is_left_alone() {
             None,
             Path::new(HERE),
             Some(Path::new(HOME)),
-            &fs
+            &fs,
+            &no_files
         ),
         Err(ShellPathError::NotThere(
             "/work/~alice/desk/shell.js".to_string()
@@ -149,6 +173,7 @@ fn a_dot_dot_is_left_for_the_filesystem_to_resolve() {
         Path::new(HERE),
         Some(Path::new(HOME)),
         &fs,
+        &no_files,
     )
     .unwrap();
     assert_eq!(shell.root, PathBuf::from("/work/dist/../other"));
@@ -162,9 +187,95 @@ fn a_directory_is_refused_and_says_which_file_to_name() {
     // error names the resolved path.
     let fs = tree(&[("/work/dist", true), ("/work/dist/shell.js", false)]);
     assert_eq!(
-        shell_module("./dist", None, Path::new(HERE), Some(Path::new(HOME)), &fs),
+        shell_module(
+            "./dist",
+            None,
+            Path::new(HERE),
+            Some(Path::new(HOME)),
+            &fs,
+            &no_files
+        ),
         Err(ShellPathError::Directory("/work/dist".to_string()))
     );
+}
+
+#[test]
+fn a_directory_whose_package_json_names_a_prebuilt_shell_serves_it() {
+    // As a package does: `"domicile": { "shell": ... }` names a module that is
+    // served as it is (#2468).
+    let fs = tree(&[("/work/desk", true), ("/work/desk/dist/shell.js", false)]);
+    let read = |path: &Path| {
+        (path == Path::new("/work/desk/package.json"))
+            .then(|| r#"{"name":"desk","domicile":{"shell":"dist/shell.js"}}"#.to_string())
+    };
+    let shell = shell_module(
+        "./desk",
+        None,
+        Path::new(HERE),
+        Some(Path::new(HOME)),
+        &fs,
+        &read,
+    )
+    .expect("the package.json names the module");
+    assert_eq!(shell.root, PathBuf::from("/work/desk/dist"));
+    assert_eq!(shell.module, PathBuf::from("shell.js"));
+}
+
+#[test]
+fn a_prebuilt_shell_a_package_json_names_must_be_there() {
+    let fs = tree(&[("/work/desk", true)]);
+    let read = |_: &Path| Some(r#"{"domicile":{"shell":"dist/shell.js"}}"#.to_string());
+    assert_eq!(
+        shell_module(
+            "./desk",
+            None,
+            Path::new(HERE),
+            Some(Path::new(HOME)),
+            &fs,
+            &read
+        ),
+        Err(ShellPathError::NotAModule {
+            file: "/work/desk/package.json".to_string(),
+            module: "/work/desk/dist/shell.js".to_string(),
+        })
+    );
+}
+
+#[test]
+fn a_prebuilt_shell_a_package_json_names_must_be_a_file() {
+    let fs = tree(&[("/work/desk", true), ("/work/desk/dist", true)]);
+    let read = |_: &Path| Some(r#"{"domicile":{"shell":"dist"}}"#.to_string());
+    assert_eq!(
+        shell_module(
+            "./desk",
+            None,
+            Path::new(HERE),
+            Some(Path::new(HOME)),
+            &fs,
+            &read
+        ),
+        Err(ShellPathError::NotAModule {
+            file: "/work/desk/package.json".to_string(),
+            module: "/work/desk/dist".to_string(),
+        })
+    );
+}
+
+#[test]
+fn a_package_json_that_does_not_parse_is_refused() {
+    let fs = tree(&[("/work/desk", true)]);
+    let read = |_: &Path| Some(r#"{"domicile":{"shell":3}}"#.to_string());
+    assert!(matches!(
+        shell_module(
+            "./desk",
+            None,
+            Path::new(HERE),
+            Some(Path::new(HOME)),
+            &fs,
+            &read
+        ),
+        Err(ShellPathError::Manifest { .. })
+    ));
 }
 
 #[test]
@@ -179,6 +290,7 @@ fn a_handed_in_module_makes_a_bare_name_a_name() {
         Path::new(HERE),
         Some(Path::new(HOME)),
         &fs,
+        &no_files,
     )
     .unwrap();
     assert_eq!(shell.root, PathBuf::from("/store/page"));
@@ -196,6 +308,7 @@ fn a_handed_in_module_is_resolved_by_the_same_rules() {
         Path::new(HERE),
         Some(Path::new(HOME)),
         &fs,
+        &no_files,
     )
     .unwrap();
     assert_eq!(shell.root, PathBuf::from("/home/me/store"));
@@ -216,7 +329,8 @@ fn a_slash_is_still_a_path_even_then() {
             Some("/store/page/shell.js"),
             Path::new(HERE),
             Some(Path::new(HOME)),
-            &fs
+            &fs,
+            &no_files
         ),
         Err(ShellPathError::TwoPages {
             page: "/store/page/shell.js".to_string(),
@@ -232,7 +346,14 @@ fn a_bare_name_with_no_module_behind_it_is_not_a_shell() {
     // to a path.
     let fs = tree(&[]);
     assert_eq!(
-        shell_module("simple", None, Path::new(HERE), Some(Path::new(HOME)), &fs),
+        shell_module(
+            "simple",
+            None,
+            Path::new(HERE),
+            Some(Path::new(HOME)),
+            &fs,
+            &no_files
+        ),
         Err(ShellPathError::NotThere("simple".to_string()))
     );
 }
@@ -248,7 +369,8 @@ fn a_path_to_nothing_is_refused_before_anything_starts() {
             None,
             Path::new(HERE),
             Some(Path::new(HOME)),
-            &fs
+            &fs,
+            &no_files
         ),
         Err(ShellPathError::NotThere("/work/dist/shell.js".to_string()))
     );

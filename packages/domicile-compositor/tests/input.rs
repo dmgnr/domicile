@@ -8,7 +8,7 @@
 mod running;
 
 use domicile_protocol::{
-    AppCursorImage, ChromeMessage, CursorShape, HostMessage, PointerConstraint,
+    AppCursorImage, ChromeMessage, CursorShape, HostMessage, PointerConstraint, SurfaceRect,
 };
 use smithay::input::keyboard::xkb;
 
@@ -587,8 +587,8 @@ fn pixels_of(png: &str) -> (u32, u32, [u8; 4]) {
 }
 
 /// A hand on the mouse over a window reaches a client holding a relative
-/// pointer as relative motion, the same deltas given as unaccelerated. A
-/// delta for a window the pointer has left is dropped.
+/// pointer as relative motion, accelerated and not. A delta for a window the
+/// pointer has left is dropped.
 #[test]
 fn relative_motion_reaches_the_window_under_the_pointer() {
     let compositor = Compositor::started_with(ONE_DISPLAY);
@@ -599,10 +599,12 @@ fn relative_motion_reaches_the_window_under_the_pointer() {
             app_id: app.clone(),
             dx: 3.5,
             dy: -2.0,
+            dx_unaccel: 1.25,
+            dy_unaccel: -0.5,
         })
         .expect("the chrome can move the pointer");
     assert!(
-        client.wait_for_trace(".relative_motion(3.5, -2, 3.5, -2)", 1),
+        client.wait_for_trace(".relative_motion(3.5, -2, 1.25, -0.5)", 1),
         "the client heard no relative motion; it traced:\n{}",
         client.trace()
     );
@@ -612,6 +614,8 @@ fn relative_motion_reaches_the_window_under_the_pointer() {
             app_id: "app-elsewhere".into(),
             dx: 9.0,
             dy: 9.0,
+            dx_unaccel: 9.0,
+            dy_unaccel: 9.0,
         })
         .expect("the chrome can move the pointer");
     compositor.wait_for_log("relative motion off the app under the pointer -> dropped");
@@ -642,6 +646,7 @@ fn a_lock_the_page_takes_holds_the_pointer_for_the_client() {
                 == HostMessage::AppPointerConstraint {
                     app_id: app.clone(),
                     constraint: Some(PointerConstraint::Lock),
+                    region: None,
                 }
         })
         .expect("the lock is offered to the page");
@@ -678,6 +683,8 @@ fn a_lock_the_page_takes_holds_the_pointer_for_the_client() {
             app_id: app.clone(),
             dx: 4.0,
             dy: 2.0,
+            dx_unaccel: 4.0,
+            dy_unaccel: 2.0,
         },
     );
     assert!(
@@ -716,6 +723,7 @@ fn a_lock_the_page_takes_holds_the_pointer_for_the_client() {
                 == HostMessage::AppPointerConstraint {
                     app_id: app.clone(),
                     constraint: None,
+                    region: None,
                 }
         })
         .expect("the pointer leaving withdraws the offer");
@@ -736,6 +744,7 @@ fn a_confinement_the_page_takes_is_told_to_the_client() {
                 == HostMessage::AppPointerConstraint {
                     app_id: app.clone(),
                     constraint: Some(PointerConstraint::Confine),
+                    region: None,
                 }
         })
         .expect("the confinement is offered to the page");
@@ -775,6 +784,39 @@ fn a_confinement_the_page_takes_is_told_to_the_client() {
         "a confined pointer stopped moving for its client:\n{}",
         client.trace()
     );
+}
+
+/// A confinement to part of a window is offered with that part, as
+/// rectangles of the surface, so the page can keep the pointer inside it.
+#[test]
+fn a_confinement_is_offered_with_its_region() {
+    let compositor = Compositor::started_with(ONE_DISPLAY);
+    let mut chrome = compositor.chrome();
+    let _client = compositor.client_with(
+        "app",
+        &[
+            "--constrain-pointer",
+            "confine",
+            "--constrain-region",
+            "40x30+10+20",
+        ],
+    );
+    let app = an_app_under_the_pointer(&mut chrome);
+    chrome
+        .wait_for(|message| {
+            *message
+                == HostMessage::AppPointerConstraint {
+                    app_id: app.clone(),
+                    constraint: Some(PointerConstraint::Confine),
+                    region: Some(vec![SurfaceRect {
+                        x: 10,
+                        y: 20,
+                        width: 40,
+                        height: 30,
+                    }]),
+                }
+        })
+        .expect("the confinement is offered with its region");
 }
 
 /// Wait for the one window to appear and move the pointer over it.

@@ -20,6 +20,7 @@ import { wrapperBase } from "../_control/wrapperBase";
 import type { Size } from "../control-sizes";
 import type { ExtendProps } from "../extend-props";
 import { usePopupBoundary } from "../PopupBoundary/PopupBoundary";
+import { useClosedWithScene } from "../PopupScene/PopupScene";
 import "../stylesheet";
 
 export { SIZES, type Size } from "../control-sizes";
@@ -125,8 +126,11 @@ export const Select = <V,>({
   );
   const [wrapperRef, setWrapperRef] =
     useStableRef<HTMLDivElement>(attachWrapper);
+  const actions = useRef<BaseSelect.Root.Actions | null>(null);
+  useClosedWithScene(actions, { open });
   return (
     <BaseSelect.Root<V>
+      actionsRef={actions}
       defaultValue={defaultValue}
       disabled={disabled}
       itemToStringLabel={(itemValue) => {

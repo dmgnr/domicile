@@ -141,7 +141,7 @@ done
 # Taking DRM master back is not enough. The kernel restores its own
 # framebuffer when the last master leaves, so the card has been modeset by the
 # console. Flipping into the old state fails, and `PageFlipWatchdog` crashes
-# the GPU process. `ModesetWouldChangeAnything` sees unchanged connectors and
+# the GPU process. `ModesetParamsThatChange` sees unchanged connectors and
 # skips the modeset, so the switcher must call `DrmModeset::Relight`.
 if in_sources 'Relight'; then
   ok "the screens are lit again when the console comes back"

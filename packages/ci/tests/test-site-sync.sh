@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests `site-sync.sh`, which puts `site`, the branch Vercel deploys, at
-# `release` plus the main commits picked onto it since.
+# `release` plus the main commits picked onto it since, only ever moving it
+# forward.
 #
 # Uses real `git` against a local remote.
 set -u
@@ -35,6 +36,8 @@ contains() {
 
 REPO="$WORK/repo"
 git init -q --bare "$WORK/remote"
+# As the `site` ruleset does: no force pushes.
+git -C "$WORK/remote" config receive.denyNonFastForwards true
 git init -q -b main "$REPO"
 git -C "$REPO" config user.email ci@domicile.invalid
 git -C "$REPO" config user.name "domicile CI"
@@ -56,10 +59,16 @@ land() { # file
   git -C "$REPO" rev-parse HEAD
 }
 release_to() { git -C "$REPO" push -q origin "$1:refs/heads/release"; }
+# Each sync a minute after the last, as real runs are, so a pick made again
+# is a new commit rather than the same one.
+echo 0 >"$WORK/minutes"
 sync() { # commit...
-  local out
+  local out minutes
+  minutes=$(($(cat "$WORK/minutes") + 1))
+  echo "$minutes" >"$WORK/minutes"
   git -C "$REPO" checkout -q --detach main
-  if out="$(cd "$REPO" && bash .github/scripts/site-sync.sh "$@" 2>&1)"; then
+  if out="$(cd "$REPO" && GIT_COMMITTER_DATE="@$((1700000000 + minutes * 60)) +0000" \
+    bash .github/scripts/site-sync.sh "$@" 2>&1)"; then
     printf 'ok\n%s\n' "$out"
   else
     printf 'refused\n%s\n' "$out"
@@ -97,17 +106,20 @@ expect "and site stays" "$before" "$(site)"
 
 echo "== a release with the first pick carries only the second =="
 release_to "$a"
+before="$(site)"
 out="$(sync)"
 expect "the sync succeeds" ok "$(status "$out")"
 expect "and site has both" "a b " "$(files)"
-expect "with release under the second pick" "$a" "$(git -C "$WORK/remote" rev-parse site~1)"
+expect "moving forward from where it was" "$before" "$(git -C "$WORK/remote" rev-parse site^1)"
+expect "with release under the second pick" "$a" "$(git -C "$WORK/remote" rev-parse site^2~1)"
 
-echo "== a release with every pick makes site release =="
+echo "== a release with every pick leaves site holding release =="
 c="$(land c)"
 release_to "$c"
 out="$(sync)"
 expect "the sync succeeds" ok "$(status "$out")"
-expect "and site is release" "$c" "$(site)"
+expect "and site holds release" "$(git -C "$WORK/remote" rev-parse "$c^{tree}")" \
+  "$(git -C "$WORK/remote" rev-parse "site^{tree}")"
 
 echo "== a commit not on main is refused =="
 git -C "$REPO" checkout -q --orphan elsewhere

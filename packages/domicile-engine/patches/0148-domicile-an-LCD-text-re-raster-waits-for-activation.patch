@@ -19,10 +19,10 @@ moves the reason off kTransformAnimation with no commit.
  1 file changed, 6 insertions(+), 3 deletions(-)
 
 diff --git a/cc/layers/picture_layer_impl.cc b/cc/layers/picture_layer_impl.cc
-index b17dd80..bc09f7e 100644
+index 951545c..4802ba2 100644
 --- a/cc/layers/picture_layer_impl.cc
 +++ b/cc/layers/picture_layer_impl.cc
-@@ -1124,9 +1124,12 @@ bool PictureLayerImpl::CanRecreateHighResTilingForLCDTextAndRasterTransform(
+@@ -1115,9 +1115,12 @@ bool PictureLayerImpl::CanRecreateHighResTilingForLCDTextAndRasterTransform(
      // activate before we have invalidated the existing high rest tiling. This
      // is important to avoid activating a tree with missing tiles which can
      // cause flickering.

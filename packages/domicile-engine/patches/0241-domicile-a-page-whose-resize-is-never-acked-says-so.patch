@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page whose resize is never acked says so
+
+A widget sends a page one resize at a time: after a resize that needs an
+ack it holds every later one until the page's next frame carries the new
+surface (RenderWidgetHostImpl::SynchronizeVisualProperties, "Throttle to
+one update at a time"). A page that never draws that frame keeps its old
+size for good, whatever the window does, while every process idles. On
+lyra, Claude Desktop froze that way: its last frame at the old size,
+black where the window grew, both renderers idle, and no begin-frame
+line from patch 0237.
+
+The widget now logs at ERROR, once a shown page has waited 2 seconds for
+that ack: its frame sink, the size and surface it waits on, the last
+size acked, whether its view shows and whether its renderer lives. A
+hidden page draws nothing, so its wait starts when it is shown. When a
+logged wait's ack does come, it logs how long it took and how many
+requests to update it held meanwhile. Every other way the wait ends
+(hidden, navigated, a new renderer widget, a forced update) stops it.
+
+Log only: the next freeze names which of those holds.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+---
+ .../renderer_host/render_widget_host_impl.cc  | 71 +++++++++++++++++++
+ .../renderer_host/render_widget_host_impl.h   | 13 ++++
+ 2 files changed, 84 insertions(+)
+
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index ac42a40d..c718819 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -27,6 +27,7 @@
+ #include "base/i18n/rtl.h"
+ #include "base/lazy_instance.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/safety_checks.h"
+ #include "base/metrics/field_trial.h"
+@@ -417,6 +418,10 @@ gfx::Rect ClampPopupBounds(const gfx::Rect& bounds) {
+   return clamped;
+ }
+ 
++// Domicile: how long a resize may go unacked before the widget says so.
++// A page acks with its next frame, so a wait this long is stuck.
++constexpr base::TimeDelta kDomicileAckWait = base::Seconds(2);
++
+ }  // namespace
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+@@ -926,6 +931,7 @@ void RenderWidgetHostImpl::WasHidden() {
+   // Unthrottle SynchronizeVisualProperties IPCs so that the first call after
+   // show goes through immediately.
+   visual_properties_ack_pending_ = false;
++  DomicileStopWatchingAck();
+ 
+   // Don't bother reporting hung state when we aren't active.
+   GetRenderInputRouter()->StopInputEventAckTimeout();
+@@ -970,6 +976,11 @@ void RenderWidgetHostImpl::WasShown(
+ 
+   TRACE_EVENT("renderer_host", "RenderWidgetHostImpl::WasShown");
+   is_hidden_ = false;
++  // Domicile: a resize sent while hidden waits on a page that draws nothing
++  // until now, so its wait starts here.
++  if (visual_properties_ack_pending_) {
++    DomicileWatchAck();
++  }
+   latest_shown_time_ = base::TimeTicks::Now();
+ 
+   // If we navigated in background, clear the displayed graphics of the
+@@ -1330,6 +1341,7 @@ blink::VisualProperties RenderWidgetHostImpl::GetVisualProperties() {
+ void RenderWidgetHostImpl::ClearVisualProperties() {
+   old_visual_properties_.reset();
+   visual_properties_ack_pending_ = false;
++  DomicileStopWatchingAck();
+ }
+ 
+ bool RenderWidgetHostImpl::UpdateVisualProperties(bool propagate) {
+@@ -1342,6 +1354,7 @@ bool RenderWidgetHostImpl::SynchronizeVisualProperties() {
+ 
+ bool RenderWidgetHostImpl::SynchronizeVisualPropertiesIgnoringPendingAck() {
+   visual_properties_ack_pending_ = false;
++  DomicileStopWatchingAck();
+   return SynchronizeVisualProperties();
+ }
+ 
+@@ -1389,6 +1402,7 @@ bool RenderWidgetHostImpl::SynchronizeVisualProperties(
+ 
+   // Throttle to one update at a time.
+   if (visual_properties_ack_pending_) {
++    ++domicile_updates_held_;
+     return false;
+   }
+ 
+@@ -1456,6 +1470,9 @@ bool RenderWidgetHostImpl::SynchronizeVisualProperties(
+   visual_properties_ack_pending_ =
+       DoesVisualPropertiesNeedAck(old_visual_properties_, *visual_properties);
+   old_visual_properties_ = std::move(visual_properties);
++  if (visual_properties_ack_pending_) {
++    DomicileWatchAck();
++  }
+ 
+   // Warning: |visual_properties| invalid after this point.
+ 
+@@ -1653,6 +1670,44 @@ void RenderWidgetHostImpl::RestartRenderInputRouterInputEventAckTimeout() {
+   GetRenderInputRouter()->RestartInputEventAckTimeoutIfNecessary();
+ }
+ 
++void RenderWidgetHostImpl::DomicileWatchAck() {
++  domicile_ack_wait_started_ = base::TimeTicks::Now();
++  domicile_ack_wait_reported_ = false;
++  domicile_updates_held_ = 0;
++  domicile_ack_timer_.Start(
++      FROM_HERE, kDomicileAckWait,
++      base::BindOnce(&RenderWidgetHostImpl::DomicileReportAckWait,
++                     base::Unretained(this)));
++}
++
++void RenderWidgetHostImpl::DomicileStopWatchingAck() {
++  domicile_ack_timer_.Stop();
++  domicile_ack_wait_reported_ = false;
++}
++
++void RenderWidgetHostImpl::DomicileReportAckWait() {
++  // A hidden page draws nothing, so it can't ack until shown; WasShown
++  // watches again.
++  if (!visual_properties_ack_pending_ || !old_visual_properties_ ||
++      is_hidden_) {
++    return;
++  }
++  domicile_ack_wait_reported_ = true;
++  LOG(ERROR) << "domicile: widget " << GetFrameSinkId().ToString()
++             << " has not acked its resize to "
++             << old_visual_properties_->new_size_device_px.ToString()
++             << " (surface "
++             << (old_visual_properties_->local_surface_id
++                     ? old_visual_properties_->local_surface_id->ToString()
++                     : "none")
++             << ") in " << kDomicileAckWait << "; last acked "
++             << domicile_last_acked_size_.ToString() << ", view "
++             << (view_ && view_->IsShowing() ? "showing" : "not showing")
++             << ", renderer "
++             << (GetProcess()->IsInitializedAndNotDead() ? "alive" : "dead")
++             << ". No resize reaches it until it does.";
++}
++
+ bool RenderWidgetHostImpl::IsCurrentlyUnresponsive() {
+   return is_unresponsive_;
+ }
+@@ -1662,6 +1717,7 @@ void RenderWidgetHostImpl::DidNavigate() {
+   // |visual_properties_ack_pending_| and make sure the next resize will be
+   // acked if the last resize before navigation was supposed to be acked.
+   visual_properties_ack_pending_ = false;
++  DomicileStopWatchingAck();
+   if (view_) {
+     view_->DidNavigate();
+ 
+@@ -2523,6 +2579,11 @@ void RenderWidgetHostImpl::ResetStateForCreatedRenderWidget(
+       DoesVisualPropertiesNeedAck(nullptr, initial_props);
+   old_visual_properties_ =
+       std::make_unique<blink::VisualProperties>(initial_props);
++  if (visual_properties_ack_pending_) {
++    DomicileWatchAck();
++  } else {
++    DomicileStopWatchingAck();
++  }
+ 
+   // Reconstruct the input router to ensure that it has fresh state for a new
+   // RenderWidget. Otherwise it may be stuck waiting for the old renderer to ack
+@@ -3160,6 +3221,16 @@ void RenderWidgetHostImpl::OnLocalSurfaceIdChanged(
+   // Update our knowledge of the RenderWidget's size.
+   CHECK(!metadata.viewport_size_in_pixels.IsEmpty());
+ 
++  if (domicile_ack_wait_reported_) {
++    LOG(ERROR) << "domicile: widget " << GetFrameSinkId().ToString()
++               << " acked its resize to "
++               << metadata.viewport_size_in_pixels.ToString() << " after "
++               << (base::TimeTicks::Now() - domicile_ack_wait_started_)
++               << ", holding " << domicile_updates_held_
++               << " requests to update it meanwhile";
++  }
++  DomicileStopWatchingAck();
++  domicile_last_acked_size_ = metadata.viewport_size_in_pixels;
+   visual_properties_ack_pending_ = false;
+ 
+   for (auto& observer : observers_) {
+diff --git a/content/browser/renderer_host/render_widget_host_impl.h b/content/browser/renderer_host/render_widget_host_impl.h
+index 653c18e..6080916 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.h
++++ b/content/browser/renderer_host/render_widget_host_impl.h
+@@ -77,6 +77,7 @@
+ #include "ui/base/ime/text_input_type.h"
+ #include "ui/base/mojom/menu_source_type.mojom-forward.h"
+ #include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/size.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "ui/latency/latency_info.h"
+ #include "url/origin.h"
+@@ -1535,6 +1536,18 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+   // True when waiting for visual_properties_ack.
+   bool visual_properties_ack_pending_ = false;
+ 
++  // Domicile: a page whose resize is never acked gets no further resize, so
++  // it stays at its old size and draws nothing new. Logs a shown page's wait
++  // past `kDomicileAckWait`; see `DomicileReportAckWait`.
++  void DomicileWatchAck();
++  void DomicileStopWatchingAck();
++  void DomicileReportAckWait();
++  base::OneShotTimer domicile_ack_timer_;
++  base::TimeTicks domicile_ack_wait_started_;
++  bool domicile_ack_wait_reported_ = false;
++  int domicile_updates_held_ = 0;
++  gfx::Size domicile_last_acked_size_;
++
+   // Visual properties that were most recently sent to the renderer.
+   std::unique_ptr<blink::VisualProperties> old_visual_properties_;
+ 

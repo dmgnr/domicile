@@ -251,6 +251,7 @@ Calls (compositor → engine):
 |---|---|
 | `domicile_surface_create(engine, app_id)` → `DomicileSurfaceId` | a window appearing. The page's embed waits for this call. |
 | `domicile_surface_import_async(surface, dmabuf, request)`, answered by `imported` | `zwp_linux_dmabuf_v1`. `domicile_surface_import` is the blocking form an older compositor calls. |
+| `domicile_surface_set_color(surface, color)` | `wp_color_management_surface_v1.set_image_description`: buffers imported after it are drawn in that color ([COLOR.md](COLOR.md)) |
 | `domicile_surface_import_shm(surface, buffer)` | `wl_shm`, for an engine on the CPU. Blocks; refused while the browser composites on the GPU ([`wl_shm` clients on the CPU](WINDOW-COMPOSITING.md#wl_shm-clients-on-the-cpu)). |
 | `domicile_surface_submit_transformed(surface, buffer, crop, damage, box, transform)` | `wl_surface.commit` with `xdg_surface.set_window_geometry` and `wl_surface.set_buffer_transform`, shown at the box of the acked configure |
 | `domicile_surface_submit_fenced(…, transform, acquire_fence)` | the same, read once `acquire_fence` signals, like `zwp_linux_surface_synchronization_v1`'s acquire fence. The compositor's shm copies use it ([WINDOW-COMPOSITING.md](WINDOW-COMPOSITING.md#wl_shm-clients-on-a-gpu)). |
@@ -271,7 +272,7 @@ Callbacks (engine → compositor):
 |---|---|
 | `released(surface, buffer)` | `wl_buffer.release` |
 | `imported(surface, request, buffer)` | none: the answer to `domicile_surface_import_async`; zero is a refusal |
-| `configure(surface, width, height)`, `configure_at(…, scale)`, `configure_box(…, box)` | `xdg_toplevel.configure` |
+| `configure(surface, width, height)`, `configure_at(…, scale)`, `configure_box(…, box)`, `configure_zoomed(…, zoom, box)` | `xdg_toplevel.configure` |
 | `ramped_displays(displays, count)` | `wl_output`. Primary first, never empty. Each display with its connector and gamma ramp size. `connected_displays` is the form without ramp sizes and `displays` the form without connectors, each called when the ones before it are unset. |
 | `copied_items(clipboard, items, count)` | `wl_data_device.set_selection` for a copy made in a page: its text and its image. `copied(clipboard, text, length)` is the text-only form, called when `copied_items` is unset. |
 | `captured(capture, frame, record)`, `capture_ended(capture)` | none: a monitor's frame for a screen cast, and the browser ending the capture |
@@ -279,7 +280,10 @@ Callbacks (engine → compositor):
 | `presented(surface, frame, time_ns, refresh_ns, flags)` | `wp_presentation_feedback`: from the frame's `FrameTimingDetails`, or discarded |
 | `disconnected()` | none: the browser went away, so the next page's `hello` is a new engine ([THE-DOMICILE-BINARY.md](THE-DOMICILE-BINARY.md#crashes-are-recovered)) |
 | `compositing(in_memory)` | none: the browser composites in memory, or on the GPU. Sent once known and on every change ([Software output](A-DESKTOP-ON-A-TTY.md#software-output)) |
-| `browser_windows(windows, count)` | `ext_foreign_toplevel_list_v1.toplevel`: the browser's windows, each a `DomicileBrowserWindow` (id, title, app id), in open order. Sent on connect and when one opens, closes or is retitled ([Wayland capture](../PORTALS.md#wayland-capture)) |
+| `browser_windows(windows, count)` | `ext_foreign_toplevel_list_v1.toplevel`: the browser's windows, each a `DomicileBrowserWindow` (id, title, app id), in open order. Sent on connect and when one opens, closes, navigates or is retitled ([Wayland capture](../PORTALS.md#wayland-capture)) |
+| `listed_browser_windows(windows, count)` | Called instead of `browser_windows` when set: each window a `DomicileListedBrowserWindow`, adding its address and whether it is private. `domicile list-windows` reads it too. An older engine ignores it |
+| `viewed_browser_windows(windows, count, views, view_count)` | Called instead of `listed_browser_windows` when set: adds the views each window holds and shows, each a `DomicileBrowserWindowView` (id, window index, place in the window's page), bottom first. A shot of the window draws them ([PORTALS.md](../PORTALS.md)). An older engine ignores it |
+| `input_devices(devices, count)` | The keyboards, pointers and touch devices the browser reads, each a `DomicileInputDevice` (name, `/sys` path, id, USB or Bluetooth ids, kind, connection), from `ui::DeviceDataManager`. Sent on connect and when one is plugged or unplugged; `domicile list-inputs` reads it. An older engine ignores it |
 
 - Only `crop` fills the `<app>` box, so client-side shadows are not drawn. An
   empty rectangle means the whole buffer or surface. `domicile_surface_submit`
@@ -305,7 +309,10 @@ The browser imports each dmabuf. The producer submits its own frames.
    (`components/exo/buffer.cc`). That code needs `aura::Env`, which only the
    browser has.
 3. The browser returns a `gpu::ExportedSharedImage`: a mailbox, metadata and a
-   verified sync token.
+   verified sync token. It answers only once its GPU channel passes the
+   image's creation token. The producer's frame reaches viz on another pipe,
+   and viz could draw it before the GPU had made the image, leaving the
+   window blank until it was replaced.
 4. The producer calls `gpu::ClientSharedImage::ImportUnowned`, builds its own
    `viz::TransferableResource` and submits its own `CompositorFrame`.
 5. Viz returns the resource through the producer's own sink, which fires
@@ -324,6 +331,11 @@ Decisions:
   cannot create new ones. This takes the browser off the per-frame path.
 - `ImportBuffer` refuses a DRM fourcc it cannot map. Guessing swaps color
   channels (`ARGB8888` vs `ABGR8888`).
+- **A buffer's color is fixed at import.** Viz reads a resource's color space
+  from its SharedImage, so `ImportBuffer` takes the surface's color space and
+  the producer puts its HDR metadata on the resource. A surface whose color
+  changes has its buffers imported again (`engine_imports.rs` keys an import
+  on the color too).
 
 ### Display capture
 

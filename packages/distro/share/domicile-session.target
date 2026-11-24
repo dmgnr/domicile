@@ -6,10 +6,15 @@
 # `graphical-session.target`, which the portal and other graphical user units
 # require, and wants `xdg-desktop-autostart.target`, which starts
 # `~/.config/autostart` entries (the Background portal writes them).
+#
+# It comes before that target too. A target is ordered after what it wants
+# unless told otherwise, and each autostart entry is ordered after
+# `graphical-session.target`, which this comes before: without the order
+# that is a cycle, which systemd breaks by dropping every autostart entry.
 [Unit]
 Description=Domicile desk
 Documentation=https://github.com/cprussin/domicile/blob/main/docs/RUNNING-A-DESKTOP.md
 BindsTo=graphical-session.target
-Before=graphical-session.target
+Before=graphical-session.target xdg-desktop-autostart.target
 Wants=graphical-session-pre.target xdg-desktop-autostart.target
 After=graphical-session-pre.target

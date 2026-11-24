@@ -249,5 +249,24 @@ TEST(DrmPointerCrossingTest, TheKeyboardEdgeIsTheClickEdge) {
       HasTheKeyboard(gfx::Rect(0, 0, 1920, 1080), gfx::PointF(1919.9, 500)));
 }
 
+// Sleeping the host's monitor moves its window onto the monitor the pointer
+// is on. The pointer stays put, on the window that now holds its spot.
+TEST(DrmPointerCrossingTest, APointerStaysPutWhenItsWindowGoes) {
+  const std::vector<PointerScreen> moved = {
+      {kLaptop, gfx::Rect(1920, 0, 1920, 1080), display::Display::ROTATE_0},
+  };
+  ExpectAt(PointerStaysAt(moved, gfx::PointF(2500, 300)), kLaptop,
+           gfx::PointF(580, 300));
+}
+
+// Waking it moves the host's window back off the pointer's monitor before
+// that monitor's own window opens. Nothing holds the spot until then.
+TEST(DrmPointerCrossingTest, APointerNoWindowHoldsHasNowhereToStay) {
+  const std::vector<PointerScreen> moved = {
+      {kLaptop, gfx::Rect(0, 0, 2880, 1920), display::Display::ROTATE_0},
+  };
+  EXPECT_FALSE(PointerStaysAt(moved, gfx::PointF(3500, 300)).has_value());
+}
+
 }  // namespace
 }  // namespace ui

@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an Electron app's page loads its handled schemes
+
+An Electron app window's page loads file: and the app's own schemes from
+the app, and its http and https requests go to the app first when its
+session handles them, as Electron's protocol.handle does.
+
+ChromeContentBrowserClient hands an Electron page's navigations and
+subresources in those schemes to the app's loader, replacing content's
+file: loader there, and puts the app in front of the page's network
+loads. A guest navigates only to web-safe schemes, so content asks the
+embedder, through ContentBrowserClient::MayGuestLoadUnsafeScheme, whether
+this guest may load a scheme that is not. See
+chrome/browser/domicile/domicile_electron_loader.h.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../browser/chrome_content_browser_client.cc  | 26 +++++++++++++++++++
+ .../browser/chrome_content_browser_client.h   |  2 ++
+ .../navigation_controller_impl.cc             |  8 +++++-
+ .../public/browser/content_browser_client.cc  |  5 ++++
+ .../public/browser/content_browser_client.h   |  5 ++++
+ 5 files changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 0643e8f..97b926f 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/chrome_content_browser_client.h"
+ 
++#include "chrome/browser/domicile/domicile_electron_loader.h"
+ #include "chrome/browser/domicile/domicile_identity_dialog.h"
+ #include "chrome/browser/domicile/domicile_picture_in_picture.h"
+ #include "components/domicile/browser/force_dark.h"
+@@ -6483,6 +6484,14 @@ base::FilePath DomicileShellRoot() {
+ 
+ }  // namespace
+ 
++bool ChromeContentBrowserClient::MayGuestLoadUnsafeScheme(
++    content::WebContents* guest,
++    const GURL& url) {
++  // Domicile's engine fork. An Electron app window is a guest, and loads
++  // file: and the app's own schemes once its session handles them.
++  return domicile::MayElectronPageLoad(guest, url);
++}
++
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ ChromeContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+     const std::string& scheme,
+@@ -6496,6 +6505,14 @@ ChromeContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+     return domicile::ShellURLLoaderFactory::Create(DomicileShellRoot());
+   }
+ 
++  // Domicile's engine fork. An Electron app window's page loads file: and
++  // the app's own schemes from the app, when its session handles them.
++  if (mojo::PendingRemote<network::mojom::URLLoaderFactory> electron =
++          domicile::ElectronNavigationLoaderFactory(scheme,
++                                                    frame_tree_node_id)) {
++    return electron;
++  }
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE) || BUILDFLAG(IS_CHROMEOS) || \
+     !BUILDFLAG(IS_ANDROID)
+   content::WebContents* web_contents =
+@@ -6911,6 +6928,10 @@ void ChromeContentBrowserClient::
+   factories->emplace(
+       domicile::kDomicileScheme,
+       domicile::ShellURLLoaderFactory::Create(DomicileShellRoot()));
++  // And an Electron app window's page loads file: and the app's own schemes
++  // from the app. Its file: loader replaces content's, which reads any file.
++  domicile::AddElectronSubresourceLoaderFactories(render_process_id,
++                                                  render_frame_id, factories);
+ 
+ #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENABLE_EXTENSIONS_CORE) || \
+     !BUILDFLAG(IS_ANDROID)
+@@ -7031,6 +7052,11 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+     network::mojom::URLLoaderFactoryOverridePtr* factory_override,
+     scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner,
+     bool is_for_network_service) {
++  // Domicile's engine fork. First, so an Electron app's protocol.handle
++  // for http or https answers its page's request before anything else sees
++  // it, as in Electron.
++  domicile::ProxyElectronNetworkLoads(frame, factory_builder);
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   auto* web_request_api =
+       extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+index 5c3f04a..373f817 100644
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -696,6 +696,8 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+   CreateURLLoaderThrottlesForKeepAlive(
+       content::BrowserContext* browser_context,
+       content::FrameTreeNodeId frame_tree_node_id) override;
++  bool MayGuestLoadUnsafeScheme(content::WebContents* guest,
++                                 const GURL& url) override;
+   mojo::PendingRemote<network::mojom::URLLoaderFactory>
+   CreateNonNetworkNavigationURLLoaderFactory(
+       const std::string& scheme,
+diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/content/browser/renderer_host/navigation_controller_impl.cc
+index 99afc59..5f2ec5e 100644
+--- a/content/browser/renderer_host/navigation_controller_impl.cc
++++ b/content/browser/renderer_host/navigation_controller_impl.cc
+@@ -92,6 +92,7 @@
+ #include "content/public/browser/back_forward_transition_animation_manager.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/content_browser_client.h"
++#include "content/public/browser/web_contents.h"
+ #include "content/public/browser/disallow_activation_reason.h"
+ #include "content/public/browser/invalidate_type.h"
+ #include "content/public/browser/navigation_details.h"
+@@ -332,8 +333,13 @@ std::optional<NavigationNotStartedReason> CheckURLForNavigationError(
+           ->GetSecurityPrincipal()
+           .IsGuest()) {
+     auto* cpsp = content::ChildProcessSecurityPolicy::GetInstance();
++    // Domicile's engine fork: unless the embedder lets this guest load the
++    // scheme (an Electron app window loading the app's own files).
+     if (!cpsp->IsWebSafeScheme(dest_url.GetScheme()) &&
+-        !dest_url.SchemeIs(url::kAboutScheme)) {
++        !dest_url.SchemeIs(url::kAboutScheme) &&
++        !GetContentClient()->browser()->MayGuestLoadUnsafeScheme(
++            WebContents::FromRenderFrameHost(node->current_frame_host()),
++            dest_url)) {
+       LOG(WARNING) << "Refusing to load unsafe URL in a guest: "
+                    << dest_url.possibly_invalid_spec();
+       return NavigationNotStartedReason::kDisallowedScheme;
+diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
+index 2e9fb50..06d0f4c 100644
+--- a/content/public/browser/content_browser_client.cc
++++ b/content/public/browser/content_browser_client.cc
+@@ -1789,6 +1789,11 @@ bool ContentBrowserClient::IsFileSystemURLNavigationAllowed(
+   return false;
+ }
+ 
++bool ContentBrowserClient::MayGuestLoadUnsafeScheme(WebContents* guest,
++                                                    const GURL& url) {
++  return false;
++}
++
+ #if BUILDFLAG(IS_ANDROID)
+ bool ContentBrowserClient::IsContentSchemeURLNavigationAllowed(
+     const GURL& url) {
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
+index 3a85da4..99cdd7d 100644
+--- a/content/public/browser/content_browser_client.h
++++ b/content/public/browser/content_browser_client.h
+@@ -3009,6 +3009,11 @@ class CONTENT_EXPORT ContentBrowserClient {
+       content::BrowserContext* browser_context,
+       const GURL& url);
+ 
++  // Domicile's engine fork. Whether `guest`, a guest's page, may navigate to
++  // `url`, whose scheme is not web-safe. Guests otherwise load web-safe
++  // schemes only (see NavigationControllerImpl). By default, false.
++  virtual bool MayGuestLoadUnsafeScheme(WebContents* guest, const GURL& url);
++
+ #if BUILDFLAG(IS_ANDROID)
+   // Returns true if navigation to `url`, which must have a content:// scheme,
+   // is allowed. By default, returns false unless

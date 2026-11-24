@@ -426,7 +426,11 @@ type StreamDeviceProps = {
   streams: readonly AudioStream[];
 };
 
-/** A picker of the device the streams play to or record from. */
+/**
+ * A picker of the device the streams play to or record from. The hardware
+ * behind a filter is left out unless they play to it: it would skip the
+ * filter.
+ */
 const StreamDevice = ({
   devices,
   label,
@@ -442,10 +446,12 @@ const StreamDevice = ({
         }
       }
     }}
-    options={devices.map((device) => ({
-      label: device.description,
-      value: device.id,
-    }))}
+    options={devices
+      .filter((device) => !device.filtered || device.id === streams[0]?.device)
+      .map((device) => ({
+        label: device.description,
+        value: device.id,
+      }))}
     size="sm"
     surface="filled"
     value={streams[0]?.device ?? null}

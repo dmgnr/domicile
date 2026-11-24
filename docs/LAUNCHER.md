@@ -99,6 +99,10 @@ export const Shell = runManganese({
 ```
 
 - Each bookmark has one `http` or `https` URL. Other schemes are rejected.
+- A bookmark's `profile`, such as `"work"`, opens it in that browser profile
+  ([BROWSER-PROFILES.md](architecture/BROWSER-PROFILES.md)). Without one, it
+  opens in the profile its site opens in. Its preview loads in the same
+  profile when it names one, and in the default profile otherwise.
 - Manganese fetches each site's icon with `curl`: the page's
   `<link rel="icon">`, else `/favicon.ico`. The Nix package puts `curl` on the
   compositor's `PATH`.

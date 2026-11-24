@@ -24,6 +24,10 @@ pub enum Outbound {
     /// For the pages listening for bells, for the same reason: the window
     /// that rang, if any.
     Bell(Option<AppId>),
+    /// Something `domicile subscribe` watches may have changed without a
+    /// message to the chromes, so the writer asks its watchers again. See
+    /// [`crate::watchers`].
+    Watched,
 }
 
 /// The sending half, held by the Wayland thread.
@@ -51,6 +55,11 @@ impl OutboundSender {
     /// Queue a client's window request. Never waits and never drops.
     pub fn window_request(&self, app_id: AppId, request: WindowRequest) {
         let _ = self.sender.send(Outbound::WindowRequest(app_id, request));
+    }
+
+    /// Have the writer tell the watchers what changed. Never waits.
+    pub fn watched(&self) {
+        let _ = self.sender.send(Outbound::Watched);
     }
 
     /// Queue a bell. Never waits and never drops.

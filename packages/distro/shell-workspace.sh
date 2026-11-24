@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Lays out the workspace the shell builder runs from: the builder and
-# manganese, the workspace packages they link, and their production modules.
+# Lays out the workspace the shell builder and `electron-host` run from: the
+# builder, manganese and `electron-host`, the workspace packages they link,
+# and their production modules.
 # `packages/distro/stage.sh` and `shellWorkspace` in `flake.nix` both run it.
 #
 #   packages/distro/shell-workspace.sh modules <bun> <workspace> <out>
@@ -22,7 +23,7 @@ BUN="$2"
 WORKSPACE="$3"
 OUT="$4"
 
-ROOTS=(domicile-builder shell-manganese)
+ROOTS=(domicile-builder shell-manganese electron-host)
 
 # Every manifest is copied because the frozen install checks the lockfile
 # against all of them. Each workspace package's version is set to 0.0.0, in its

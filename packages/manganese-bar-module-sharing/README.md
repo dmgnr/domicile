@@ -1,22 +1,27 @@
 # @domicile-desktop/manganese-bar-module-sharing
 
-A manganese bar item: the screen-sharing indicator.
+Manganese bar items: the screen-sharing indicator, and the agents in control.
 
 ## Use
 
-Put `<Sharing />` in a column of
+Put `<Sharing />` and `<Agents />` in a column of
 [`runManganese`](../shell-manganese/README.md)'s `bar`:
 
 ```tsx
 import { runManganese } from "@domicile-desktop/manganese";
 import { Sharing } from "@domicile-desktop/manganese-bar-module-sharing";
+import { Agents } from "@domicile-desktop/manganese-bar-module-sharing/agents";
 
 export const Shell = runManganese({
-  bar: { center: [], left: [], right: [<Sharing key="sharing" />] },
+  bar: {
+    center: [],
+    left: [],
+    right: [<Sharing key="sharing" />, <Agents key="agents" />],
+  },
 });
 ```
 
-It takes no props. It reads `useDomicile()`. See
+Each takes no props. It reads `useDomicile()`. See
 [TOP-BAR.md](../shell-manganese/docs/TOP-BAR.md).
 
 ## Test

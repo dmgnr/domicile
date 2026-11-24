@@ -11,7 +11,9 @@
 //!   closes, and so is one that asks for windows soon after that connection
 //!   answered a picker for screens. Electron apps (Slack) ask for screens,
 //!   then for windows, then for both when the user clicks their own Share,
-//!   each in a new session; only the first needs the picker.
+//!   each in a new session; only the first needs the picker. A connection
+//!   that closes a session while its `Start` restores (Meet restarting a
+//!   page's capture) has its next ask without a token restore the same pick.
 //! - The capture is listed for the shell's sharing indicator until it ends.
 //!   Closing the session, the shell's stop, or every stream ending ends it.
 //!
@@ -30,7 +32,7 @@ use domicile_protocol::{
     Captured, CapturedMonitor, CapturingKind, CastPick, CastSource, FrozenDesk, PortalAnswer,
     PortalKind, ScreenCastDialog,
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use zbus::object_server::ObjectServer;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -72,6 +74,12 @@ const SAME_SHARE: Duration = Duration::from_secs(60);
 /// it. Its answer goes first.
 const AFTER_THE_PICK: Duration = Duration::from_millis(500);
 
+/// How long after a connection closed a session whose `Start` was restoring,
+/// before it answered, its next ask without a token restores the same pick.
+/// The frontend deletes a token when it is used, and saves it again only from
+/// an answer. See `docs/PORTALS.md`.
+const RESTARTED: Duration = Duration::from_secs(2);
+
 /// `AvailableSourceTypes`: every type.
 const SOURCE_TYPES: u32 = MONITOR | WINDOW | VIRTUAL;
 
@@ -93,6 +101,7 @@ pub struct ScreenCast {
     picks: Picks,
     asking: Asking,
     answered: Answered,
+    cut_short: CutShorts,
 }
 
 /// The `Start`s waiting on each connection's open picker, by the sender part
@@ -103,6 +112,18 @@ type Asking = Arc<Mutex<HashMap<String, Vec<Replier<()>>>>>;
 /// When each connection last answered a picker that asked for monitors alone,
 /// by the sender part of its session handles. See [`same_share`].
 type Answered = Arc<Mutex<HashMap<String, Instant>>>;
+
+/// The restore each connection closed last before it answered, by the sender
+/// part of its session handles. See [`resumed`].
+type CutShorts = Arc<Mutex<HashMap<String, CutShort>>>;
+
+/// A session closed while its `Start` restored a pick, before it answered.
+struct CutShort {
+    /// The restore token it restored with.
+    token: String,
+    /// When it closed.
+    closed: Instant,
+}
 
 /// What each running stream's node shows, for [`CastPicks`].
 type Picks = Arc<Mutex<HashMap<u32, Pick>>>;
@@ -127,6 +148,8 @@ struct CastSession {
     streams: Vec<StreamId>,
     /// The id the shell's indicator lists the capture under.
     capture: Option<u32>,
+    /// The restore token a running `Start` restores with.
+    restoring: Option<String>,
 }
 
 /// What an application asked for in `SelectSources`.
@@ -169,6 +192,7 @@ impl ScreenCast {
             picks: Arc::default(),
             asking: Arc::default(),
             answered: Arc::default(),
+            cut_short: Arc::default(),
         }
     }
 
@@ -226,6 +250,7 @@ impl ScreenCast {
             queue: Arc::clone(&self.queue),
             casting: self.casting.clone(),
             sessions: Arc::clone(&self.sessions),
+            cut_short: Arc::clone(&self.cut_short),
             handle: session_handle.clone(),
         };
         self.sessions
@@ -235,7 +260,7 @@ impl ScreenCast {
         match session::open(server, &session_handle, move || closing.close()).await {
             Ok(_) => (0, HashMap::new()),
             Err(why) => {
-                warn!(%why, %session_handle, "a screen cast session could not be opened");
+                tracing::error!(%why, %session_handle, "a screen cast session could not be opened");
                 self.sessions.lock().unwrap().remove(&session_handle);
                 (2, HashMap::new())
             }
@@ -287,6 +312,16 @@ impl ScreenCast {
         else {
             return (2, HashMap::new());
         };
+        let cut_short = self
+            .cut_short
+            .lock()
+            .unwrap()
+            .remove(&sender(&session_handle));
+        let selected = Selected {
+            restore: resumed(selected.restore.as_deref(), cut_short, Instant::now()),
+            ..selected
+        };
+        let _restoring = Restoring::start(&self.sessions, &session_handle, &selected);
         let Some(listed) = self.casting.list().await else {
             return (2, HashMap::new());
         };
@@ -603,9 +638,41 @@ impl ScreenCast {
             fresh_token,
         );
         granted.unwrap_or_else(|why| {
-            warn!(%why, "a screen cast grant could not be saved; the application will ask again");
+            tracing::error!(%why, "a screen cast grant could not be saved; the application will ask again");
             None
         })
+    }
+}
+
+/// A `Start` restoring with a token, noted on its session until it answers.
+/// See [`CutShort`].
+struct Restoring {
+    sessions: Arc<Mutex<HashMap<OwnedObjectPath, CastSession>>>,
+    handle: OwnedObjectPath,
+}
+
+impl Restoring {
+    /// Notes `selected`'s token on the session, if it has one.
+    fn start(
+        sessions: &Arc<Mutex<HashMap<OwnedObjectPath, CastSession>>>,
+        handle: &OwnedObjectPath,
+        selected: &Selected,
+    ) -> Restoring {
+        if let Some(session) = sessions.lock().unwrap().get_mut(handle) {
+            session.restoring.clone_from(&selected.restore);
+        }
+        Restoring {
+            sessions: Arc::clone(sessions),
+            handle: handle.clone(),
+        }
+    }
+}
+
+impl Drop for Restoring {
+    fn drop(&mut self) {
+        if let Some(session) = self.sessions.lock().unwrap().get_mut(&self.handle) {
+            session.restoring = None;
+        }
     }
 }
 
@@ -615,6 +682,7 @@ struct Closing {
     queue: Arc<Queue>,
     casting: Casting,
     sessions: Arc<Mutex<HashMap<OwnedObjectPath, CastSession>>>,
+    cut_short: CutShorts,
     handle: OwnedObjectPath,
 }
 
@@ -623,6 +691,15 @@ impl Closing {
         let Some(session) = self.sessions.lock().unwrap().remove(&self.handle) else {
             return;
         };
+        if let Some(token) = session.restoring {
+            self.cut_short.lock().unwrap().insert(
+                sender(&self.handle),
+                CutShort {
+                    token,
+                    closed: Instant::now(),
+                },
+            );
+        }
         for stream in session.streams {
             self.casting.stop(stream);
         }
@@ -703,7 +780,7 @@ impl Ending {
             .spawn(
                 async move {
                     if let Err(why) = session::end(connection.object_server(), &handle).await {
-                        warn!(%why, %handle, "an application was not told its screen cast ended");
+                        tracing::error!(%why, %handle, "an application was not told its screen cast ended");
                     }
                 },
                 "end a screen cast session",
@@ -718,7 +795,7 @@ pub(super) async fn preview(shoot: &Shoot) -> Option<FrozenDesk> {
     match shoot().await {
         Ok(desk) => Some(frozen(&desk)),
         Err(why) => {
-            warn!(%why, "the desk could not be shot to preview a screen cast's sources");
+            tracing::error!(%why, "the desk could not be shot to preview a screen cast's sources");
             None
         }
     }
@@ -788,6 +865,16 @@ fn same_share(types: u32, restore: Option<&str>, answered: Option<Instant>, now:
         && answered.is_some_and(|answered| now < answered + SAME_SHARE)
 }
 
+/// The restore token an ask comes with: its own, else that of the restore
+/// its connection `cut_short`, within [`RESTARTED`] of `now`.
+fn resumed(restore: Option<&str>, cut_short: Option<CutShort>, now: Instant) -> Option<String> {
+    restore.map(str::to_string).or_else(|| {
+        cut_short
+            .filter(|cut_short| now < cut_short.closed + RESTARTED)
+            .map(|cut_short| cut_short.token)
+    })
+}
+
 /// The sender part of a session handle,
 /// `/org/freedesktop/portal/desktop/session/SENDER/TOKEN`: one D-Bus
 /// connection's sessions share it.
@@ -807,11 +894,12 @@ fn listener(stream: StreamId, ready: Replier<u32>, ending: Ending) -> crate::cas
     Box::new(move |event| match event {
         Event::Ready { node, .. } => {
             if let Some(ready) = ready.take() {
+                info!(?node, handle = %ending.handle, "a screen cast stream started");
                 ready.send(node);
             }
         }
         Event::Ended(why) => {
-            debug!(?why, handle = %ending.handle, "a screen cast stream ended");
+            info!(?why, handle = %ending.handle, "a screen cast stream ended");
             // Dropping `ready` unsent fails a stream that never started.
             ready = None;
             ending.ended(stream);
@@ -1129,6 +1217,7 @@ fn fresh_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{channel, Receiver};
     use std::thread;
     use std::time::Duration;
@@ -1156,6 +1245,8 @@ mod tests {
         queue: Arc<Queue>,
         published: Receiver<(Vec<PortalRequest>, Vec<Capturing>)>,
         casts: Receiver<String>,
+        /// Set, the next stream started never gets ready.
+        hold: Arc<AtomicBool>,
         _server: zbus::blocking::Connection,
     }
 
@@ -1177,7 +1268,8 @@ mod tests {
             || true,
             |_| None,
         );
-        let (casting, casts) = wayland_thread();
+        let hold = Arc::new(AtomicBool::new(false));
+        let (casting, casts) = wayland_thread(Arc::clone(&hold));
         let backend = ScreenCast::new(Arc::clone(&queue), casting, grants, shoot);
         let picks = backend.picks();
         let (server, client) = connected(|builder| {
@@ -1192,13 +1284,15 @@ mod tests {
             queue,
             published,
             casts,
+            hold,
             _server: server,
         }
     }
 
     /// A stand-in for the Wayland thread: lists two windows, makes each
-    /// stream ready at once, and reports what it starts and stops.
-    fn wayland_thread() -> (Casting, Receiver<String>) {
+    /// stream ready at once unless `hold` is set, and reports what it starts
+    /// and stops.
+    fn wayland_thread(hold: Arc<AtomicBool>) -> (Casting, Receiver<String>) {
         let (requests, heard) = calloop_channel::<Request>();
         let (told, casts) = channel();
         thread::spawn(move || {
@@ -1222,10 +1316,12 @@ mod tests {
                             .map(|part| format!(" part {part:?}"))
                             .unwrap_or_default();
                         let _ = told.send(format!("start {source:?} {cursor:?}{part}"));
-                        listener(Event::Ready {
-                            node: 42,
-                            sound: None,
-                        });
+                        if !hold.swap(false, Ordering::SeqCst) {
+                            listener(Event::Ready {
+                                node: 42,
+                                sound: None,
+                            });
+                        }
                         listeners.insert(stream, listener);
                     }
                     Heard::Msg(Request::Stop { stream }) => {
@@ -1749,6 +1845,118 @@ mod tests {
                 .all(|(items, _)| items.is_empty()),
             "no dialog was shown"
         );
+    }
+
+    /// Meet restarts a page's capture as it starts: the first restore is
+    /// closed before it answers, and the next session comes with no token, as
+    /// the frontend's are good once.
+    #[test]
+    fn a_restore_closed_before_it_answered_is_restored_by_the_next_ask() {
+        let served = served(Grants::default());
+        let windows = |restore: Option<OwnedValue>| {
+            let mut options = vec![
+                ("types", Value::from(3u32)),
+                ("persist_mode", Value::from(1u32)),
+            ];
+            if let Some(restore) = restore {
+                options.push(("restore_data", Value::from(restore)));
+            }
+            options
+        };
+        select(&served.client, windows(None));
+        let (_, results) = pick_notes(&served);
+        heard(&served.casts);
+        let restore = results
+            .get("restore_data")
+            .expect("a token")
+            .try_clone()
+            .expect("cloned");
+        close(&served);
+        heard(&served.casts);
+        select(&served.client, windows(Some(restore)));
+
+        // Meet may restart twice; each restore is closed as it starts.
+        for _ in 0..2 {
+            served.hold.store(true, Ordering::SeqCst);
+            let restoring = start(&served.client);
+            assert_eq!(heard(&served.casts), r#"start Window("app-3") Hidden"#);
+            close(&served);
+            assert_eq!(heard(&served.casts), "stop");
+            assert_eq!(restoring.join().expect("Start returned").0, 2);
+            // The stream that never got ready is stopped again.
+            assert_eq!(heard(&served.casts), "stop");
+            select(&served.client, windows(None));
+        }
+        let (response, results) = start(&served.client).join().expect("Start returned");
+
+        assert_eq!(response, 0);
+        assert_eq!(heard(&served.casts), r#"start Window("app-3") Hidden"#);
+        assert!(results.contains_key("restore_data"), "a token to restore");
+        assert!(
+            served
+                .published
+                .try_iter()
+                .all(|(items, _)| items.is_empty()),
+            "no dialog was shown"
+        );
+    }
+
+    /// Only a `Start` closed while it restored carries over: a session
+    /// closed before it started asks again.
+    #[test]
+    fn a_restore_closed_before_it_started_does_not_carry_over() {
+        let served = served(Grants::default());
+        let windows = |restore: Option<OwnedValue>| {
+            let mut options = vec![
+                ("types", Value::from(3u32)),
+                ("persist_mode", Value::from(1u32)),
+            ];
+            if let Some(restore) = restore {
+                options.push(("restore_data", Value::from(restore)));
+            }
+            options
+        };
+        select(&served.client, windows(None));
+        let (_, results) = pick_notes(&served);
+        heard(&served.casts);
+        let restore = results
+            .get("restore_data")
+            .expect("a token")
+            .try_clone()
+            .expect("cloned");
+        close(&served);
+        heard(&served.casts);
+        select(&served.client, windows(Some(restore)));
+        close(&served);
+        select(&served.client, windows(None));
+
+        let starting = start(&served.client);
+
+        assert!(
+            (0..10).any(|_| !next(&served.published).0.is_empty()),
+            "the picker is up"
+        );
+        close(&served);
+        drop(starting);
+    }
+
+    #[test]
+    fn a_cut_short_restore_is_restored_for_a_moment() {
+        let closed = Instant::now();
+        let cut = |token: &str| {
+            Some(CutShort {
+                token: token.to_string(),
+                closed,
+            })
+        };
+
+        assert_eq!(resumed(None, cut("t"), closed), Some("t".to_string()));
+        assert_eq!(
+            resumed(Some("mine"), cut("t"), closed),
+            Some("mine".to_string())
+        );
+        assert_eq!(resumed(None, cut("t"), closed + RESTARTED), None);
+        assert_eq!(resumed(None, None, closed), None);
     }
 
     #[test]

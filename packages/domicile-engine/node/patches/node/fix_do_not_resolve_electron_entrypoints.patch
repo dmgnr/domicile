@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Samuel Attard <marshallofsound@electronjs.org>
+Date: Wed, 26 Jul 2023 17:03:15 -0700
+Subject: fix: do not resolve electron entrypoints
+
+require('electron') from an ES module goes through the CJS pre-parser; skip
+reading a file named 'electron' from disk for it and expose the module's own
+keys as its named exports.
+
+diff --git a/lib/internal/modules/esm/translators.js b/lib/internal/modules/esm/translators.js
+index f031ed81b9b27f2f5886b66f9c31cc575f029668..007d2e6035c117739276d3d12be7a0f4ac4ec672 100644
+--- a/lib/internal/modules/esm/translators.js
++++ b/lib/internal/modules/esm/translators.js
+@@ -434,6 +434,10 @@ function cjsPreparseModuleExports(filename, source, format) {
+     return { module, exportNames: module[kModuleExportNames] };
+   }
+ 
++  if (filename === 'electron') {
++    return { module, exportNames: new SafeSet(['default', ...Object.keys(module.exports)]) };
++  }
++
+   if (source === undefined) {
+     ({ source } = loadSourceForCJSWithHooks(module, filename, format));
+   }

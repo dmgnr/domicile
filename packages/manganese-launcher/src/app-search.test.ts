@@ -186,6 +186,40 @@ describe("appSearch", () => {
     expect(lookup.asked).toStrictEqual([["https://sms.example/"]]);
   });
 
+  it("opens a web app in the browser profile it names", async () => {
+    const apps = appSearch(
+      fakeDesktop({}, desktop),
+      { bookmarks: [], omit: [] },
+      configured(),
+      knownIcons({}).icons,
+      [
+        {
+          appId: "mail",
+          name: "Mail",
+          profile: "work",
+          url: "https://mail.example/",
+        },
+      ],
+    );
+
+    const found = await apps.search("mail");
+
+    expect(found.apps.map(({ command }) => command)).toStrictEqual([
+      [
+        "domicile",
+        "open",
+        "--app",
+        "--id",
+        "mail",
+        "--reuse",
+        "focus",
+        "--profile",
+        "work",
+        "https://mail.example/",
+      ],
+    ]);
+  });
+
   it("reads what is installed again on opening, and only then", async () => {
     const files: Record<string, string> = {
       "/home/applications/editor.desktop": entry("Editor"),

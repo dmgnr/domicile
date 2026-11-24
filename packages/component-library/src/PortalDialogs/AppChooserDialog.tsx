@@ -5,12 +5,15 @@ import type {
 import { PortalAnswer as Answer } from "@domicile-desktop/sdk/portal";
 import type { AppsDesktop } from "@domicile-desktop/system-apps/apps-desktop";
 import { AppChooser } from "../AppChooser/AppChooser";
+import type { Presence } from "./presence";
 
 type Props = {
   answer: (answer: PortalAnswer) => void;
   /** Who asks, as the dialog names them. */
   asker: string;
   body: AppChooserBody;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
   /** Where the applications' desktop entries are read. */
   domicile: AppsDesktop;
@@ -21,6 +24,7 @@ export const AppChooserDialog = ({
   answer,
   asker,
   body,
+  presence,
   screen,
   domicile,
 }: Props) => (
@@ -38,6 +42,7 @@ export const AppChooserDialog = ({
       answer(Answer.AppChooser(id));
     }}
     opened={openedOf(body)}
+    {...presence}
     screen={screen}
   />
 );

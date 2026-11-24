@@ -68,10 +68,10 @@ index 04e14e3..7393016 100644
  
  void LibInputEventConverter::CancelFling(base::TimeTicks time) {
 diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.cc b/ui/ozone/platform/wayland/host/wayland_event_source.cc
-index e6a15f6..e6f52f4 100644
+index b712072..5200c00 100644
 --- a/ui/ozone/platform/wayland/host/wayland_event_source.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_event_source.cc
-@@ -1232,19 +1232,6 @@ void WaylandEventSource::ProcessPointerScrollData() {
+@@ -1225,19 +1225,6 @@ void WaylandEventSource::ProcessPointerScrollData() {
        pointer_scroll_data_->axis_source == WL_POINTER_AXIS_SOURCE_CONTINUOUS
            ? NativeScrollSource::kContinuous
            : NativeScrollSource::kFinger;
@@ -91,7 +91,7 @@ index e6a15f6..e6f52f4 100644
    // Dispatch Fling event if pointer.axis_stop is notified and the recent
    // pointer.axis events meets the criteria to start fling scroll.
    if (pointer_scroll_data_->dx == 0 && pointer_scroll_data_->dy == 0 &&
-@@ -1260,6 +1247,17 @@ void WaylandEventSource::ProcessPointerScrollData() {
+@@ -1253,6 +1240,17 @@ void WaylandEventSource::ProcessPointerScrollData() {
      is_fling_active_ = true;
      pointer_frames_.push_back(
          std::make_unique<FrameData>(event, base::NullCallback()));
@@ -110,10 +110,10 @@ index e6a15f6..e6f52f4 100644
      if (*pointer_scroll_data_->axis_source == WL_POINTER_AXIS_SOURCE_WHEEL ||
          *pointer_scroll_data_->axis_source ==
 diff --git a/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc b/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc
-index 8349dbf..109c4c7 100644
+index 589ebfb..834cc0f 100644
 --- a/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_pointer_unittest.cc
-@@ -650,8 +650,8 @@ TEST_F(WaylandPointerTest, FlingVertical) {
+@@ -651,8 +651,8 @@ TEST_F(WaylandPointerTest, FlingVertical) {
        .Times(4)
        .WillOnce(CloneEvent(&event1))
        .WillOnce(CloneEvent(&event2))
@@ -124,7 +124,7 @@ index 8349dbf..109c4c7 100644
  
    // Send two axis events.
    for (int n = 0; n < 2; ++n) {
-@@ -677,7 +677,7 @@ TEST_F(WaylandPointerTest, FlingVertical) {
+@@ -678,7 +678,7 @@ TEST_F(WaylandPointerTest, FlingVertical) {
    ASSERT_TRUE(event2);
    ASSERT_TRUE(event2->IsScrollEvent());
  
@@ -133,7 +133,7 @@ index 8349dbf..109c4c7 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* scroll_event = event3->AsScrollEvent();
-@@ -702,8 +702,8 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
+@@ -703,8 +703,8 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
        .Times(4)
        .WillOnce(CloneEvent(&event1))
        .WillOnce(CloneEvent(&event2))
@@ -144,7 +144,7 @@ index 8349dbf..109c4c7 100644
  
    // Send two axis events.
    for (int n = 0; n < 2; ++n) {
-@@ -729,7 +729,7 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
+@@ -730,7 +730,7 @@ TEST_F(WaylandPointerTest, FlingHorizontal) {
    ASSERT_TRUE(event2);
    ASSERT_TRUE(event2->IsScrollEvent());
  
@@ -153,7 +153,7 @@ index 8349dbf..109c4c7 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* scroll_event = event3->AsScrollEvent();
-@@ -752,8 +752,8 @@ TEST_F(WaylandPointerTest, FlingCancel) {
+@@ -753,8 +753,8 @@ TEST_F(WaylandPointerTest, FlingCancel) {
        .Times(6)
        .WillOnce(CloneEvent(&event1))
        .WillOnce(CloneEvent(&event2))
@@ -163,7 +163,7 @@ index 8349dbf..109c4c7 100644
        .WillOnce(CloneEvent(&event4))
        .WillOnce(CloneEvent(&event5));
  
-@@ -795,7 +795,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
+@@ -796,7 +796,7 @@ TEST_F(WaylandPointerTest, FlingCancel) {
    ASSERT_TRUE(event2->IsScrollEvent());
    EXPECT_EQ(EventType::kScroll, event2->type());
  
@@ -172,7 +172,7 @@ index 8349dbf..109c4c7 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* fling_start_event = event3->AsScrollEvent();
-@@ -832,8 +832,8 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
+@@ -833,8 +833,8 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
        .Times(4)
        .WillOnce(CloneEvent(&event1))
        .WillOnce(CloneEvent(&event2))
@@ -183,7 +183,7 @@ index 8349dbf..109c4c7 100644
  
    // Send two axis events that notify scrolls both in vertical and horizontal.
    for (int n = 0; n < 2; ++n) {
-@@ -858,7 +858,7 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
+@@ -859,7 +859,7 @@ TEST_F(WaylandPointerTest, FlingDiagonal) {
    ASSERT_TRUE(event2);
    ASSERT_TRUE(event2->IsScrollEvent());
  
@@ -192,7 +192,7 @@ index 8349dbf..109c4c7 100644
    ASSERT_TRUE(event3);
    ASSERT_TRUE(event3->IsScrollEvent());
    auto* scroll_event = event3->AsScrollEvent();
-@@ -887,13 +887,13 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
+@@ -888,13 +888,13 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
    std::unique_ptr<Event> event;
    EXPECT_CALL(delegate_, DispatchEvent(_))
        .Times(2)
@@ -209,7 +209,7 @@ index 8349dbf..109c4c7 100644
    ASSERT_TRUE(event);
    ASSERT_TRUE(event->IsScrollEvent());
    auto* scroll_event = event->AsScrollEvent();
-@@ -909,7 +909,7 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
+@@ -910,7 +910,7 @@ TEST_F(WaylandPointerTest, FlingVelocityWithoutLeadingAxis) {
  TEST_F(WaylandPointerTest, FrameTargetUseAfterFreeOnSyncWindowClose) {
    SendEnter(50, 50);
  
@@ -218,7 +218,7 @@ index 8349dbf..109c4c7 100644
    // sets is_fling_active_=true so the next finger-scroll frame will queue 2
    // events (FlingCancel + Scroll).
    SendAxisStopEvents();
-@@ -950,8 +950,8 @@ TEST_F(WaylandPointerTest, FlingVelocityWithSingleLeadingAxis) {
+@@ -951,8 +951,8 @@ TEST_F(WaylandPointerTest, FlingVelocityWithSingleLeadingAxis) {
    EXPECT_CALL(delegate_, DispatchEvent(_))
        .Times(3)
        .WillOnce(CloneEvent(&event1))
@@ -229,7 +229,7 @@ index 8349dbf..109c4c7 100644
  
    // Send a single axis event.
    PostToServerAndWait([](wl::TestWaylandServerThread* server) {
-@@ -965,7 +965,8 @@ TEST_F(WaylandPointerTest, FlingVelocityWithSingleLeadingAxis) {
+@@ -966,7 +966,8 @@ TEST_F(WaylandPointerTest, FlingVelocityWithSingleLeadingAxis) {
    // to be recognised.
    task_environment_.FastForwardBy(base::Milliseconds(1));
  

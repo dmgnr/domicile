@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page that never draws at its new size names
+ itself
+
+Patch 0245's line fired on lyra (2026-11-21) four times in 18 minutes for
+one compositor at one surface: committed it yes, commits climbing (113 to
+377), nothing deferred, nothing paused, frame sink bound. The page's own
+pipeline was fine, so its frames reached viz and the display never drew
+them, or the page drew blank. The line could not tell those apart, nor say
+which page it was.
+
+It now names the renderer's pid and the page's URL (from SetSourceURL),
+counts the frames since the new surface whose presentation failed (the
+display replaced or dropped them undrawn, as it does for a surface nothing
+on screen embeds), and says when the page last showed any frame.
+
+Log only.
+
+Verified: not built. Applies on the pin with 0072, 0088, 0097 and 0245
+(checked with git apply against the pinned files).
+---
+ cc/trees/layer_tree_host.cc | 33 ++++++++++++++++++++++++++++-----
+ cc/trees/layer_tree_host.h  |  5 +++++
+ 2 files changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index bc04697..9087172 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -26,6 +26,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/numerics/safe_math.h"
++#include "base/process/process_handle.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/task/common/task_annotator.h"
+@@ -1015,6 +1016,7 @@ void LayerTreeHost::DomicileWatchTarget(const viz::LocalSurfaceId& target) {
+   domicile_commits_since_target_ = 0;
+   domicile_target_committed_ = false;
+   domicile_frames_presented_since_target_ = 0;
++  domicile_frames_undrawn_since_target_ = 0;
+   if (!domicile_target_timer_.IsRunning()) {
+     domicile_target_timer_.SetTaskRunner(
+         base::WrapRefCounted(task_runner_provider_->MainThreadTaskRunner()));
+@@ -1031,8 +1033,11 @@ void LayerTreeHost::DomicileReportTargetWait() {
+   if (domicile_frames_presented_since_target_ > 0 || !visible_) {
+     return;
+   }
+-  LOG(ERROR) << "domicile: compositor " << id_
+-             << " has drawn nothing at its new surface "
++  LOG(ERROR) << "domicile: compositor " << id_ << " (pid "
++             << base::GetCurrentProcId() << ", page at "
++             << (domicile_source_url_.empty() ? "no URL yet"
++                                              : domicile_source_url_)
++             << ") has drawn nothing at its new surface "
+              << domicile_target_.ToString() << " in "
+              << (base::TimeTicks::Now() - domicile_target_set_at_)
+              << ": committed it "
+@@ -1049,6 +1054,14 @@ void LayerTreeHost::DomicileReportTargetWait() {
+              << ", frame sink "
+              << (current_layer_tree_frame_sink_ ? "bound" : "none")
+              << (new_layer_tree_frame_sink_ ? " (new one initializing)" : "")
++             << ", frames the display dropped undrawn since "
++             << domicile_frames_undrawn_since_target_ << ", last frame shown "
++             << (domicile_last_presented_at_.is_null()
++                     ? std::string("never")
++                     : base::StringPrintf(
++                           "%.1f s ago", (base::TimeTicks::Now() -
++                                          domicile_last_presented_at_)
++                                             .InSecondsF()))
+              << ".";
+ }
+ 
+@@ -1119,9 +1132,17 @@ void LayerTreeHost::DidPresentCompositorFrame(
+     const viz::FrameTimingDetails& frame_timing_details) {
+   DCHECK(IsMainThread());
+   // DOMICILE: see DomicileWatchTarget.
+-  if (domicile_target_committed_ &&
+-      !frame_timing_details.presentation_feedback.failed()) {
+-    ++domicile_frames_presented_since_target_;
++  // A failed presentation is a frame the display replaced or dropped without
++  // drawing it: one whose surface nothing on screen embeds.
++  if (frame_timing_details.presentation_feedback.failed()) {
++    if (domicile_target_committed_) {
++      ++domicile_frames_undrawn_since_target_;
++    }
++  } else {
++    domicile_last_presented_at_ = base::TimeTicks::Now();
++    if (domicile_target_committed_) {
++      ++domicile_frames_presented_since_target_;
++    }
+   }
+   for (auto& callback : presentation_callbacks)
+     std::move(callback).Run(frame_timing_details.presentation_feedback);
+@@ -2337,6 +2358,8 @@ void LayerTreeHost::SetSourceURL(ukm::SourceId source_id, const GURL& url) {
+   // produced by this host so far.
+   pending_commit_state()->clear_caches_on_next_commit = true;
+   proxy_->SetSourceURL(source_id, url);
++  // DOMICILE: names the page on DomicileReportTargetWait's line.
++  domicile_source_url_ = url.possibly_invalid_spec().substr(0, 200);
+   // If this is not used as a common web page, don't show HUD.
+   if (!url.SchemeIsHTTPOrHTTPS())
+     pending_commit_state()->debug_state.TurnOffHudInfoDisplay();
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index 21527e9..b244a5e 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -1202,6 +1202,11 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+   int domicile_commits_since_target_ = 0;
+   bool domicile_target_committed_ = false;
+   int domicile_frames_presented_since_target_ = 0;
++  // Frames whose presentation failed: the display never drew them.
++  int domicile_frames_undrawn_since_target_ = 0;
++  base::TimeTicks domicile_last_presented_at_;
++  // The page's URL, from SetSourceURL.
++  std::string domicile_source_url_;
+   base::OneShotTimer domicile_target_timer_;
+ 
+   float recording_scale_factor_ = 1.f;

@@ -66,6 +66,8 @@ const PrefixStandalone = ({
 const standaloneStyles = cva({
   base: {
     gridTemplateColumns: "0fr",
+    // main-thread animation: the warning slot opens once when a field turns
+    // invalid, moving its text.
     transition:
       "grid-template-columns {durations.fast} {easings.default}, margin-inline-end {durations.fast} {easings.default}",
   },

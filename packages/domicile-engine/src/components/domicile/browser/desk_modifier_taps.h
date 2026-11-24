@@ -12,6 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
+#include "base/time/time.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/types/event_type.h"
 
@@ -31,7 +32,9 @@ enum class TapModifier { kAlt, kCtrl, kShift, kMeta };
 // with nothing in between: no other key, pointer button, scroll, pinch or
 // touch, and no touchpad gesture the shell took. So `Meta` tapped opens the
 // overview, while `Meta+Return` or `Meta`-dragging a window does not. A held
-// modifier's own repeats do not cancel it.
+// modifier's own repeats do not cancel it. Held longer than its grab's
+// `longest`, it is no tap: Super held, thought better of and let go does
+// nothing.
 //
 // Every key, click and scroll on the desk passes aura in the browser process
 // before it reaches the shell page, a `<webview>` guest or a native window, so
@@ -49,7 +52,8 @@ enum class TapModifier { kAlt, kCtrl, kShift, kMeta };
 // thread an event arrives on, and never under the lock.
 class DeskModifierTaps {
  public:
-  using Tapped = base::RepeatingCallback<void(TapModifier)>;
+  // The modifier tapped, and how long it was held.
+  using Tapped = base::RepeatingCallback<void(TapModifier, base::TimeDelta)>;
 
   // Handle for removing a channel. Never zero.
   using ChannelId = uint64_t;
@@ -68,11 +72,14 @@ class DeskModifierTaps {
   // Drops `channel` and its grabs.
   void RemoveChannel(ChannelId channel);
 
-  // `channel` takes taps of `modifier`, even under a shortcuts inhibitor if
-  // `while_inhibited`. A second grab sets `while_inhibited` anew: the page
-  // counts its own grabs under every name, `Meta` or `Super`, and sends what
-  // they add up to.
-  void Grab(ChannelId channel, TapModifier modifier, bool while_inhibited);
+  // `channel` takes taps of `modifier` held no longer than `longest`, even
+  // under a shortcuts inhibitor if `while_inhibited`. A second grab sets both
+  // anew: the page counts its own grabs under every name, `Meta` or `Super`,
+  // and sends what they add up to.
+  void Grab(ChannelId channel,
+            TapModifier modifier,
+            bool while_inhibited,
+            base::TimeDelta longest);
 
   // `channel` gives taps of `modifier` back.
   void Ungrab(ChannelId channel, TapModifier modifier);
@@ -94,6 +101,13 @@ class DeskModifierTaps {
   struct Grabbed {
     TapModifier modifier;
     bool while_inhibited = false;
+    base::TimeDelta longest;
+  };
+
+  // A modifier key pressed alone, and when.
+  struct Pressed {
+    ui::DomCode code;
+    base::TimeTicks at;
   };
 
   struct Channel {
@@ -103,14 +117,15 @@ class DeskModifierTaps {
     bool inhibited = false;
   };
 
-  // The tap of `modifier`'s first taker, or a null callback.
-  Tapped Taker(TapModifier modifier) const EXCLUSIVE_LOCKS_REQUIRED(lock_);
+  // The first taker of a tap of `modifier` held `held`, or a null callback.
+  Tapped Taker(TapModifier modifier, base::TimeDelta held) const
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   base::Lock lock_;
   ChannelId next_id_ GUARDED_BY(lock_) = 1;
   std::vector<Channel> channels_ GUARDED_BY(lock_);
   // The modifier key pressed alone, until it comes up or something uses it.
-  std::optional<ui::DomCode> pressed_ GUARDED_BY(lock_);
+  std::optional<Pressed> pressed_ GUARDED_BY(lock_);
 };
 
 // The modifier `code` is a key of, if it is one.

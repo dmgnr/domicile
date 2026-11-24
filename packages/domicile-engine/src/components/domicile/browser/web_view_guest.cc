@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -20,6 +21,7 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/memory/self_deleting.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -34,7 +36,10 @@
 #include "base/types/expected.h"
 #include "components/domicile/browser/context_menu.h"
 #include "components/domicile/browser/desk_downloads.h"
+#include "components/domicile/browser/desk_faults.h"
+#include "components/domicile/browser/extension_tray_entry.h"
 #include "components/domicile/browser/file_choice.h"
+#include "components/domicile/browser/history_menu.h"
 #include "components/domicile/browser/page_matches.h"
 #include "components/domicile/browser/placeholder_stage.h"
 #include "components/domicile/browser/portal_picker.h"
@@ -42,6 +47,7 @@
 #include "components/domicile/browser/screen_capture.h"
 #include "components/domicile/browser/shortcut_registry.h"
 #include "components/domicile/browser/site_permissions.h"
+#include "components/domicile/browser/unfocused_web_views.h"
 #include "components/permissions/permissions_client.h"
 #include "components/domicile/browser/web_view_url.h"
 #include "components/security_interstitials/content/security_interstitial_page.h"
@@ -54,10 +60,12 @@
 #include "content/public/browser/document_service.h"
 #include "components/download/public/common/download_item.h"
 #include "content/public/browser/download_item_utils.h"
+#include "content/public/browser/favicon_status.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/restore_type.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/reload_type.h"
@@ -83,6 +91,7 @@
 #include "net/base/net_errors.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
+#include "third_party/blink/public/common/context_menu_data/context_menu_data.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/loader/network_utils.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -91,6 +100,7 @@
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
+#include "third_party/blink/public/mojom/frame/media_player_action.mojom.h"
 #include "third_party/blink/public/mojom/media/capture_handle_config.mojom.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
@@ -100,6 +110,7 @@
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/image/image.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
@@ -186,17 +197,22 @@ blink::mojom::StreamDevicesSetPtr BrowserWindowTab(
   return TabCapture(tab, CaptureHandleFor(*capturer, origin, captured), audio);
 }
 
-// The context a guest's page is made in: `owner`, or its off-the-record
-// context for a private guest.
+// The context a guest's page is made in: `owner`, or BrowserWindowHost's
+// for a private guest or one that names a profile.
 content::BrowserContext* ContextFor(content::BrowserContext& owner,
-                                    bool private_browsing) {
-  if (!private_browsing) {
+                                    bool private_browsing,
+                                    const std::string& profile) {
+  if (!private_browsing && profile.empty()) {
     return &owner;
   }
-  // guard-webview-private.sh reads this to tell "never asked for" from "asked
-  // for and shared the user's storage".
-  LOG(INFO) << "domicile: made a private guest.";
-  return &Host().PrivateContext(owner);
+  content::BrowserContext* context =
+      &Host().ContextFor(owner, private_browsing, profile);
+  if (context->IsOffTheRecord()) {
+    // guard-webview-private.sh reads this to tell "never asked for" from
+    // "asked for and shared the user's storage".
+    LOG(INFO) << "domicile: made a private guest.";
+  }
+  return context;
 }
 
 // The params a guest's page is made from: in ContextFor's context, and in
@@ -205,8 +221,10 @@ content::BrowserContext* ContextFor(content::BrowserContext& owner,
 content::WebContents::CreateParams ParamsFor(
     content::BrowserContext& owner,
     bool private_browsing,
+    const std::string& profile,
     const std::optional<WebViewPartition>& partition) {
-  content::BrowserContext* context = ContextFor(owner, private_browsing);
+  content::BrowserContext* context =
+      ContextFor(owner, private_browsing, profile);
   if (!partition.has_value()) {
     return content::WebContents::CreateParams(context);
   }
@@ -233,6 +251,12 @@ PrintCallback& PrintSlot() {
   return *print;
 }
 
+// Storage for SetAddToDictionary's callback.
+AddToDictionaryCallback& AddToDictionarySlot() {
+  static base::NoDestructor<AddToDictionaryCallback> add;
+  return *add;
+}
+
 // The guests' camera and microphone. See SetMediaAccess.
 MediaAccess* g_media_access = nullptr;
 
@@ -254,6 +278,13 @@ const PrintCallback& Printer() {
   // //chrome sets it in StartDesk, with the window host.
   CHECK(!PrintSlot().is_null());
   return PrintSlot();
+}
+
+// Adds a word to a dictionary. See SetAddToDictionary.
+const AddToDictionaryCallback& DictionaryAdder() {
+  // //chrome sets it in StartDesk, with the window host.
+  CHECK(!AddToDictionarySlot().is_null());
+  return AddToDictionarySlot();
 }
 
 // Serves WebViewGuestHost for one document.
@@ -291,6 +322,7 @@ class WebViewGuestHost final
     std::optional<std::string> window;
     bool extension_popup;
     bool private_browsing;
+    std::string profile;
     std::optional<WebViewPartition> partition;
     mojo::ReportBadMessageCallback report_bad_message;
   };
@@ -302,6 +334,7 @@ class WebViewGuestHost final
                    const std::optional<std::string>& window,
                    bool extension_popup,
                    bool private_browsing,
+                   const std::string& profile,
                    const std::string& partition) override {
     // A shell's markup, not a bad message: the element sends the attribute
     // as written. The pipes drop, as for an unknown `window`.
@@ -345,12 +378,13 @@ class WebViewGuestHost final
                                   window,
                                   extension_popup,
                                   private_browsing,
+                                  profile,
                                   *parsed,
                                   mojo::GetBadMessageCallback()};
         return;
       case PlaceholderStage::kReady:
         Give(*placeholder, std::move(guest), std::move(client), window,
-             extension_popup, private_browsing, *parsed);
+             extension_popup, private_browsing, profile, *parsed);
         return;
     }
   }
@@ -422,15 +456,38 @@ class WebViewGuestHost final
       case PlaceholderStage::kReady:
         Give(*placeholder, std::move(request.guest), std::move(request.client),
              request.window, request.extension_popup,
-             request.private_browsing, request.partition);
+             request.private_browsing, request.profile, request.partition);
         return;
     }
   }
 
+  // Makes a new page behind placeholder `placeholder_frame` once its
+  // context is ready (WhenContextReady), as Give would have.
+  void CreateNew(const blink::LocalFrameToken& placeholder_frame,
+                 mojo::PendingReceiver<mojom::WebViewGuest> guest,
+                 mojo::PendingRemote<mojom::WebViewGuestClient> client,
+                 bool extension_popup,
+                 bool private_browsing,
+                 const std::string& profile,
+                 const std::optional<WebViewPartition>& partition) {
+    content::RenderFrameHost* placeholder = FindPlaceholder(placeholder_frame);
+    // The <webview> was removed while its profile loaded: a race, so the
+    // pipes just drop.
+    if (placeholder == nullptr) {
+      LOG(WARNING) << "domicile: the frame a <webview> asked a guest for went "
+                      "while its browser profile loaded.";
+      return;
+    }
+    WebViewGuest::CreateAndAttach(render_frame_host(), *placeholder,
+                                  std::move(guest), std::move(client),
+                                  extension_popup, private_browsing, profile,
+                                  partition, created_);
+  }
+
   // Puts a page behind `placeholder`: the browser window `window` names, or a
   // new page owned by this document (an extension's action popup when
-  // `extension_popup` is set, a private page when `private_browsing` is, in
-  // `partition` when there is one).
+  // `extension_popup` is set, in ContextFor's context for `private_browsing`
+  // and `profile`, in `partition` when there is one).
   //
   // An unknown `window` is expected: it may close before the shell hears. The
   // pipes drop and a warning is logged.
@@ -440,12 +497,18 @@ class WebViewGuestHost final
             const std::optional<std::string>& window,
             bool extension_popup,
             bool private_browsing,
+            const std::string& profile,
             const std::optional<WebViewPartition>& partition) {
     if (!window.has_value()) {
-      WebViewGuest::CreateAndAttach(render_frame_host(), placeholder,
-                                    std::move(guest), std::move(client),
-                                    extension_popup, private_browsing,
-                                    partition, created_);
+      // A profile still loading would block the UI thread on the disk, so the
+      // page waits for it instead.
+      Host().WhenContextReady(
+          *render_frame_host().GetBrowserContext(), private_browsing, profile,
+          base::BindOnce(&WebViewGuestHost::CreateNew,
+                         weak_factory_.GetWeakPtr(),
+                         placeholder.GetFrameToken(), std::move(guest),
+                         std::move(client), extension_popup, private_browsing,
+                         profile, partition));
       return;
     }
     WebViewGuest* shown =
@@ -672,12 +735,14 @@ void WebViewGuest::CreateAndAttach(
     mojo::PendingRemote<mojom::WebViewGuestClient> client,
     bool extension_popup,
     bool private_browsing,
+    const std::string& profile,
     const std::optional<WebViewPartition>& partition,
     const GuestCreatedCallback& created) {
   std::unique_ptr<WebViewGuest> guest = base::WrapUnique(new WebViewGuest(
       owner, std::move(receiver), std::move(client), extension_popup));
   guest->owned_guest_contents_ = guest->MakeContents(
-      ParamsFor(*owner.GetBrowserContext(), private_browsing, partition),
+      ParamsFor(*owner.GetBrowserContext(), private_browsing, profile,
+                partition),
       created);
 
 
@@ -728,12 +793,13 @@ std::unique_ptr<WebViewGuest> WebViewGuest::MakeWindow(
     const std::string& window_id,
     std::optional<int> popup_window,
     bool private_browsing,
+    const std::string& profile,
     const std::optional<WebViewPartition>& partition,
     const GuestCreatedCallback& created) {
   std::unique_ptr<WebViewGuest> guest =
       base::WrapUnique(new WebViewGuest(shell, window_id, popup_window));
-  content::WebContents::CreateParams params =
-      ParamsFor(*shell.GetBrowserContext(), private_browsing, partition);
+  content::WebContents::CreateParams params = ParamsFor(
+      *shell.GetBrowserContext(), private_browsing, profile, partition);
   // Hidden (and throttled) like a background tab until AttachWindowTo shows
   // it.
   params.initially_hidden = true;
@@ -787,8 +853,8 @@ std::unique_ptr<content::WebContents> WebViewGuest::MakeContents(
   // context, the user's cookies unless the guest is private. See the class
   // comment and ParamsFor.
   content::BrowserContext* context = params.browser_context;
-  // The shell is never private, so an off-the-record page is a private one,
-  // whether asked for or opened by one.
+  // The shell is never private, so an off-the-record page is a private
+  // profile's, whether asked for or opened by one.
   if (context->IsOffTheRecord()) {
     private_context_ = context;
     Host().PrivatePageOpened(*context);
@@ -803,6 +869,8 @@ std::unique_ptr<content::WebContents> WebViewGuest::MakeContents(
       std::make_unique<GuestLink>(weak_factory_.GetWeakPtr()));
   Observe(guest_contents_);
   guest_contents_->SetDelegate(this);
+  UnfocusedWebViews::Get().Track(
+      this, guest_contents_->GetPrimaryMainFrame()->GetGlobalId());
 
   // After SetDelegate, which some helpers need, and before the first
   // navigation, which some record.
@@ -812,16 +880,11 @@ std::unique_ptr<content::WebContents> WebViewGuest::MakeContents(
       permissions::PermissionsClient::Get()->GetSettingsMap(context));
   download_manager_observation_.Observe(context->GetDownloadManager());
 
-  // Unretained is safe: the subscription is a member, reset in
-  // WebContentsDestroyed.
-  zoom_subscription_ =
-      content::HostZoomMap::GetForWebContents(guest_contents_)
-          ->AddZoomLevelChangedCallback(base::BindRepeating(
-              [](WebViewGuest* guest,
-                 const content::HostZoomMap::ZoomLevelChange& change) {
-                guest->ReportZoom();
-              },
-              base::Unretained(this)));
+  // Chrome's zoom modes, for chrome.tabs.setZoomSettings. The PDF viewer
+  // zooms its own page in manual mode.
+  zoom::ZoomController::CreateForWebContents(guest_contents_);
+  zoom_observation_.Observe(
+      zoom::ZoomController::FromWebContents(guest_contents_));
   return contents;
 }
 
@@ -978,6 +1041,8 @@ WebViewGuest::WebViewGuest(content::WebContents& shell,
 // page is reported closed after, so private browsing never ends under it.
 WebViewGuest::~WebViewGuest() {
   owned_guest_contents_.reset();
+  // A guest whose page outlives it, or never had one.
+  UnfocusedWebViews::Get().Untrack(this);
   if (private_context_) {
     Host().PrivatePageClosed(*private_context_);
   }
@@ -999,6 +1064,12 @@ void WebViewGuest::SetInspect(InspectCallback inspect) {
 void WebViewGuest::SetPrint(PrintCallback print) {
   CHECK(PrintSlot().is_null());
   PrintSlot() = std::move(print);
+}
+
+// static
+void WebViewGuest::SetAddToDictionary(AddToDictionaryCallback add) {
+  CHECK(AddToDictionarySlot().is_null());
+  AddToDictionarySlot() = std::move(add);
 }
 
 // static
@@ -1197,6 +1268,50 @@ void WebViewGuest::WithdrawPrompt(int id) {
   client_->PromptWithdrawn();
 }
 
+int WebViewGuest::AskIdentity(mojom::WebViewIdentityRequestPtr request,
+                              IdentityAnswered answered) {
+  const int id = ++last_identity_;
+  open_identity_ = id;
+  // Logged before asking; the sign-in-with guard greps for it.
+  LOG(INFO) << "domicile: a <webview>'s page signs in with an identity "
+               "provider; asking the shell to show its "
+            << request->step << " step.";
+  // Wrapped, as in AskPrompt: unanswered is kNone.
+  client_->IdentityRequested(
+      std::move(request),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(
+              [](base::WeakPtr<WebViewGuest> guest, int id,
+                 IdentityAnswered answered,
+                 mojom::WebViewIdentityAction action, int32_t index) {
+                if (guest && guest->open_identity_ == id) {
+                  guest->open_identity_ = 0;
+                }
+                // Logged for the sign-in-with guard.
+                LOG(INFO) << "domicile: a <webview>'s sign-in step was "
+                             "answered: "
+                          << action << ".";
+                std::move(answered).Run(action, index);
+              },
+              weak_factory_.GetWeakPtr(), id, std::move(answered)),
+          mojom::WebViewIdentityAction::kNone, 0));
+  return id;
+}
+
+void WebViewGuest::WithdrawIdentity(int id) {
+  if (open_identity_ != id || id == 0) {
+    return;
+  }
+  open_identity_ = 0;
+  // The sign-in-with guard greps for it.
+  LOG(INFO) << "domicile: a <webview>'s sign-in step was withdrawn.";
+  client_->IdentityWithdrawn();
+}
+
+WebViewGuest* WebViewGuest::OpenWindowAt(const GURL& url) {
+  return Host().Open(*guest_contents_->GetBrowserContext(), url, partition());
+}
+
 void WebViewGuest::BindPagePicker(
     content::RenderFrameHost& frame,
     mojo::PendingReceiver<mojom::PagePicker> receiver) {
@@ -1265,7 +1380,47 @@ void WebViewGuest::Navigate(const GURL& url) {
   content::NavigationController::LoadURLParams params(
       may_show ? url : GURL(content::kBlockedURL));
   params.transition_type = ui::PAGE_TRANSITION_AUTO_TOPLEVEL;
+  // A window given a user agent (an Electron session's) loads as it.
+  if (!guest_contents_->GetUserAgentOverride().ua_string_override.empty()) {
+    params.override_user_agent =
+        content::NavigationController::UA_OVERRIDE_TRUE;
+  }
   guest_contents_->GetController().LoadURLWithParams(params);
+}
+
+void WebViewGuest::RestoreHistory(const std::vector<HistoryEntry>& entries,
+                                  int index) {
+  CHECK(guest_contents_);
+  CHECK_GE(index, 0);
+  CHECK_LT(index, static_cast<int>(entries.size()));
+  // As Navigate: a user agent the window was given is the entries' too.
+  const bool overriding =
+      !guest_contents_->GetUserAgentOverride().ua_string_override.empty();
+  std::vector<std::unique_ptr<content::NavigationEntry>> restored;
+  for (const HistoryEntry& entry : entries) {
+    const bool may_show = MayShowInWebView(entry.url, app_host_);
+    if (!may_show) {
+      LOG(WARNING) << "domicile: a <webview> may not show "
+                   << entry.url.possibly_invalid_spec()
+                   << "; its restored entry is blocked.";
+    }
+    std::unique_ptr<content::NavigationEntry> made =
+        content::NavigationController::CreateNavigationEntry(
+            may_show ? entry.url : GURL(content::kBlockedURL),
+            content::Referrer(),
+            /*initiator_origin=*/std::nullopt,
+            /*initiator_base_url=*/std::nullopt, ui::PAGE_TRANSITION_RELOAD,
+            /*is_renderer_initiated=*/false,
+            /*extra_headers=*/std::string(),
+            guest_contents_->GetBrowserContext(),
+            /*blob_url_loader_factory=*/nullptr);
+    made->SetTitle(entry.title);
+    made->SetIsOverridingUserAgent(overriding);
+    restored.push_back(std::move(made));
+  }
+  content::NavigationController& history = guest_contents_->GetController();
+  history.Restore(index, content::RestoreType::kRestored, &restored);
+  history.LoadIfNecessary();
 }
 
 std::optional<WebViewPartition> WebViewGuest::partition() const {
@@ -1294,23 +1449,92 @@ void WebViewGuest::GoBack() {
 }
 
 void WebViewGuest::GoBackInNewWindow() {
-  OpenHistoryStep(HistoryStep::kBack);
+  CHECK(guest_contents_);
+
+  // Nowhere to go is a normal case, as for GoBack, not a bad message.
+  if (guest_contents_->GetController().CanGoBack()) {
+    OpenHistoryStep({.kind = HistoryStep::Kind::kBack});
+  }
 }
 
 void WebViewGuest::GoForwardInNewWindow() {
-  OpenHistoryStep(HistoryStep::kForward);
+  CHECK(guest_contents_);
+
+  if (guest_contents_->GetController().CanGoForward()) {
+    OpenHistoryStep({.kind = HistoryStep::Kind::kForward});
+  }
+}
+
+namespace {
+
+// `entry` as a history menu lists it.
+mojom::WebViewHistoryEntryPtr MenuEntry(content::NavigationEntry& entry) {
+  const content::FaviconStatus& favicon = entry.GetFavicon();
+  std::string icon;
+  if (favicon.valid && !favicon.image.IsEmpty()) {
+    scoped_refptr<base::RefCountedMemory> png = favicon.image.As1xPNGBytes();
+    icon = PngAsDataUrl(base::span<const uint8_t>(*png));
+  }
+  return mojom::WebViewHistoryEntry::New(
+      entry.GetUniqueID(), entry.GetVirtualURL(),
+      base::UTF16ToUTF8(entry.GetTitleForDisplay()), std::move(icon));
+}
+
+// The index of the entry with unique id `id` in `history`, or nothing when no
+// entry has it or it is the page shown, where going to it would reload.
+// NavigationController has no public lookup by id.
+std::optional<int> IndexOfEntry(content::NavigationController& history,
+                                int32_t id) {
+  for (int i = 0; i < history.GetEntryCount(); ++i) {
+    if (history.GetEntryAtIndex(i)->GetUniqueID() == id) {
+      return i == history.GetLastCommittedEntryIndex() ? std::nullopt
+                                                       : std::optional(i);
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+void WebViewGuest::ListHistory(ListHistoryCallback callback) {
+  CHECK(guest_contents_);
+
+  content::NavigationController& history = guest_contents_->GetController();
+  std::vector<mojom::WebViewHistoryEntryPtr> entries;
+  for (int i = 0; i < history.GetEntryCount(); ++i) {
+    entries.push_back(MenuEntry(*history.GetEntryAtIndex(i)));
+  }
+  // The last committed entry, not a pending one: the menus list the pages
+  // either side of the one the page shows.
+  std::move(callback).Run(
+      HistoryMenu(std::move(entries), history.GetLastCommittedEntryIndex()));
+}
+
+void WebViewGuest::GoToHistoryEntry(int32_t id) {
+  CHECK(guest_contents_);
+
+  content::NavigationController& history = guest_contents_->GetController();
+  // A missing id, or the current page's, is a normal case: the history changed
+  // after the shell listed it, as when the page navigated with the menu open.
+  const std::optional<int> index = IndexOfEntry(history, id);
+  if (index.has_value()) {
+    history.GoToIndex(*index);
+  }
+}
+
+void WebViewGuest::GoToHistoryEntryInNewWindow(int32_t id) {
+  CHECK(guest_contents_);
+
+  // As GoToHistoryEntry, a missing id is a normal case.
+  const std::optional<int> index =
+      IndexOfEntry(guest_contents_->GetController(), id);
+  if (index.has_value()) {
+    OpenHistoryStep({.kind = HistoryStep::Kind::kEntry, .index = *index});
+  }
 }
 
 void WebViewGuest::OpenHistoryStep(HistoryStep step) {
   CHECK(guest_contents_);
-
-  // Nowhere to go is a normal case, as for GoBack, not a bad message.
-  content::NavigationController& history = guest_contents_->GetController();
-  const bool can_step =
-      step == HistoryStep::kBack ? history.CanGoBack() : history.CanGoForward();
-  if (!can_step) {
-    return;
-  }
   // An app module's history holds its own domicile:// pages, which only a
   // window pinned to it may show, and a copy would not be.
   if (!app_host_.empty()) {
@@ -1329,17 +1553,94 @@ void WebViewGuest::TakeHistoryStep(WebViewGuest& source, HistoryStep step) {
   // Reloads on the step, as WebContents::Clone's copy does.
   history.CopyStateFrom(&source.guest_contents_->GetController(),
                         /*needs_reload=*/true);
-  switch (step) {
-    case HistoryStep::kBack:
+  switch (step.kind) {
+    case HistoryStep::Kind::kBack:
       history.GoBack();
       break;
-    case HistoryStep::kForward:
+    case HistoryStep::Kind::kForward:
       history.GoForward();
+      break;
+    case HistoryStep::Kind::kEntry:
+      history.GoToIndex(step.index);
       break;
   }
   // The history-in-a-new-window guard greps for this.
   LOG(INFO) << "domicile: browser window " << window_id_
             << " took a step through a copy of another page's history.";
+}
+
+void WebViewGuest::MoveHistoryFrom(WebViewGuest& source,
+                                   const PageMove& move) {
+  CHECK(guest_contents_);
+  CHECK(source.guest_contents_);
+
+  content::NavigationController& from =
+      source.guest_contents_->GetController();
+  content::NavigationController& history = guest_contents_->GetController();
+  // A page that never committed has only its initial entry, and no history.
+  if (!from.GetLastCommittedEntry()->IsInitialEntry()) {
+    const int current = from.GetLastCommittedEntryIndex();
+    const int count = move.kind == PageMove::Kind::kNavigate
+                          ? current + 1
+                          : from.GetEntryCount();
+    // Fresh entries, not copies: a copy carries its SiteInstance and page
+    // state, which belong to the other profile.
+    std::vector<std::unique_ptr<content::NavigationEntry>> entries;
+    for (int i = 0; i < count; ++i) {
+      content::NavigationEntry& entry = *from.GetEntryAtIndex(i);
+      std::unique_ptr<content::NavigationEntry> moved =
+          content::NavigationController::CreateNavigationEntry(
+              entry.GetURL(), content::Referrer(),
+              /*initiator_origin=*/std::nullopt,
+              /*initiator_base_url=*/std::nullopt,
+              ui::PAGE_TRANSITION_RELOAD,
+              /*is_renderer_initiated=*/false,
+              /*extra_headers=*/std::string(),
+              guest_contents_->GetBrowserContext(),
+              /*blob_url_loader_factory=*/nullptr);
+      moved->SetTitle(entry.GetTitle());
+      entries.push_back(std::move(moved));
+    }
+    const int selected =
+        move.kind == PageMove::Kind::kHistory
+            ? std::clamp(current + move.offset, 0, count - 1)
+            : current;
+    history.Restore(selected, content::RestoreType::kRestored, &entries);
+  }
+
+  if (move.kind == PageMove::Kind::kNavigate) {
+    // As Navigate: a page's link may name an address no <webview> shows.
+    const bool may_show = MayShowInWebView(move.url, app_host_);
+    content::NavigationController::LoadURLParams params(
+        may_show ? move.url : GURL(content::kBlockedURL));
+    params.referrer = move.referrer;
+    params.transition_type = move.transition;
+    history.LoadURLWithParams(params);
+  } else {
+    history.LoadIfNecessary();
+  }
+  LOG(INFO) << "domicile: browser window " << window_id_
+            << " took its old page's history.";
+}
+
+void WebViewGuest::Replaced() {
+  // Before the pipe closes, so the element hears it.
+  client_->Replaced();
+  receiver_.reset();
+  Unclient();
+  find_text_.clear();
+  LOG(INFO) << "domicile: browser window " << window_id_
+            << "'s page was replaced by one in another browser profile.";
+}
+
+std::optional<std::string> WebViewGuest::ProfileToMoveTo(const GURL& from,
+                                                         const GURL& to) {
+  return Host().ProfileToMoveTo(*this, from, to);
+}
+
+void WebViewGuest::MoveToProfile(const std::string& profile,
+                                 const PageMove& move) {
+  Host().Reopen(*this, profile, move);
 }
 
 void WebViewGuest::GoForward() {
@@ -1355,9 +1656,8 @@ void WebViewGuest::Stop() {
 
 void WebViewGuest::Reload() {
   CHECK(guest_contents_);
-  // With `check_for_repost`, reloading a POST result calls content's no-op
-  // ShowRepostFormWarningDialog, so it does nothing instead of reposting
-  // without asking.
+  // With `check_for_repost`, reloading a POST result asks first, through
+  // ShowRepostFormWarningDialog, instead of reposting without asking.
   guest_contents_->GetController().Reload(content::ReloadType::NORMAL,
                                           /*check_for_repost=*/true);
 }
@@ -1372,6 +1672,8 @@ void WebViewGuest::SetZoom(double factor) {
         "domicile: a <webview> asked for a zoom outside the browser's range.");
     return;
   }
+  // A page in disabled mode keeps its zoom, as Chrome's zoom keys leave it.
+  // The element's `zoom` is unchanged, which tells the shell.
   ZoomTo(factor);
 }
 
@@ -1415,22 +1717,40 @@ void WebViewGuest::StopFinding(bool keep_selection) {
 }
 
 double WebViewGuest::GetZoomFactor() const {
-  CHECK(guest_contents_);
-  return blink::ZoomLevelToZoomFactor(
-      content::HostZoomMap::GetZoomLevel(guest_contents_));
+  return blink::ZoomLevelToZoomFactor(Zoom().GetZoomLevel());
 }
 
-void WebViewGuest::ZoomTo(double factor) {
-  CHECK(guest_contents_);
+bool WebViewGuest::ZoomTo(double factor) {
   CHECK(factor >= blink::kMinimumBrowserZoomFactor &&
         factor <= blink::kMaximumBrowserZoomFactor);
+  const double level = blink::ZoomFactorToZoomLevel(factor);
 
-  // Sets the site's zoom, not this window's, as Chrome does.
-  content::HostZoomMap::SetZoomLevel(guest_contents_,
-                                     blink::ZoomFactorToZoomLevel(factor));
+  switch (Zoom().zoom_mode()) {
+    case zoom::ZoomController::ZOOM_MODE_DISABLED:
+      return false;
+    case zoom::ZoomController::ZOOM_MODE_MANUAL:
+      // Keeps the factor and reports it; the page zooms itself.
+      return Zoom().SetZoomLevel(level);
+    case zoom::ZoomController::ZOOM_MODE_DEFAULT:
+    case zoom::ZoomController::ZOOM_MODE_ISOLATED:
+      // The site's zoom, or this tab's when isolated, as Chrome does.
+      content::HostZoomMap::SetZoomLevel(guest_contents_, level);
+      // The controller already reported this for pages with a host. This
+      // covers error pages and uncommitted guests; ReportZoom skips
+      // duplicates.
+      ReportZoom();
+      return true;
+  }
+}
 
-  // The subscription already reported this for pages with a host. This covers
-  // error pages and uncommitted guests; ReportZoom skips duplicates.
+zoom::ZoomController::ZoomMode WebViewGuest::GetZoomMode() const {
+  return Zoom().zoom_mode();
+}
+
+void WebViewGuest::SetZoomMode(zoom::ZoomController::ZoomMode mode) {
+  Zoom().SetZoomMode(mode);
+  // Entering manual mode notifies before the controller keeps the factor, so
+  // the report it caused can be stale.
   ReportZoom();
 }
 
@@ -1517,14 +1837,21 @@ content::KeyboardEventProcessingResult WebViewGuest::PreHandleKeyboardEvent(
 
   // A matched chord is HANDLED so the page never sees it and cannot override a
   // desktop shortcut.
-  return ShortcutRegistry::Get().Press(chord, page)
-             ? content::KeyboardEventProcessingResult::HANDLED
-             : content::KeyboardEventProcessingResult::NOT_HANDLED;
+  if (ShortcutRegistry::Get().Press(chord, page)) {
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+  if (!ui::KeycodeConverter::IsDomKeyForModifier(key)) {
+    client_->KeyDelivered();
+  }
+  return content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
 bool WebViewGuest::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
+  if (app_page_ && app_page_->IgnoresMenuShortcuts()) {
+    return false;
+  }
   const int modifiers = event.GetModifiers();
 
   // Includes auto-repeats (e.g. holding Ctrl+Plus zooms repeatedly); the event
@@ -1547,12 +1874,52 @@ bool WebViewGuest::HandleKeyboardEvent(
         (modifiers & blink::WebInputEvent::kShiftKey) != 0,
         (modifiers & blink::WebInputEvent::kMetaKey) != 0,
         (modifiers & blink::WebInputEvent::kIsAutoRepeat) != 0);
+  } else if (event.GetType() == blink::WebInputEvent::Type::kKeyUp &&
+             ui::KeycodeConverter::IsDomKeyForModifier(
+                 ui::DomKey(event.dom_key))) {
+    client_->UnhandledModifierUp(
+        ui::KeycodeConverter::DomKeyToKeyString(ui::DomKey(event.dom_key)),
+        ui::KeycodeConverter::DomCodeToCodeString(
+            static_cast<ui::DomCode>(event.dom_code)));
   }
   return false;
 }
 
 void WebViewGuest::ContentsZoomChange(bool zoom_in) {
-  client_->ZoomRequested(zoom_in);
+  if (app_page_) {
+    app_page_->ZoomAsked(zoom_in);
+  } else {
+    client_->ZoomRequested(zoom_in);
+  }
+}
+
+bool WebViewGuest::DomicileHoldKeyboardEvent(
+    content::WebContents* source,
+    content::RenderWidgetHost* widget,
+    const input::NativeWebKeyboardEvent& event) {
+  return app_page_ && app_page_->HoldsKeyboardEvent(widget, event);
+}
+
+void WebViewGuest::DomicileCursorChanged(content::WebContents* source,
+                                         content::RenderWidgetHost* widget,
+                                         const ui::Cursor& cursor) {
+  if (app_page_) {
+    app_page_->CursorChanged(widget, cursor);
+  }
+}
+
+void WebViewGuest::UpdatePreferredSize(content::WebContents* source,
+                                       const gfx::Size& pref_size) {
+  if (app_page_) {
+    app_page_->PreferredSizeChanged(pref_size);
+  }
+}
+
+void WebViewGuest::SetContentsBounds(content::WebContents* source,
+                                     const gfx::Rect& bounds) {
+  if (app_page_) {
+    app_page_->ContentsBoundsAsked(bounds);
+  }
 }
 
 bool WebViewGuest::HandleContextMenu(
@@ -1567,6 +1934,13 @@ bool WebViewGuest::HandleContextMenu(
   const gfx::Point in_page =
       gfx::ToRoundedPoint(page->TransformRootPointToViewCoordSpace(
           gfx::PointF(params.x, params.y)));
+
+  if (!context_menu_taking_.is_null()) {
+    LOG(INFO) << "domicile: a <webview>'s page asked for a context menu; "
+                 "its embedder takes it.";
+    context_menu_taking_.Run(params, in_page);
+    return true;
+  }
 
   context_menu_id_ += 1;
   context_menu_frame_ = render_frame_host.GetGlobalId();
@@ -1584,17 +1958,7 @@ void WebViewGuest::RunContextMenuAction(
     int32_t menu,
     mojom::WebViewContextMenuAction action) {
   CHECK(guest_contents_);
-
-  // The element only sends ids it received, so this is a bad message.
-  if (menu <= 0 || menu > context_menu_id_) {
-    receiver_.ReportBadMessage(
-        "domicile: a <webview> answered a context menu it was never sent.");
-    return;
-  }
-  // A race: a newer menu was sent before the shell acted.
-  if (menu != context_menu_id_) {
-    LOG(INFO) << "domicile: a <webview>'s context menu was replaced before "
-                 "the shell acted on it; dropping the action.";
+  if (!IsNewestContextMenu(menu)) {
     return;
   }
   const content::ContextMenuParams& params = *context_menu_params_;
@@ -1617,28 +1981,36 @@ void WebViewGuest::RunContextMenuAction(
             << static_cast<int>(action) << ".";
   switch (action) {
     case mojom::WebViewContextMenuAction::kUndo:
-      EditWhenFocused(&content::WebContents::Undo, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::Undo),
+                      kEditTries);
       return;
     case mojom::WebViewContextMenuAction::kRedo:
-      EditWhenFocused(&content::WebContents::Redo, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::Redo),
+                      kEditTries);
       return;
     case mojom::WebViewContextMenuAction::kCut:
-      EditWhenFocused(&content::WebContents::Cut, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::Cut),
+                      kEditTries);
       return;
     case mojom::WebViewContextMenuAction::kCopy:
-      EditWhenFocused(&content::WebContents::Copy, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::Copy),
+                      kEditTries);
       return;
     case mojom::WebViewContextMenuAction::kPaste:
-      EditWhenFocused(&content::WebContents::Paste, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::Paste),
+                      kEditTries);
       return;
     case mojom::WebViewContextMenuAction::kPasteAndMatchStyle:
-      EditWhenFocused(&content::WebContents::PasteAndMatchStyle, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::PasteAndMatchStyle),
+                      kEditTries);
       return;
     case mojom::WebViewContextMenuAction::kDelete:
-      EditWhenFocused(&content::WebContents::Delete, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::Delete),
+                      kEditTries);
       return;
     case mojom::WebViewContextMenuAction::kSelectAll:
-      EditWhenFocused(&content::WebContents::SelectAll, kEditTries);
+      EditWhenFocused(base::BindRepeating(&content::WebContents::SelectAll),
+                      kEditTries);
       return;
     // Chrome also copies the unfiltered URL.
     case mojom::WebViewContextMenuAction::kCopyLinkAddress:
@@ -1666,10 +2038,65 @@ void WebViewGuest::RunContextMenuAction(
                  /*is_subresource=*/!params.is_image_media_plugin_document);
       }
       return;
+    // As Chrome's ExecPictureInPicture: enters, or leaves when it is in.
+    case mojom::WebViewContextMenuAction::kPictureInPicture: {
+      const bool in_picture_in_picture =
+          (params.media_flags &
+           blink::ContextMenuData::kMediaPictureInPicture) != 0;
+      frame->ExecuteMediaPlayerActionAtLocation(
+          gfx::Point(params.x, params.y),
+          blink::mojom::MediaPlayerAction(
+              blink::mojom::MediaPlayerActionType::kPictureInPicture,
+              /*enable=*/!in_picture_in_picture));
+      return;
+    }
     case mojom::WebViewContextMenuAction::kInspect:
       Inspector().Run(*frame, gfx::Point(params.x, params.y));
       return;
+    case mojom::WebViewContextMenuAction::kAddToDictionary:
+      DictionaryAdder().Run(*guest_contents_->GetBrowserContext(),
+                            base::UTF16ToUTF8(params.misspelled_word));
+      return;
   }
+}
+
+void WebViewGuest::ReplaceMisspelling(int32_t menu, const std::string& word) {
+  CHECK(guest_contents_);
+  if (!IsNewestContextMenu(menu)) {
+    return;
+  }
+  if (!OffersSpellingFixes(*context_menu_params_)) {
+    receiver_.ReportBadMessage(
+        "domicile: a <webview> asked to replace a misspelling its context "
+        "menu is not over.");
+    return;
+  }
+  LOG(INFO) << "domicile: a <webview>'s context menu replaced a misspelling.";
+  // Chrome's menu does the same: the renderer replaces the word around the
+  // selection it made for the menu.
+  EditWhenFocused(
+      base::BindRepeating(
+          [](const std::u16string& replacement, content::WebContents* page) {
+            page->ReplaceMisspelling(replacement);
+          },
+          base::UTF8ToUTF16(word)),
+      kEditTries);
+}
+
+bool WebViewGuest::IsNewestContextMenu(int32_t menu) {
+  // The element only sends ids it received, so this is a bad message.
+  if (menu <= 0 || menu > context_menu_id_) {
+    receiver_.ReportBadMessage(
+        "domicile: a <webview> answered a context menu it was never sent.");
+    return false;
+  }
+  // A race: a newer menu was sent before the shell acted.
+  if (menu != context_menu_id_) {
+    LOG(INFO) << "domicile: a <webview>'s context menu was replaced before "
+                 "the shell acted on it; dropping the action.";
+    return false;
+  }
+  return true;
 }
 
 void WebViewGuest::EditWhenFocused(EditCommand command, int tries) {
@@ -1677,7 +2104,7 @@ void WebViewGuest::EditWhenFocused(EditCommand command, int tries) {
   // Null while focus is outside this guest, when an edit would go to the
   // shell.
   if (guest_contents_->GetFocusedFrame() != nullptr) {
-    (guest_contents_.get()->*command)();
+    command.Run(guest_contents_.get());
     return;
   }
   if (tries == 0) {
@@ -1738,19 +2165,35 @@ void WebViewGuest::SetSitePermission(
 
 void WebViewGuest::ListMediaDevices(ListMediaDevicesCallback callback) {
   CHECK(guest_contents_);
-  std::move(callback).Run(
-      Media().ListDevices(*guest_contents_->GetBrowserContext()));
+  Media().WhenDevicesListed(base::BindOnce(
+      [](base::WeakPtr<WebViewGuest> guest, ListMediaDevicesCallback callback) {
+        // A guest gone since closed its pipe, which drops the callback.
+        if (guest && guest->guest_contents_) {
+          std::move(callback).Run(Media().ListDevices(
+              *guest->guest_contents_->GetBrowserContext()));
+        }
+      },
+      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void WebViewGuest::SetMediaDevice(mojom::WebViewMediaDeviceKind kind,
                                   const std::string& id,
                                   SetMediaDeviceCallback callback) {
   CHECK(guest_contents_);
-  const base::expected<void, std::string> preferred =
-      Media().PreferDevice(*guest_contents_->GetBrowserContext(), kind, id);
-  std::move(callback).Run(preferred.has_value()
-                              ? std::nullopt
-                              : std::make_optional(preferred.error()));
+  Media().WhenDevicesListed(base::BindOnce(
+      [](base::WeakPtr<WebViewGuest> guest, mojom::WebViewMediaDeviceKind kind,
+         const std::string& id, SetMediaDeviceCallback callback) {
+        // A guest gone since closed its pipe, which drops the callback.
+        if (guest && guest->guest_contents_) {
+          const base::expected<void, std::string> preferred =
+              Media().PreferDevice(*guest->guest_contents_->GetBrowserContext(),
+                                   kind, id);
+          std::move(callback).Run(preferred.has_value()
+                                      ? std::nullopt
+                                      : std::make_optional(preferred.error()));
+        }
+      },
+      weak_factory_.GetWeakPtr(), kind, id, std::move(callback)));
 }
 
 void WebViewGuest::CopyAddress(const GURL& url) {
@@ -1915,7 +2358,7 @@ gfx::Point WebViewGuest::PointerInPage(
           gfx::PointF(pointer_))));
 }
 
-void WebViewGuest::ShowRepostFormWarningDialog(content::WebContents* source) {
+bool WebViewGuest::ShowRepostFormWarningDialog(content::WebContents* source) {
   CHECK(guest_contents_);
   AskPrompt(
       mojom::WebViewPrompt::New(
@@ -1941,6 +2384,7 @@ void WebViewGuest::ShowRepostFormWarningDialog(content::WebContents* source) {
             }
           },
           weak_factory_.GetWeakPtr()));
+  return true;
 }
 
 void WebViewGuest::RendererUnresponsive(
@@ -2000,6 +2444,9 @@ void WebViewGuest::ReportTargetUrl(const GURL& url) {
   if (url != reported_target_url_) {
     reported_target_url_ = url;
     client_->TargetUrlChanged(url);
+    if (app_page_) {
+      app_page_->TargetUrlChanged(url);
+    }
   }
 }
 
@@ -2230,6 +2677,10 @@ void WebViewGuest::ProceedPastWarning() {
 }
 
 void WebViewGuest::PrimaryPageChanged(content::Page& page) {
+  // A cross-site page has a main frame, and frame sink, of its own.
+  if (!full_frame_rate_) {
+    UnfocusedWebViews::Get().Track(this, page.GetMainDocument().GetGlobalId());
+  }
   EnableAutoResize();
   EndFind();
   if (!reported_favicon_.is_empty()) {
@@ -2247,6 +2698,11 @@ namespace {
 // it.
 constexpr int32_t kChromeInternalWorld =
     content::ISOLATED_WORLD_ID_CONTENT_END + 3;
+
+// How long a page has to leave fullscreen once the engine takes it out. The
+// renderer leaves as soon as its visual properties drop the grant, which is
+// within a frame or two; a page that has not after this stays in.
+constexpr base::TimeDelta kLeavesFullscreenWithin = base::Seconds(2);
 
 // A page's description: its first `<meta name="description">`, with the name
 // matched without case.
@@ -2289,6 +2745,21 @@ void WebViewGuest::CountMatches(const std::string& selector,
       base::BindOnce(
           [](CountMatchesCallback callback, base::Value result) {
             std::move(callback).Run(CountFrom(result));
+          },
+          mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback),
+                                                      std::nullopt)),
+      kChromeInternalWorld);
+}
+
+void WebViewGuest::ClickMatch(const std::string& selector,
+                              ClickMatchCallback callback) {
+  CHECK(guest_contents_);
+  guest_contents_->GetPrimaryMainFrame()->ExecuteJavaScriptInIsolatedWorld(
+      ClickMatchScript(selector),
+      // A frame that goes before the click runs drops the callback unrun.
+      base::BindOnce(
+          [](ClickMatchCallback callback, base::Value result) {
+            std::move(callback).Run(ClickedFrom(result));
           },
           mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback),
                                                       std::nullopt)),
@@ -2353,8 +2824,7 @@ void WebViewGuest::RequestMediaAccessPermission(
     content::MediaResponseCallback callback) {
   if (IsScreenCapture(request.video_type)) {
     const int choice = next_screen_choice_++;
-    const bool audio = request.audio_type ==
-                       blink::mojom::MediaStreamType::DISPLAY_AUDIO_CAPTURE;
+    const bool audio = WantsScreenSound(request.audio_type);
     // Unretained: the guest owns the choice, which answers only while alive.
     screen_choices_[choice] = std::make_unique<ScreenChoice>(
         MakePortalPicker(), audio, base::BindOnce(&AskWhatThePortalPicked),
@@ -2364,15 +2834,17 @@ void WebViewGuest::RequestMediaAccessPermission(
         base::BindOnce(
             [](WebViewGuest* guest, int choice,
                blink::mojom::MediaStreamType video,
+               blink::mojom::MediaStreamType audio,
                content::MediaResponseCallback callback,
                blink::mojom::StreamDevicesSetPtr devices,
                blink::mojom::MediaStreamRequestResult result) {
               guest->screen_choices_.erase(choice);
-              std::move(callback).Run(*AsRequested(video, std::move(devices)),
-                                      result, /*ui=*/nullptr);
+              std::move(callback).Run(
+                  *AsRequested(video, audio, std::move(devices)), result,
+                  /*ui=*/nullptr);
             },
             base::Unretained(this), choice, request.video_type,
-            std::move(callback)));
+            request.audio_type, std::move(callback)));
     return;
   }
   if (!IsDeviceCapture(request.audio_type, request.video_type)) {
@@ -2507,6 +2979,7 @@ void WebViewGuest::RunJavaScriptDialog(
           client_.get(), origin, type, message_text, default_prompt_text));
   // The dialog guard greps for these.
   if (opened) {
+    dialog_asks_app_ = false;
     LOG(INFO) << "domicile: a <webview>'s page opened a dialog; asking the "
                  "shell.";
   } else {
@@ -2525,6 +2998,28 @@ void WebViewGuest::RunBeforeUnloadDialog(
   // Split so a refused one can still leave: GuestDialogs drops what it
   // refuses, and content waits for an answer.
   auto [asked, refused] = base::SplitOnceCallback(std::move(callback));
+  if (!unload_deciding_.is_null()) {
+    const bool opened = dialogs_.Open(
+        std::move(asked),
+        base::BindOnce(
+            [](const UnloadDeciding& deciding, GuestDialogs::Closed answer) {
+              deciding.Run(base::BindOnce(
+                  [](GuestDialogs::Closed answer, bool unload) {
+                    std::move(answer).Run(unload, std::u16string());
+                  },
+                  std::move(answer)));
+            },
+            unload_deciding_));
+    if (opened) {
+      dialog_asks_app_ = true;
+      LOG(INFO) << "domicile: an Electron page asked to stay; asking its app.";
+    } else {
+      LOG(WARNING) << "domicile: an Electron page asked to stay while a "
+                      "dialog was open; it leaves.";
+      std::move(refused).Run(true, std::u16string());
+    }
+    return;
+  }
   const bool opened = dialogs_.Open(
       std::move(asked),
       base::BindOnce(
@@ -2542,6 +3037,7 @@ void WebViewGuest::RunBeforeUnloadDialog(
           client_.get(), origin));
   // The beforeunload guard greps for these.
   if (opened) {
+    dialog_asks_app_ = false;
     LOG(INFO) << "domicile: a <webview>'s page asked to stay; asking the "
                  "shell.";
   } else {
@@ -2553,7 +3049,7 @@ void WebViewGuest::RunBeforeUnloadDialog(
 
 void WebViewGuest::CancelDialogs(content::WebContents* web_contents,
                                  bool reset_state) {
-  if (dialogs_.Cancel()) {
+  if (dialogs_.Cancel() && !std::exchange(dialog_asks_app_, false)) {
     client_->DialogWithdrawn();
   }
 }
@@ -2587,6 +3083,52 @@ std::unique_ptr<content::WebContents> WebViewGuest::CreateNewGuestWindow(
   return Host().MakeOpenedWindow(create_params);
 }
 
+namespace {
+
+WebViewGuest::WindowRequest RequestFor(
+    const GURL& url,
+    std::string frame_name,
+    WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& features,
+    const GURL& referrer) {
+  return WebViewGuest::WindowRequest{
+      .url = url,
+      .frame_name = std::move(frame_name),
+      .disposition = disposition,
+      .x = features.has_x ? std::optional<int>(features.bounds.x())
+                          : std::nullopt,
+      .y = features.has_y ? std::optional<int>(features.bounds.y())
+                          : std::nullopt,
+      .width = features.has_width ? std::optional<int>(features.bounds.width())
+                                  : std::nullopt,
+      .height = features.has_height
+                    ? std::optional<int>(features.bounds.height())
+                    : std::nullopt,
+      .popup = features.is_popup,
+      .referrer = referrer,
+  };
+}
+
+}  // namespace
+
+bool WebViewGuest::TakeNoopenerWindow(
+    const GURL& target_url,
+    const std::string& frame_name,
+    WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& features,
+    const GURL& referrer) {
+  if (window_opening_.is_null()) {
+    return false;
+  }
+  // guard-electron-window-open.sh greps for this.
+  LOG(INFO) << "domicile: a <webview>'s page asked for a noopener window at "
+            << target_url.possibly_invalid_spec() << "; its embedder decides.";
+  window_opening_.Run(
+      RequestFor(target_url, frame_name, disposition, features, referrer),
+      nullptr);
+  return true;
+}
+
 content::WebContents* WebViewGuest::AddNewContents(
     content::WebContents* source,
     std::unique_ptr<content::WebContents> new_contents,
@@ -2595,6 +3137,17 @@ content::WebContents* WebViewGuest::AddNewContents(
     const blink::mojom::WindowFeatures& window_features,
     bool user_gesture,
     bool* was_blocked) {
+  if (!window_opening_.is_null()) {
+    // guard-electron-window-open.sh greps for this.
+    LOG(INFO) << "domicile: a <webview>'s page opened a window at "
+              << target_url.possibly_invalid_spec()
+              << "; its embedder decides whether it shows.";
+    WindowRequest request = RequestFor(
+        target_url, new_contents->GetPrimaryMainFrame()->GetFrameName(),
+        disposition, window_features, guest_contents_->GetLastCommittedURL());
+    window_opening_.Run(std::move(request), std::move(new_contents));
+    return nullptr;
+  }
   // Only the size the page asked for is kept, so the shell can float a sized
   // window, such as a call's, at that size. The shell places windows itself.
   // Content navigates the window after this returns.
@@ -2651,7 +3204,14 @@ content::WebContents* WebViewGuest::OpenURLFromTab(
                    "page could not perform itself, to "
                 << params.url.possibly_invalid_spec();
 
-      ReportNewWindow(params.url);
+      if (!window_opening_.is_null()) {
+        window_opening_.Run(
+            RequestFor(params.url, std::string(), params.disposition,
+                       blink::mojom::WindowFeatures(), params.referrer.url),
+            nullptr);
+      } else {
+        ReportNewWindow(params.url);
+      }
       return nullptr;
     }
 
@@ -2684,7 +3244,7 @@ void WebViewGuest::ReportNewWindow(const GURL& target_url) {
   LOG(INFO) << "domicile: opened a browser window at "
             << target_url.possibly_invalid_spec() << " with no opener.";
 
-  Host().Open(*guest_contents_->GetBrowserContext(), target_url, partition());
+  OpenWindowAt(target_url);
 }
 
 void WebViewGuest::CloseContents(content::WebContents* source) {
@@ -2758,6 +3318,50 @@ void WebViewGuest::SetPageFullscreen(bool fullscreen) {
       ->GetWidget()
       ->SynchronizeVisualProperties();
   client_->PageFullscreenChanged(fullscreen);
+  if (fullscreen) {
+    left_fullscreen_check_.Stop();
+  } else {
+    left_fullscreen_check_.Start(
+        FROM_HERE, kLeavesFullscreenWithin,
+        base::BindOnce(&WebViewGuest::CheckLeftFullscreen,
+                       weak_factory_.GetWeakPtr()));
+  }
+}
+
+void WebViewGuest::CheckLeftFullscreen() {
+  CHECK(!page_fullscreen_);
+  content::RenderFrameHost& frame = *guest_contents_->GetPrimaryMainFrame();
+  // The main frame's document holds the <iframe> when a frame in it is
+  // fullscreen, so one read covers the whole page.
+  frame.ExecuteJavaScriptInIsolatedWorld(
+      u"document.fullscreenElement !== null",
+      base::BindOnce(&WebViewGuest::FullscreenChecked,
+                     weak_factory_.GetWeakPtr(), frame.GetWeakDocumentPtr()),
+      kChromeInternalWorld);
+}
+
+void WebViewGuest::FullscreenChecked(content::WeakDocumentPtr document,
+                                     base::Value held) {
+  if (page_fullscreen_ ||
+      document.AsRenderFrameHostIfValid() !=
+          guest_contents_->GetPrimaryMainFrame() ||
+      held != base::Value(true)) {
+    return;
+  }
+  // What the renderer was last told, for the report: whether the grant it
+  // waits on went out, and the size it lays the page out at.
+  content::RenderWidgetHostView* view =
+      guest_contents_->GetPrimaryMainFrame()->GetView();
+  LOG(ERROR) << "domicile: a <webview>'s page is still fullscreen "
+             << kLeavesFullscreenWithin << " after it left. Its widget is "
+             << (view ? view->GetViewBounds().size().ToString()
+                      : std::string("gone"))
+             << (view && view->IsShowing() ? ", showing" : ", hidden")
+             << "; the renderer leaves when its visual properties drop the "
+                "grant, so they never reached it or it never applied them.";
+  DeskFaults::Get().Report(
+      "A page stayed in fullscreen after leaving it, so its window may look "
+      "stuck.");
 }
 
 void WebViewGuest::ScreenWakeLockChanged(content::WebContents* source,
@@ -2773,6 +3377,13 @@ void WebViewGuest::ScreenWakeLockChanged(content::WebContents* source,
 void WebViewGuest::ActivateContents(content::WebContents* contents) {
   LOG(INFO) << "domicile: a <webview>'s page asked to be in front.";
   client_->FocusRequested();
+}
+
+content::PictureInPictureResult WebViewGuest::EnterPictureInPicture(
+    content::WebContents* web_contents) {
+  LOG(INFO) << "domicile: a <webview>'s page put a video in "
+               "picture-in-picture.";
+  return content::PictureInPictureResult::kSuccess;
 }
 
 void WebViewGuest::EnableAutoResize() {
@@ -2828,7 +3439,51 @@ base::CallbackListSubscription WebViewGuest::AddFocusedCallback(
 }
 
 void WebViewGuest::Focused() {
+  UnfocusedWebViews::Get().Focus(this);
   focused_callbacks_.Notify();
+}
+
+void WebViewGuest::DecideWindowsWith(WindowOpening opening) {
+  window_opening_ = std::move(opening);
+}
+
+void WebViewGuest::TakeContextMenusWith(ContextMenuTaking taking) {
+  context_menu_taking_ = std::move(taking);
+}
+
+void WebViewGuest::DecideNavigationsWith(NavigationDeciding deciding) {
+  navigation_deciding_ = std::move(deciding);
+}
+
+void WebViewGuest::DecideUnloadsWith(UnloadDeciding deciding) {
+  unload_deciding_ = std::move(deciding);
+}
+
+void WebViewGuest::ReportToApp(base::WeakPtr<AppPage> page) {
+  app_page_ = std::move(page);
+}
+
+void WebViewGuest::KeepFullFrameRate() {
+  full_frame_rate_ = true;
+  UnfocusedWebViews::Get().Untrack(this);
+}
+
+void WebViewGuest::OnZoomChanged(
+    const zoom::ZoomController::ZoomChangedEventData& data) {
+  ReportZoom();
+}
+
+void WebViewGuest::OnZoomControllerDestroyed(
+    zoom::ZoomController* zoom_controller) {
+  zoom_observation_.Reset();
+}
+
+zoom::ZoomController& WebViewGuest::Zoom() const {
+  CHECK(guest_contents_);
+  zoom::ZoomController* zoom =
+      zoom::ZoomController::FromWebContents(guest_contents_);
+  CHECK(zoom);
+  return *zoom;
 }
 
 base::CallbackListSubscription WebViewGuest::AddZoomChangedCallback(
@@ -2837,7 +3492,8 @@ base::CallbackListSubscription WebViewGuest::AddZoomChangedCallback(
 }
 
 void WebViewGuest::WebContentsDestroyed() {
-  zoom_subscription_ = {};
+  UnfocusedWebViews::Get().Untrack(this);
+  zoom_observation_.Reset();
   settings_observation_.Reset();
   download_manager_observation_.Reset();
   guest_contents_ = nullptr;

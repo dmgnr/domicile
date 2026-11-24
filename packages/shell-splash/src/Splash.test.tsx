@@ -13,12 +13,15 @@ import { Splash } from "./Splash";
 
 const display = (name: string, x: number, width: number, height: number) => ({
   adaptiveSync: "unsupported",
+  hdr: "unsupported",
   height,
   modeHeight: height,
   modeWidth: width,
   name,
+  peakLuminance: 0,
   refreshMhz: 60_000,
   scale: 1,
+  sdrWhite: 0,
   transform: "normal",
   width,
   x,

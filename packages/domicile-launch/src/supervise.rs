@@ -12,11 +12,9 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::heard::Heard;
 use crate::spawn::Spawn;
 
 /// How often the short waits (startup, backoff, shutdown) check for an exit
@@ -48,9 +46,14 @@ pub struct Exit {
 
 /// Grace period between `SIGTERM` and `SIGKILL`.
 ///
-/// `SIGTERM` lets Chromium save its profile. The console does not depend on
-/// it: logind restores the VT when the engine's bus connection closes, however
-/// the engine exits.
+/// `SIGTERM` lets Chromium save its profile and record a clean exit. It waits
+/// up to 10 s for those writes (`kEndSessionTimeout`), so 3 s cut it short
+/// and every start counted a crash. The console does not depend on it: logind
+/// restores the VT when the engine's bus connection closes, however the
+/// engine exits.
+const TO_STOP: Duration = Duration::from_secs(15);
+
+/// How long the end of a run waits for the last of a component's stderr.
 const LAST_WORDS: Duration = Duration::from_secs(3);
 
 /// Children killed when the run ends, however it ends.
@@ -63,64 +66,124 @@ pub struct Running {
 
 impl Drop for Running {
     fn drop(&mut self) {
-        for (_, child) in &mut self.components {
-            end_the_group(child);
+        for (what, child) in &mut self.components {
+            end_the_group(what, child);
         }
         // Join after the groups are gone: a listener's read ends only when
-        // every writer to the pipe has exited. Joining, not detaching,
-        // ensures the caller sees the last lines of stderr.
+        // every writer to the pipe has exited, so the caller sees the last
+        // lines of stderr. A process that left the group, such as an app the
+        // engine started with its own session, can hold the pipe open for as
+        // long as it runs; after `LAST_WORDS` its listener is left to carry
+        // on alone rather than holding up the end of the run.
         //
         // Ignore a panicked listener. Panicking in `Drop` during an unwind
         // would abort.
+        let deadline = std::time::Instant::now() + LAST_WORDS;
+        while self
+            .listeners
+            .iter()
+            .any(|listener| !listener.is_finished())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(ASK_EVERY);
+        }
         for listener in self.listeners.drain(..) {
-            let _ = listener.join();
+            if listener.is_finished() {
+                let _ = listener.join();
+            }
         }
     }
 }
 
 /// Stops a component and everything it started.
 ///
-/// Chromium forks GPU and zygote processes that `Child::kill` would miss. An
-/// orphaned one can keep DRM master and lock up the console. So each
-/// component leads a process group, which gets `SIGTERM`, then `SIGKILL`
-/// after [`LAST_WORDS`].
+/// `SIGTERM` goes to the component alone. Chromium ends its own GPU, zygote
+/// and other processes, and needs them until it does: signaling them with it
+/// is a crash under it. Once it exits, or after [`TO_STOP`], its whole process
+/// group gets `SIGKILL`, since an orphaned GPU process can keep DRM master and
+/// lock up the console. `Child::kill` would miss the group.
 ///
 /// The group outlives its leader while it has members, so signaling it by the
 /// leader's pid works after the leader is reaped.
-fn end_the_group(child: &mut Child) {
+fn end_the_group(what: &str, child: &mut Child) {
     let group = child.id() as libc::pid_t;
-    signal_group(group, libc::SIGTERM);
+    // Already exited, so its pid may be someone else's by now. Its group is
+    // not reused while it has members.
+    if let Ok(Some(_)) = child.try_wait() {
+        signal_group(group, libc::SIGKILL);
+        return;
+    }
+    // SAFETY: `kill` takes a pid and a signal. The pid is our unreaped
+    // child's. The only reachable error is `ESRCH`.
+    unsafe {
+        libc::kill(group, libc::SIGTERM);
+    }
 
-    let deadline = std::time::Instant::now() + LAST_WORDS;
-    while std::time::Instant::now() < deadline {
+    let asked = std::time::Instant::now();
+    let mut stopped = None;
+    while stopped.is_none() && asked.elapsed() < TO_STOP {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => stopped = Some(status),
             _ => std::thread::sleep(ASK_EVERY),
         }
     }
 
     signal_group(group, libc::SIGKILL);
-    let _ = child.wait();
+    match stopped {
+        Some(status) => crate::launcher_log::info(&format!(
+            "the {what} stopped {} ms after SIGTERM ({status})",
+            asked.elapsed().as_millis()
+        )),
+        None => {
+            let _ = child.wait();
+            crate::launcher_log::error(&format!(
+                "the {what} was still running {} s after SIGTERM, so it was killed",
+                TO_STOP.as_secs()
+            ));
+        }
+    }
 }
 
-/// Starts one component with the given stderr.
-fn started(what: &'static str, spawn: &Spawn, stderr: fn() -> Stdio) -> Result<Child, RunError> {
-    command(spawn)
+/// Starts one component with the given stderr and stdout.
+fn started(
+    what: &'static str,
+    spawn: &Spawn,
+    stderr: fn() -> Stdio,
+    stdout: fn() -> Stdio,
+) -> Result<Child, RunError> {
+    let child = command(spawn)
         .stderr(stderr())
+        .stdout(stdout())
         .spawn()
         .map_err(|source| RunError::Start {
             program: spawn.program.clone(),
             source,
             what,
-        })
+        })?;
+    if crate::launcher_log::showing(domicile_protocol::LogLevel::Debug) {
+        crate::launcher_log::debug(&format!(
+            "started the {what} as pid {}: {} {}",
+            child.id(),
+            spawn.program.display(),
+            spawn
+                .args
+                .iter()
+                .map(|arg| arg.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+    }
+    Ok(child)
 }
 
-/// Copies a component's stderr to ours and into `heard`, for repeating if the
-/// run gives up.
+/// Where each line of a heard component's stderr goes, without its newline.
+pub type Listener = Box<dyn FnMut(&str) + Send>;
+
+/// Hands each line of a component's stderr or stdout to `listener`.
 ///
 /// Reads bytes rather than `lines()`, which stops at the first invalid UTF-8.
-fn overhear(what: &'static str, stderr: std::process::ChildStderr, heard: &Mutex<Heard>) {
-    let mut reader = BufReader::new(stderr);
+fn overhear(what: &'static str, said: impl std::io::Read, mut listener: Listener) {
+    let mut reader = BufReader::new(said);
     let mut line = Vec::new();
     loop {
         line.clear();
@@ -129,12 +192,7 @@ fn overhear(what: &'static str, stderr: std::process::ChildStderr, heard: &Mutex
             Ok(0) => return,
             Ok(_) => {
                 let said = String::from_utf8_lossy(&line);
-                let said = said.trim_end_matches(['\n', '\r']);
-                eprintln!("{said}");
-                heard
-                    .lock()
-                    .expect("nothing panics holding what a component said")
-                    .line(said);
+                listener(said.trim_end_matches(['\n', '\r']));
             }
             // Unrecoverable. Report it; this thread has no caller to return to.
             Err(why) => {
@@ -163,26 +221,46 @@ impl Running {
 
     /// Starts a component that inherits our stderr.
     pub fn start(&mut self, what: &'static str, spawn: &Spawn) -> Result<(), RunError> {
-        let child = started(what, spawn, Stdio::inherit)?;
+        let child = started(what, spawn, Stdio::inherit, Stdio::inherit)?;
         self.components.push((what, child));
         Ok(())
     }
 
-    /// Starts a component, echoing its stderr and keeping a copy in `heard`.
+    /// Starts a component, handing each line of its stderr to `listener`.
     ///
-    /// The copy is repeated if the run gives up; see [`crate::heard`].
-    pub fn start_overheard(
+    /// Every line reaches `listener` before the [`Running`] is dropped.
+    pub fn start_heard(
         &mut self,
         what: &'static str,
         spawn: &Spawn,
-        heard: &Arc<Mutex<Heard>>,
+        listener: Listener,
     ) -> Result<(), RunError> {
-        let mut child = started(what, spawn, Stdio::piped)?;
+        let mut child = started(what, spawn, Stdio::piped, Stdio::inherit)?;
         let listening = child.stderr.take().expect("stderr was asked for a pipe");
-        let heard = Arc::clone(heard);
         self.listeners.push(std::thread::spawn(move || {
-            overhear(what, listening, &heard)
+            overhear(what, listening, listener)
         }));
+        self.components.push((what, child));
+        Ok(())
+    }
+
+    /// [`Running::start_heard`], handing each line of its stdout to `stdout`
+    /// too.
+    pub fn start_heard_whole(
+        &mut self,
+        what: &'static str,
+        spawn: &Spawn,
+        listener: Listener,
+        stdout: Listener,
+    ) -> Result<(), RunError> {
+        let mut child = started(what, spawn, Stdio::piped, Stdio::piped)?;
+        let listening = child.stderr.take().expect("stderr was asked for a pipe");
+        let out = child.stdout.take().expect("stdout was asked for a pipe");
+        self.listeners.push(std::thread::spawn(move || {
+            overhear(what, listening, listener)
+        }));
+        self.listeners
+            .push(std::thread::spawn(move || overhear(what, out, stdout)));
         self.components.push((what, child));
         Ok(())
     }
@@ -193,8 +271,9 @@ impl Running {
     /// hold the card. The entry must be removed, or [`Running::exited`] would
     /// report the old exit forever. An unknown name is a no-op.
     pub fn let_go_of(&mut self, what: &'static str) {
-        for (_, child) in self.components.iter_mut().filter(|(held, _)| *held == what) {
-            end_the_group(child);
+        crate::launcher_log::debug(&format!("stopping the {what}'s processes"));
+        for (held, child) in self.components.iter_mut().filter(|(held, _)| *held == what) {
+            end_the_group(held, child);
         }
         self.components.retain(|(held, _)| *held != what);
     }
@@ -291,6 +370,25 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static INTERRUPT_READ: AtomicI32 = AtomicI32::new(-1);
 static INTERRUPT_WRITE: AtomicI32 = AtomicI32::new(-1);
 
+/// `/dev/null`, opened by [`catch_interrupts`] for [`note_the_hangup`].
+static DEV_NULL: AtomicI32 = AtomicI32::new(-1);
+
+/// A hangup is a stop, and what stdout and stderr wrote to (the tty, or the
+/// display manager's `systemd-cat`) is ending with the session: they go to
+/// `/dev/null` so writes during the teardown don't fail and panic.
+extern "C" fn note_the_hangup(signal: libc::c_int) {
+    // SAFETY: `dup2` is async-signal-safe. `errno` is put back for the code
+    // the signal interrupted.
+    unsafe {
+        let errno = *libc::__errno_location();
+        let null = DEV_NULL.load(Ordering::Relaxed);
+        libc::dup2(null, libc::STDOUT_FILENO);
+        libc::dup2(null, libc::STDERR_FILENO);
+        *libc::__errno_location() = errno;
+    }
+    note_the_interrupt(signal);
+}
+
 extern "C" fn note_the_interrupt(_signal: libc::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
     // SAFETY: `write` is async-signal-safe. The end is non-blocking, so a
@@ -307,14 +405,17 @@ extern "C" fn note_the_interrupt(_signal: libc::c_int) {
     }
 }
 
-/// Makes `SIGINT` and `SIGTERM` end the run instead of killing this process.
+/// Makes `SIGINT`, `SIGTERM` and `SIGHUP` end the run instead of killing this
+/// process.
 ///
 /// Components run in their own process groups, so Ctrl-C reaches only this
 /// process. Without a handler it would die before `Running::drop` stopped
-/// them. The handler sets a flag, which the wait loops check, and wakes
-/// [`Running::until_one_exits`].
+/// them and before the graphical session ended. A logout, from a display
+/// manager or a tty, sends `SIGTERM` and then `SIGHUP` to every process in the
+/// login session (logind's scopes have `SendSIGHUP=yes`). The handler sets a
+/// flag, which the wait loops check, and wakes [`Running::until_one_exits`].
 ///
-/// Panics if the pipe cannot be opened, which only fd exhaustion causes.
+/// Panics if the pipe or `/dev/null` cannot be opened.
 pub fn catch_interrupts() {
     let mut ends = [0; 2];
     // SAFETY: `ends` has room for the two fds `pipe2` writes.
@@ -328,14 +429,24 @@ pub fn catch_interrupts() {
     // Open for the life of the process: the handler may fire at any time.
     INTERRUPT_READ.store(ends[0], Ordering::Relaxed);
     INTERRUPT_WRITE.store(ends[1], Ordering::Relaxed);
-    for signal in [libc::SIGINT, libc::SIGTERM] {
-        // SAFETY: `note_the_interrupt` touches one atomic and nothing else,
-        // which is what a handler is permitted to do.
+    // SAFETY: the path is a NUL-terminated C string.
+    let null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+    assert!(
+        null >= 0,
+        "opening /dev/null failed: {}",
+        std::io::Error::last_os_error()
+    );
+    DEV_NULL.store(null, Ordering::Relaxed);
+    let handlers: [(libc::c_int, extern "C" fn(libc::c_int)); 3] = [
+        (libc::SIGINT, note_the_interrupt),
+        (libc::SIGTERM, note_the_interrupt),
+        (libc::SIGHUP, note_the_hangup),
+    ];
+    for (signal, handler) in handlers {
+        // SAFETY: the handlers call only async-signal-safe functions and
+        // touch only atomics.
         unsafe {
-            libc::signal(
-                signal,
-                note_the_interrupt as *const () as libc::sighandler_t,
-            );
+            libc::signal(signal, handler as *const () as libc::sighandler_t);
         }
     }
 }

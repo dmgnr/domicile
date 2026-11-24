@@ -23,7 +23,7 @@ job builds it on `crux`.
  2 files changed, 13 insertions(+)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 937fbf4..cd282e3 100644
+index 3b4a486..5ca611e 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -186,6 +186,10 @@ source_set("gbm") {

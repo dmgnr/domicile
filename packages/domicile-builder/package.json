@@ -13,6 +13,7 @@
     "@domicile-desktop/manganese": "workspace:*",
     "@pandacss/dev": "catalog:",
     "@types/bun": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
     "typescript": "catalog:"
   },
   "engines": {

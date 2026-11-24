@@ -32,7 +32,7 @@ impl IdleHolds {
     }
 
     /// The current holders.
-    pub(crate) fn holders(&self) -> Vec<String> {
+    pub fn holders(&self) -> Vec<String> {
         self.holders.lock().unwrap().clone()
     }
 

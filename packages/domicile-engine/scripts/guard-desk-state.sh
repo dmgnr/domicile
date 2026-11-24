@@ -86,7 +86,7 @@ rm -f "$ENGINE_LOG"
   --domicile-control-socket="$CONTROL" \
   --no-sandbox --password-store=basic --no-first-run --disable-component-update \
   --user-data-dir="$PROFILE" \
-  --enable-logging=stderr --log-level=0 \
+  --enable-logging=stderr --log-level=0 --vmodule=desk_cursor_theme=1 \
   --domicile-broker-socket="$BROKER" >"$ENGINE_LOG" 2>&1 &
 STARTED+=($!)
 
@@ -114,8 +114,9 @@ STATE=$(grep -oE '"GUARD state .*"' "$ENGINE_LOG" | tail -1)
 
 echo "page: $STATE"
 
-# The pointer theme stops in the browser process, which logs it. A headless
-# engine has no DRM cursor factory to load it, so this checks the crossing.
+# The pointer theme stops in the browser process, which logs it at VLOG 1. A
+# headless engine has no DRM cursor factory to load it, so this checks the
+# crossing.
 POINTER='the desk'"'"'s pointer theme is "domicile-guard" at 48 px'
 if [ -z "$FAILURE" ] && ! wait_for_line "$TRIES" "$POINTER" "$ENGINE_LOG"; then
   FAILURE="the browser never logged the pointer theme the compositor sent"

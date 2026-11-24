@@ -39,6 +39,8 @@ export default defineConfig({
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
         // A removed row: fades and slides away while its height closes.
+        // main-thread animation: a removed row's height closes once, so the
+        // rows below close up.
         rowLeave: {
           "0%": {
             gridTemplateRows: "1fr",
@@ -53,8 +55,8 @@ export default defineConfig({
         },
         // The highlight sweeping across a loading skeleton.
         shimmer: {
-          "0%": { backgroundPosition: "150% 0" },
-          "100%": { backgroundPosition: "-50% 0" },
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
         },
       },
       tokens: {

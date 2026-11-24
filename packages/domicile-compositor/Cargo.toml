@@ -70,6 +70,9 @@ tracing = "0.1"
 # crates: zbus already runs on it.
 async-io = "2.6"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Tracing as journal entries with priorities, when stdout is the journal (see
+# `start_logging` in `src/main.rs`).
+tracing-journald = "0.3"
 # Serves EIS, the emulated input the RemoteDesktop and InputCapture portals
 # hand out (see `src/eis.rs`). Its calloop sources run on the Wayland loop.
 reis = { version = "0.7", features = ["calloop"] }

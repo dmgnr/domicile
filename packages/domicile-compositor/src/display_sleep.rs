@@ -100,6 +100,8 @@ pub fn asleep_in(displays: &[Display], scanout: &[Connector], asleep: &[i64]) ->
                 mode: None,
                 refresh_mhz: None,
                 adaptive_sync: false,
+                hdr: false,
+                sdr_white: domicile_config::DEFAULT_SDR_WHITE,
             })
             .collect()
     } else {
@@ -246,6 +248,8 @@ mod tests {
             mode: None,
             refresh_mhz: None,
             adaptive_sync: false,
+            hdr: false,
+            sdr_white: domicile_config::DEFAULT_SDR_WHITE,
         }
     }
 
@@ -260,6 +264,7 @@ mod tests {
             refresh_mhz: 60_000,
             modes: Vec::new(),
             adaptive_sync: AdaptiveSync::Unsupported,
+            hdr: Default::default(),
         }
     }
 

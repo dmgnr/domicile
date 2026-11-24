@@ -22,9 +22,9 @@ SEQUENCE = [
     {"type": "theme", "theme": "light"},
     {"type": "windows_theme", "theme": "dark"},
     {"type": "clipboard", "entries": [
-        {"id": 7, "image": False, "preview": "hello"},
+        {"id": 7, "image": False, "preview": "hello", "current": True},
         {"id": 8, "image": True, "preview": "Image, 3 × 2",
-         "thumbnail": "data:image/png;base64,iVBORw0KGgo="},
+         "thumbnail": "data:image/png;base64,iVBORw0KGgo=", "current": False},
     ]},
     {"type": "tray", "items": [
         {"id": "nm", "title": "Network", "icon": "", "bus": ":1.42",

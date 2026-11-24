@@ -40,10 +40,10 @@ index 2774864..a069f15 100644
    // ui/events/ozone/evdev/domicile/typing_guard.h.
    std::optional<bool> GetDomicileDisableWhileTyping() const override {
 diff --git a/ui/ozone/public/ozone_platform.cc b/ui/ozone/public/ozone_platform.cc
-index 35c418d..a86c32e 100644
+index e3a17b7..602e97b 100644
 --- a/ui/ozone/public/ozone_platform.cc
 +++ b/ui/ozone/public/ozone_platform.cc
-@@ -145,6 +145,11 @@ base::flat_map<int64_t, uint32_t> OzonePlatform::GetDomicileGammaSizes()
+@@ -141,6 +141,11 @@ base::flat_map<int64_t, uint32_t> OzonePlatform::GetDomicileGammaSizes()
    return {};
  }
  
@@ -56,7 +56,7 @@ index 35c418d..a86c32e 100644
    return std::nullopt;
  }
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 84a77d3..9742b24 100644
+index 1db3c04..d0b0271 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -96,6 +96,35 @@ struct DomicileDisplayLayout {
@@ -95,7 +95,7 @@ index 84a77d3..9742b24 100644
  };
  
  // DOMICILE: a tablet or touchscreen and the display it covers, from the
-@@ -511,6 +540,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -498,6 +527,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // `display::Display::id()`. A display it does not name has no ramp, as on
    // every platform but DRM.
    virtual base::flat_map<int64_t, uint32_t> GetDomicileGammaSizes() const;

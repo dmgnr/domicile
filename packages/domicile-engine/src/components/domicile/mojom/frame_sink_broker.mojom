@@ -11,6 +11,7 @@ import "ui/gfx/geometry/mojom/geometry.mojom";
 import "gpu/ipc/common/exported_shared_image.mojom";
 import "gpu/ipc/common/sync_token.mojom";
 import "ui/gfx/mojom/buffer_types.mojom";
+import "ui/gfx/mojom/color_space.mojom";
 import "ui/gfx/mojom/gpu_fence_handle.mojom";
 import "mojo/public/mojom/base/shared_memory.mojom";
 
@@ -29,9 +30,14 @@ interface SurfaceObserver {
   // `scale` is device pixels per CSS pixel, which converts back to the logical
   // pixels a client is configured in. Per embed, since each monitor's page has
   // its own scale.
+  //
+  // `zoom` is the embedding element's CSS `zoom`: the client draws `zoom`
+  // times denser than `scale`, at a logical size `zoom` times smaller, so the
+  // box stays `size` and the window stays sharp. 1 for an unzoomed element.
   OnSurfaceEmbedded(viz.mojom.LocalSurfaceId local_surface_id,
                     gfx.mojom.Size size,
-                    double scale);
+                    double scale,
+                    double zoom);
 
   // Viz no longer samples `buffer_id`, so the producer may draw into it.
   // Reusing a dmabuf viz is still reading causes tearing.
@@ -44,6 +50,16 @@ interface SurfaceObserver {
 // Whether a connector scans out with a variable refresh rate.
 enum AdaptiveSync {
   // The connector, its panel or its driver cannot.
+  kUnsupported,
+  // It can, and is not.
+  kOff,
+  // It is.
+  kOn,
+};
+
+// Whether a connector is driven in HDR10 (BT.2020 with PQ).
+enum Hdr {
+  // Its panel's EDID takes no PQ, or it cannot scan out in 10 bits.
   kUnsupported,
   // It can, and is not.
   kOff,
@@ -110,6 +126,15 @@ struct Display {
   // Whether it scans out with a variable refresh rate, as the hardware says:
   // a profile asking for it gets `kOff` where the driver refused it.
   AdaptiveSync adaptive_sync;
+
+  // Whether it is driven in HDR10, and its panel's luminances from the EDID
+  // in cd/m², zero where unreported.
+  Hdr hdr;
+  float max_luminance;
+  float max_average_luminance;
+  float min_luminance;
+  // In HDR, the luminance SDR content's white is shown at; zero otherwise.
+  float sdr_white_nits;
 };
 
 // One display's gamma ramp: each channel 0 to 65535, all the same length.
@@ -163,6 +188,11 @@ struct DisplayLayout {
 
   // Whether to scan out with a variable refresh rate where the connector can.
   bool adaptive_sync;
+
+  // Whether to drive it in HDR10 where its panel takes it, and the luminance
+  // to show SDR content's white at there, in cd/m².
+  bool hdr;
+  float sdr_white_nits;
 };
 
 // A tablet or touchscreen and the display it covers, from the producer's
@@ -229,6 +259,17 @@ interface DisplayListObserver {
   OnDisplaysChanged(array<Display> displays);
 };
 
+// An Electron app's view a listed browser window holds: its page, placed by
+// the app in the window's page, in that page's CSS pixels.
+struct ListedBrowserView {
+  // As `CaptureBrowserWindow` takes it.
+  string id;
+  int32 x;
+  int32 y;
+  int32 width;
+  int32 height;
+};
+
 // A browser window, as a capture tool lists it. See
 // components/domicile/browser/browser_window_listing.h.
 struct ListedBrowserWindow {
@@ -239,6 +280,13 @@ struct ListedBrowserWindow {
   string title;
   // The app window's id, or empty for any other window.
   string app_id;
+  // The address it shows, or the one it is opening.
+  string url;
+  // Whether it is a private window.
+  bool off_the_record;
+  // The views it holds and shows, bottom first: an Electron app's
+  // `WebContentsView`s, which a shot of the window draws over its page.
+  array<ListedBrowserView> views;
 };
 
 // Tells a producer which browser windows are open, so it can list them for
@@ -247,6 +295,47 @@ interface BrowserWindowListObserver {
   // The full list. Sent on observing, and when a window opens, closes or
   // changes its title.
   OnBrowserWindowsChanged(array<ListedBrowserWindow> windows);
+};
+
+// What an input device is. A device can be more than one, and is then listed
+// once for each.
+enum InputDeviceKind {
+  kKeyboard,
+  kMouse,
+  kTouchpad,
+  kTouchscreen,
+  kPointingStick,
+  kGraphicsTablet,
+  // Read for its keys or switches alone, like a power button or a lid.
+  kOther,
+};
+
+// How an input device is attached. Mirrors ui::InputDeviceType.
+enum InputDeviceConnection {
+  kUnknown,
+  kInternal,
+  kUsb,
+  kBluetooth,
+};
+
+// An input device the browser reads, as `domicile list-inputs` lists it.
+struct ListedInputDevice {
+  // ui::InputDevice::id, which holds while the device stays plugged in.
+  int32 id;
+  string name;
+  InputDeviceKind kind;
+  InputDeviceConnection connection;
+  // Its device under /sys, or empty.
+  string sys_path;
+  uint16 vendor_id;
+  uint16 product_id;
+};
+
+// Tells a producer which input devices the browser reads, so it can list them.
+interface InputDeviceListObserver {
+  // The full list, in the order the browser found them. Sent on observing,
+  // and when a device is plugged or unplugged.
+  OnInputDevicesChanged(array<ListedInputDevice> devices);
 };
 
 // Which clipboard: the Ctrl-C clipboard or the primary selection.
@@ -317,6 +406,9 @@ interface DisplayCaptureObserver {
 
 // Controls one capture: of a display, or of a browser window. Closing it stops
 // the capture.
+//
+// When the browser ends a capture that failed, it closes this pipe and the
+// observer's with the cause as the disconnect reason's description.
 interface DisplayCapture {
   // Captures at `size` from the next frame on, letterboxed to keep the
   // source's aspect.
@@ -365,6 +457,19 @@ interface FrameSinkBroker {
       string app_id)
       => (viz.mojom.FrameSinkId frame_sink_id);
 
+  // Embeds the producer's sink `child` in its sink `parent`, as a page's
+  // <app> embeds a window: registers the hierarchy and tells `child`'s
+  // observer `local_surface_id`. For a window's subsurfaces, which the
+  // producer draws into the window's own frames.
+  //
+  // The producer allocates `local_surface_id`, since it embeds the surface.
+  // A sink this producer did not create is a bad message.
+  EmbedFrameSink(viz.mojom.FrameSinkId child,
+                 viz.mojom.FrameSinkId parent,
+                 viz.mojom.LocalSurfaceId local_surface_id,
+                 gfx.mojom.Size size,
+                 double scale);
+
   // Imports a dmabuf and returns its id, or 0 on failure.
   //
   // This is zwp_linux_dmabuf_v1. The browser does what
@@ -378,10 +483,15 @@ interface FrameSinkBroker {
   //
   // `fourcc` is the client's DRM format. It is required because the byte order
   // decides whether red and blue are swapped.
+  //
+  // `color_space` is how the client's pixels encode color: sRGB unless it
+  // described them with wp_color_management_v1. The SharedImage is made in
+  // it, and viz converts from it to each display's.
   ImportBuffer(viz.mojom.FrameSinkId frame_sink_id,
                gfx.mojom.GpuMemoryBufferHandle buffer_handle,
                gfx.mojom.Size size,
-               uint32 fourcc)
+               uint32 fourcc,
+               gfx.mojom.ColorSpace color_space)
       => (uint64 buffer_id, gpu.mojom.ExportedSharedImage? exported);
 
   // Submits a frame showing `buffer_id` with `damage`.
@@ -404,9 +514,13 @@ interface FrameSinkBroker {
       => (gpu.mojom.SyncToken? sync_token);
 
   // Drops an imported buffer the client destroyed. Send it only once viz has
-  // returned the buffer: viz draws a fallback image over a frame still showing
-  // it. Buffers are also dropped with their sink.
-  DestroyBuffer(viz.mojom.FrameSinkId frame_sink_id, uint64 buffer_id);
+  // returned the buffer, with the sync token viz last returned it with (empty
+  // if viz never had it): its GPU may still be reading it, and a read that
+  // finds no image draws a fallback image over the window. Buffers are also
+  // dropped with their sink.
+  DestroyBuffer(viz.mojom.FrameSinkId frame_sink_id,
+                uint64 buffer_id,
+                gpu.mojom.SyncToken read_done);
 
   // Destroys the sink and invalidates `frame_sink_id`. All sinks are also
   // destroyed when the connection drops.
@@ -443,6 +557,13 @@ interface FrameSinkBroker {
   // is. Channels of different lengths are a bad message.
   SetGamma(int64 display_id, GammaRamp ramp);
 
+  // Sets the 3x3 color matrix, row-major, that display `display_id` is drawn
+  // with, in linear light: a night light on a display driven in HDR, where a
+  // gamma ramp would bend the PQ curve. The identity undoes it. Ignored for a
+  // display no browser window shows. Anything but nine finite numbers is a bad
+  // message.
+  SetColorMatrix(int64 display_id, array<float> matrix);
+
   // Delivers emulated input to the desk, as the engine's own devices' would
   // be: the shell sees it first. Ignored where the engine reads no input of
   // its own, as nested.
@@ -478,6 +599,10 @@ interface FrameSinkBroker {
   // Registers a producer's browser window list observer. It hears the list
   // at once, then every change.
   ObserveBrowserWindows(pending_remote<BrowserWindowListObserver> observer);
+
+  // Registers a producer's input device list observer. It hears the list at
+  // once, then every change.
+  ObserveInputDevices(pending_remote<InputDeviceListObserver> observer);
 
   // Captures what a display shows, for a screen cast. Viz runs a
   // FrameSinkVideoCapturer on the root frame sink of the browser window on

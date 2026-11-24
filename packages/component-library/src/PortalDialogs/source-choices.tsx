@@ -45,17 +45,22 @@ export const windowChoice = (
   preview: PreviewedWindow.App(id),
 });
 
-/** Browser window `id`, by its page's title, with its page's icon. */
+/**
+ * Browser window `id`, by its page's title, with its page's icon. An app
+ * window (an Electron app's, or a site's opened as an app) is named and drawn
+ * as its `app`, falling back to its page's icon.
+ */
 export const browserChoice = (
   id: string,
   title: string,
   icon: string | undefined,
   area: ShotRect | undefined,
+  app?: App,
 ): Choice => ({
   area,
-  detail: "Browser",
-  icon: <PageIcon icon={icon} />,
-  label: `Browser: ${titled(title)}`,
+  detail: app?.name ?? "Browser",
+  icon: <PageIcon icon={app?.icon ?? icon} />,
+  label: `${app?.name ?? "Browser"}: ${titled(title)}`,
   name: titled(title),
   preview: PreviewedWindow.Browser(id),
 });

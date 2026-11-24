@@ -22,6 +22,10 @@ export type AudioDevice = {
   description: string;
   /** The loudest channel's volume as a fraction of 100%. Can exceed 1. */
   volume: number;
+  /**
+   * Whether it is silent from a mute: its own, or one on anything in
+   * {@link AudioDevice.through}. `setMuted(id, false)` unmutes them all.
+   */
   muted: boolean;
   /** Whether new streams go to it. */
   default: boolean;
@@ -34,6 +38,25 @@ export type AudioDevice = {
   ports: readonly AudioChoice[];
   /** The {@link AudioChoice.name} of the port in use, if it has ports. */
   port: string | undefined;
+  /**
+   * For a filter, such as speaker correction: what its sound passes through
+   * to or from the hardware, nearest first. Its filter stream, the device
+   * that stream plays to or records from, and on. Empty for other devices.
+   */
+  through: readonly AudioLink[];
+  /**
+   * Whether a filter plays to it or records from it. Pickers hide it:
+   * choosing it would skip the filter.
+   */
+  filtered: boolean;
+};
+
+/** A stream or device a filter's sound passes through. */
+export type AudioLink = {
+  /** A device id, or a stream id for the filter's own stream. */
+  id: string;
+  /** Its own mute. */
+  muted: boolean;
 };
 
 /** Something playing (a sink input) or recording (a source output). */

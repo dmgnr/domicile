@@ -27,10 +27,10 @@ domicile_unittests.
  1 file changed, 30 insertions(+), 5 deletions(-)
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_aura.cc b/content/browser/renderer_host/render_widget_host_view_aura.cc
-index 1ca59a9..1a9419f 100644
+index 59cd75e..0f51c80 100644
 --- a/content/browser/renderer_host/render_widget_host_view_aura.cc
 +++ b/content/browser/renderer_host/render_widget_host_view_aura.cc
-@@ -73,6 +73,7 @@
+@@ -74,6 +74,7 @@
  #include "ui/aura/client/screen_position_client.h"
  #include "ui/aura/client/transient_window_client.h"
  #include "ui/aura/client/window_parenting_client.h"
@@ -38,7 +38,7 @@ index 1ca59a9..1a9419f 100644
  #include "ui/aura/env.h"
  #include "ui/aura/window.h"
  #include "ui/aura/window_event_dispatcher.h"
-@@ -107,6 +108,7 @@
+@@ -108,6 +109,7 @@
  #include "ui/gfx/canvas.h"
  #include "ui/gfx/color_palette.h"
  #include "ui/gfx/geometry/dip_util.h"
@@ -46,7 +46,7 @@ index 1ca59a9..1a9419f 100644
  #include "ui/gfx/geometry/rect_conversions.h"
  #include "ui/gfx/geometry/size_conversions.h"
  #include "ui/gfx/geometry/skia_conversions.h"
-@@ -3260,12 +3262,35 @@ void RenderWidgetHostViewAura::UpdateCursorIfOverSelf() {
+@@ -3319,12 +3321,35 @@ void RenderWidgetHostViewAura::UpdateCursorIfOverSelf() {
      return;
    }
  

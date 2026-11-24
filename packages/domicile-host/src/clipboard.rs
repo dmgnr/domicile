@@ -242,6 +242,18 @@ pub struct History {
     /// Total entries ever taken, which is also the last id issued. Never
     /// reset, so a stale id never names a different row.
     taken: u32,
+    /// Whether the clipboard was emptied by removing the newest entry, so no
+    /// entry is what it holds.
+    cleared: bool,
+}
+
+/// Which entry [`History::remove`] dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Removed {
+    /// An earlier copy; the clipboard is unchanged.
+    Earlier,
+    /// What the clipboard held, which the caller must now empty.
+    Current,
 }
 
 /// One copy and its id.
@@ -269,11 +281,13 @@ impl History {
     pub fn entries(&self) -> Vec<ClipboardEntry> {
         self.entries
             .iter()
-            .map(|copy| ClipboardEntry {
+            .enumerate()
+            .map(|(at, copy)| ClipboardEntry {
                 id: copy.id,
                 image: copy.contents.text.is_none(),
                 preview: copy.contents.preview(),
                 thumbnail: copy.contents.thumbnail(),
+                current: at == 0 && !self.cleared,
             })
             .collect()
     }
@@ -305,7 +319,23 @@ impl History {
         let copy = self.entries.remove(held);
         let contents = copy.contents.clone();
         self.entries.insert(0, copy);
+        self.cleared = false;
         Some(contents)
+    }
+
+    /// Drops entry `id` and its contents, and says whether it was what the
+    /// clipboard held.
+    ///
+    /// `None` if the entry has dropped off the end of the history.
+    pub fn remove(&mut self, id: u32) -> Option<Removed> {
+        let held = self.entries.iter().position(|copy| copy.id == id)?;
+        self.entries.remove(held);
+        if held == 0 && !self.cleared {
+            self.cleared = true;
+            Some(Removed::Current)
+        } else {
+            Some(Removed::Earlier)
+        }
     }
 
     /// Puts a copy at the front, moving an existing equal entry instead of
@@ -313,13 +343,15 @@ impl History {
     ///
     /// A moved entry keeps its id, so an open panel's rows stay valid.
     fn remember(&mut self, contents: Contents) -> bool {
+        let cleared = std::mem::take(&mut self.cleared);
         match self
             .entries
             .iter()
             .position(|copy| copy.contents == contents)
         {
-            // Already newest, so nothing changed.
-            Some(0) => false,
+            // Already newest, so nothing changed unless the clipboard had
+            // been emptied.
+            Some(0) => cleared,
             Some(held) => {
                 let copy = self.entries.remove(held);
                 self.entries.insert(0, copy);

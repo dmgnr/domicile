@@ -1,0 +1,27 @@
+<!doctype html>
+<title>served</title>
+<!-- Served by the guard's own server at http://127.0.0.1/. The app's
+     webRequest listeners add a header to /echo's request, cancel /blocked,
+     redirect /moved to /landed and add a header to /plain's response. The
+     title says everything at once, as the desk may report only its last. -->
+<script>
+  const text = (path) =>
+    fetch(path).then(
+      (response) => response.text(),
+      () => "failed",
+    );
+  Promise.all([
+    text("/echo"),
+    fetch("/blocked").then(
+      () => "loaded",
+      () => "blocked",
+    ),
+    text("/moved"),
+    fetch("/plain").then(
+      (response) => response.headers.get("x-from-app") ?? "none",
+      () => "failed",
+    ),
+  ]).then((words) => {
+    document.title = ["done", ...words].join("|");
+  });
+</script>

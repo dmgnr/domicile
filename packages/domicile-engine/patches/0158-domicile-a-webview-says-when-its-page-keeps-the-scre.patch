@@ -171,10 +171,10 @@ index cdf986a..95fb882 100644
  
  WakeLockServiceImpl::WakeLockServiceImpl(
 diff --git a/content/public/browser/web_contents_delegate.h b/content/public/browser/web_contents_delegate.h
-index 7e0c703..b3c8934 100644
+index c590816..a5f7f87 100644
 --- a/content/public/browser/web_contents_delegate.h
 +++ b/content/public/browser/web_contents_delegate.h
-@@ -567,6 +567,11 @@ class CONTENT_EXPORT WebContentsDelegate {
+@@ -580,6 +580,11 @@ class CONTENT_EXPORT WebContentsDelegate {
    // Called when the renderer puts a tab out of fullscreen mode.
    virtual void ExitFullscreenModeForTab(WebContents*) {}
  

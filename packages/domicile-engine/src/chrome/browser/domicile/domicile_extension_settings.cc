@@ -24,6 +24,7 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/extension_prefs.h"
@@ -289,10 +290,6 @@ void RegisterExtensionSettingsPrefs(PrefRegistrySimple* registry) {
 ExtensionSettings SettingsOf(Profile& profile,
                              const extensions::Extension& extension) {
   ExtensionSettings settings;
-  if (extensions::util::CanBeIncognitoEnabled(&extension)) {
-    settings.in_private =
-        extensions::util::IsIncognitoEnabled(extension.id(), &profile);
-  }
   if (CanUseFileAccess(extension)) {
     settings.file_access =
         extensions::util::AllowFileAccess(extension.id(), &profile);
@@ -305,6 +302,18 @@ ExtensionSettings SettingsOf(Profile& profile,
     ReadSiteAccess(profile, extension, settings);
   }
   return settings;
+}
+
+ExtensionSettings ConfiguredSettingsOf(Profile& profile,
+                                       const std::string& id) {
+  const ExtensionSettingsMap configured = ConfiguredBefore(*profile.GetPrefs());
+  const auto found = configured.find(id);
+  return found == configured.end() ? ExtensionSettings() : found->second;
+}
+
+void WatchConfiguredSettings(PrefChangeRegistrar& registrar,
+                             const base::RepeatingClosure& changed) {
+  registrar.Add(kConfigSettingsPref, changed);
 }
 
 base::expected<void, std::string> ConfigureExtensionIn(

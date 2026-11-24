@@ -11,6 +11,17 @@ import { ranked } from "./ranked";
 const bookmarkSchema = z.strictObject({
   /** The row's label, which queries match. */
   name: z.string(),
+  /**
+   * The id of the browser profile it opens in, one of the config's
+   * `browser.profiles`. By default, the one its site opens in.
+   */
+  profile: z
+    .string()
+    .regex(
+      /^[a-z0-9-]+$/,
+      "a browser profile id is lowercase letters, digits and -",
+    )
+    .optional(),
   url: z
     .string()
     .regex(/^https?:\/\/./i, "a bookmark's URL must be http or https"),

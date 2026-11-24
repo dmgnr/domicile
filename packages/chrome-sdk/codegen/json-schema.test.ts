@@ -10,7 +10,7 @@ const ROOT = {
 };
 
 describe("parseRootSchema", () => {
-  it("keeps what types a value and drops constraints TypeScript cannot state", () => {
+  it("keeps what types and constrains a value", () => {
     expect(
       parseRootSchema({
         ...ROOT,
@@ -26,7 +26,15 @@ describe("parseRootSchema", () => {
       }),
     ).toEqual({
       $defs: {},
-      properties: { size: { type: "integer" } },
+      properties: {
+        size: {
+          exclusiveMinimum: 0,
+          format: "uint16",
+          maximum: 65_535,
+          minimum: 0,
+          type: "integer",
+        },
+      },
       title: "Config",
       type: "object",
     });

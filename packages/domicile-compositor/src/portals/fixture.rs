@@ -71,7 +71,7 @@ pub fn served(tokens: Tokens) -> Served {
                 lockdown: LockdownConfig::default(),
                 screen_cast: super::idle_screen_cast(&serving.queue),
                 shots: super::Shots::none(),
-                open: Box::new(|_| Ok(())),
+                open: Box::new(|_, _| Ok(())),
                 user: Box::new(|| Box::pin(async { Err("no user here".into()) })),
                 cups: Cups::new(Vec::new(), "me".into()),
             },

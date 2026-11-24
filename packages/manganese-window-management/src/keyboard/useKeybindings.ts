@@ -1,12 +1,20 @@
+import type { Result } from "@cprussin/option-result";
+import { Ok } from "@cprussin/option-result";
 import type { KeyBinding } from "@domicile-desktop/sdk/bind-keys";
 import { bindKeys } from "@domicile-desktop/sdk/bind-keys";
 import type { Domicile } from "@domicile-desktop/sdk/desktop/desktop";
 import type { ShellKeybindings } from "@domicile-desktop/sdk/own-keybindings";
+import type { CommandRan } from "@domicile-desktop/sdk/shell-command";
 import { useEffect, useEffectEvent, useRef } from "react";
-
 import type { WindowAction } from "../window-state";
 import { WindowActionKind } from "../window-state";
-import { parseCommand } from "./command";
+
+import { COMMAND_HELP, parseCommand } from "./command";
+import type { Query } from "./query";
+import { parseQuery, QUERY_HELP } from "./query";
+
+/** Every command and query, for `domicile list-shell-commands`. */
+const HELP = [...COMMAND_HELP, ...QUERY_HELP];
 
 /** Report an unknown command. */
 const logToConsole = (error: string): void => {
@@ -28,6 +36,8 @@ type Options = {
   onAction: (action: WindowAction) => void;
   /** Called when a key on this page enters a binding mode. */
   onModeChanged: (mode: string) => void;
+  /** Answers a query such as `get-tree` with JSON. */
+  answer: (query: Query) => string;
   /** Reports unknown commands. Injectable for tests. */
   report?: typeof logToConsole;
 };
@@ -46,6 +56,7 @@ type Options = {
  * Binds once per host and keybindings, not per render.
  */
 export const useKeybindings = ({
+  answer,
   domicile,
   keybindings,
   launcherOpen,
@@ -57,18 +68,29 @@ export const useKeybindings = ({
 }: Options): void => {
   const binding = useRef<KeyBinding | undefined>(undefined);
 
-  const onCommand = useEffectEvent((args: readonly string[]) => {
-    parseCommand(args).match({
-      Err: report,
-      Ok: (action) => {
+  // A known command the launcher or overview holds back still counts as run:
+  // it is the shell's to hold back. A query changes nothing, so it always
+  // answers.
+  const onCommand = useEffectEvent(
+    (args: readonly string[]): Result<CommandRan, string> => {
+      const query = parseQuery(args);
+      if (query !== undefined) {
+        return Ok({ output: answer(query) });
+      }
+      return parseCommand(args).map((action) => {
         if (
           (!launcherOpen || heardOverLauncher(action)) &&
           (!overviewOpen || HEARD_OVER_OVERVIEW.has(action.kind))
         ) {
           onAction(action);
         }
-      },
-    });
+        return "ran" as const;
+      });
+    },
+  );
+
+  const reportRefusal = useEffectEvent((why: string) => {
+    report(why);
   });
 
   const modeChanged = useEffectEvent((entered: string) => {
@@ -77,8 +99,12 @@ export const useKeybindings = ({
 
   useEffect(() => {
     const bound = bindKeys(domicile, keybindings, {
+      commands: HELP,
       onCommand,
       onModeChanged: modeChanged,
+      reportRefusal: (why) => {
+        reportRefusal(why);
+      },
     });
     binding.current = bound;
     return bound.unbind;
@@ -93,11 +119,13 @@ export const useKeybindings = ({
 /**
  * Whether an action runs while the launcher is open.
  *
- * Only the launcher toggle does. The launcher is modal, so other keys must not
- * act on windows behind it.
+ * The launcher is modal, so keys must not act on windows behind it. Its own
+ * toggle runs, and so does a screenshot, which acts on no window and is how
+ * the launcher is shot.
  */
 const heardOverLauncher = (action: WindowAction): boolean =>
-  action.kind === WindowActionKind.LauncherToggled;
+  action.kind === WindowActionKind.LauncherToggled ||
+  action.kind === WindowActionKind.ScreenshotTaken;
 
 /**
  * The actions a key runs while the overview is open: its own, which steer it
@@ -111,6 +139,8 @@ const HEARD_OVER_OVERVIEW: ReadonlySet<WindowActionKind> = new Set([
   WindowActionKind.DeskLocked,
   WindowActionKind.FocusStepped,
   WindowActionKind.LauncherToggled,
+  WindowActionKind.LayerLowered,
+  WindowActionKind.LayerRaised,
   WindowActionKind.MediaKeyPressed,
   WindowActionKind.OverviewDismissed,
   WindowActionKind.OverviewShown,

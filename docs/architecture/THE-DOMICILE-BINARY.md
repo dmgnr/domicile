@@ -207,14 +207,17 @@ domicile load-shell ./my-desktop/dist/shell.js
 - `load-shell` changes only the shell. It does not apply compositor config.
   On load, `announce_open_apps` sends the new page the desktop and its open
   windows, and the browser sends its browser windows.
-- The desktop needs no dev mode.
+- The desktop needs no dev mode. `domicile dev <entry>` is a client too: it
+  runs the builder's dev server and sends `load-shell` for it, so edits apply
+  in place and keep the page's state
+  ([WRITING-A-SHELL.md](/docs/WRITING-A-SHELL.md#hot-module-replacement)).
 
 `packages/dev-shell/bin/dev-shell.sh` is the watch script built on it:
 
-- The script starts the supervisor itself, so it reads the socket path from
-  the supervisor's `DOMICILE_SOCK=<path>` output line. It calls `load-shell`
-  only after the supervisor reports the desktop is up. Earlier calls are
-  refused because the socket exists before the engine does.
+- The script starts the supervisor itself, so it reads the socket path off
+  the end of the supervisor's `domicile is up.` line, which comes once the
+  engine runs: an earlier `load-shell` would be refused, because the socket
+  exists before the engine does.
 - `packages/dev-shell/bin/dev-shell-reload.sh` waits for the bundle to stop changing (a quiet
   period plus a cap). `vite build --watch` writes one build in several steps,
   and reloading mid-write would load a broken shell.
@@ -231,6 +234,7 @@ domicile load-shell ./my-desktop/dist/shell.js
 
 A reload or `load-shell` restarts nothing: every window keeps running, and only
 state kept in the shell's page starts over ([No watch mode](#no-watch-mode)).
+An engine restarted under `domicile dev` serves the dev server again.
 
 ```
 the engine exited (signal: 9 (SIGKILL))
@@ -336,6 +340,7 @@ The shell's renderer:
 <prefix>/bin/domicile
 <prefix>/bin/domicile-compositor
 <prefix>/libexec/domicile/engine/     the Chromium tree, with `chrome` inside
+<prefix>/libexec/domicile/version     the version and commit `--version` prints
 <prefix>/libexec/domicile/builder     builds a shell from an entry or a package
 <prefix>/libexec/domicile/shells/     bundled shells and the splash, prebuilt
 ```
@@ -366,7 +371,10 @@ running one. The first argument decides which.
   interactive screenshot waits on the user.
 - The supervisor answers and routes. `load-shell` and `open`'s web links
   and apps go to the engine. `screenshot` and `send-shell` go to the compositor's chrome socket
-  as the `screenshot` and `send_shell` system calls a page makes
+  as the `screenshot` and `send_shell` system calls a page makes, and
+  `list-displays`, `list-windows`, `status` and `list-shell-commands` as
+  `which_displays`, `which_windows`, `which_status` and
+  `which_shell_commands`
   (`domicile_launch::compositor_socket`). The connection never says `hello`,
   so it is not a chrome. See
   [KEYBINDINGS.md](KEYBINDINGS.md#commands-from-a-terminal) for where a
@@ -380,10 +388,11 @@ running one. The first argument decides which.
 domicile which-shell ─▶ $DOMICILE_SOCK ─▶ supervisor
 domicile load-shell  ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ engine ─▶ page
 domicile open <url>  ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ engine
-domicile open <file> ─▶ its type's default, in the caller's place
+domicile open <file> ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor (starts its type's default)
 domicile open --app  ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ engine
 domicile screenshot  ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor
 domicile send-shell  ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor ─▶ every page
+domicile list-*, status ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor
 domicile disable-while-typing ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ engine
 domicile-app-host    ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ engine   (settings_files stops at the supervisor)
 ```
@@ -412,6 +421,16 @@ Several desktops per session:
   to `domicile-xdg-open`, which runs `domicile open`. Web links open in this
   desktop regardless of `mimeapps.list`; anything else opens with its type's
   default, as the launcher's Enter does.
+- Its `xdg-email` links to `domicile-xdg-email`, which runs `domicile open`
+  on the `mailto:` link its arguments make. A shell that claims `mailto:`
+  gets the link.
+- The engine gets the same `PATH` and `XDG_DATA_DIRS`, so a page's app link
+  (`slack:`, `zoommtg:`) opens the app its "Open …?" prompt named, and a
+  page's `mailto:` link, which Chromium opens with `xdg-email` without
+  asking, reaches the shell that claims it.
+- `domicile open` picks the handler itself, then has the compositor start it
+  as the launcher would: the desktop's environment, its own scope, and an
+  activation token. Whoever asked, such as the engine, may lack those.
 - The same directory holds the desktop's own `domicile`, so the launcher's
   "Open with" asks this desktop's `open --which`, whatever `domicile` is
   installed, and lists that app first.
@@ -444,6 +463,11 @@ Wire, one line each way:
 {"type":"load_shell","version":1,"root":"/x/dist","module":"shell.js"}
 {"type":"loaded"}   |   {"type":"refused","why":"…"}
 ```
+
+- `"dev_server": true` makes `root` the socket of `domicile dev`'s dev server
+  rather than a directory
+  ([DOMICILE-SCHEME.md](/docs/architecture/DOMICILE-SCHEME.md#dev-server)).
+  It is left out otherwise, so an older engine reads every other line.
 
 - The request carries a version, and the engine refuses one it does not
   support. The engine and the supervisor ship separately (`engine-release.nix`

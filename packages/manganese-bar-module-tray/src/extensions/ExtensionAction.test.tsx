@@ -27,7 +27,7 @@ const BLOCKER = "abcdefghijklmnopabcdefghijklmnop";
 const COUNTER = "ponmlkjihgfedcbaponmlkjihgfedcba";
 const POPUP = `chrome-extension://${BLOCKER}/popup.html`;
 /** Blocker's popup, open. */
-const OPEN: ExtensionPopup = { id: BLOCKER, popup: POPUP };
+const OPEN: ExtensionPopup = { id: BLOCKER, popup: POPUP, profile: "default" };
 
 /** An extension whose click opens its popup. */
 const blocker: Extension = {
@@ -38,6 +38,7 @@ const blocker: Extension = {
   id: BLOCKER,
   name: "Blocker",
   popup: POPUP,
+  profile: "default",
   title: "Blocker: on for this site",
 };
 
@@ -50,6 +51,7 @@ const counter: Extension = {
   id: COUNTER,
   name: "Counter",
   popup: undefined,
+  profile: "default",
   title: "Counter",
 };
 
@@ -182,6 +184,20 @@ describe("ExtensionAction", () => {
       );
 
       expect((await popupView()).getAttribute("src")).toBe(POPUP);
+    });
+
+    it("opens the popup in the extension's own browser profile", async () => {
+      render(
+        <ExtensionAction
+          domicile={NO_DOMICILE}
+          extension={{ ...blocker, profile: "work" }}
+          onActivate={() => undefined}
+          onOpen={() => undefined}
+          opened={{ ...OPEN, profile: "work" }}
+        />,
+      );
+
+      expect((await popupView()).getAttribute("profile")).toBe("work");
     });
 
     it("marks the popup's view an extension popup, so its page is no tab", async () => {
@@ -389,7 +405,7 @@ describe("ExtensionAction", () => {
           extension={counter}
           onActivate={() => undefined}
           onOpen={() => undefined}
-          opened={{ id: COUNTER, popup }}
+          opened={{ id: COUNTER, popup, profile: "default" }}
         />,
       );
 

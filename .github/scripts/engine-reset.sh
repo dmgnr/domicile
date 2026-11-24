@@ -108,6 +108,30 @@ laid_down() {
 
 git -C "$CHROMIUM" reset --hard "$pin"
 
+# Deps a Node-in-the-engine branch patched (v8 and BoringSSL): engine-node.sh
+# commits Electron's patches over the pin's revision and sets
+# `submodule.<path>.ignore all`, which hides them from every status check
+# below. A branch without Node must build them as the pin has them, or V8
+# links against BoringSSL that names functions it doesn't build. A branch with
+# Node leaves them to engine-node.sh, which keeps them patched between runs.
+if [ ! -e "$ROOT/packages/domicile-engine/node/NODE_PIN" ]; then
+  { git -C "$CHROMIUM" config --get-regexp '^submodule\..*\.ignore$' 2>/dev/null || true; } |
+    while read -r key _; do
+      path="${key#submodule.}" path="${path%.ignore}"
+      git -C "$CHROMIUM" config --unset "$key"
+      repo="$CHROMIUM/$path"
+      [ -e "$repo/.git" ] || continue
+      base="$(git -C "$CHROMIUM" rev-parse "$pin:$path" 2>/dev/null)" || continue
+      stamp="$(git -C "$repo" rev-parse --absolute-git-dir)/domicile-node-stamp"
+      [ -e "$stamp" ] || [ "$(git -C "$repo" rev-parse HEAD)" != "$base" ] || continue
+      echo "putting $path back on $base; a branch with Node patched it"
+      git -C "$repo" am --abort >/dev/null 2>&1 || true
+      git -C "$repo" checkout -q --force --detach "$base"
+      git -C "$repo" clean -qfd
+      rm -f "$stamp"
+    done
+fi
+
 # Deps the pin folds into its own tree: a dep's checkout, with its own `.git`,
 # where the pin tracks a directory. `reset --hard` writes the pin's files over
 # it and leaves the rest of the checkout behind, and no sync removes it because
@@ -145,7 +169,9 @@ fi
 #
 # - buildtools/reclient_cfgs/reproxy.cfg: configure_reclient_cfgs.py stopped
 #   writing it, and its ignore went, by Chromium 160.
-for stale in buildtools/reclient_cfgs/reproxy.cfg; do
+# - build/util/MINIBRANCH: the `minibranch` hook and its ignore went by
+#   Chromium 160.0.8174.
+for stale in buildtools/reclient_cfgs/reproxy.cfg build/util/MINIBRANCH; do
   [ -f "$CHROMIUM/$stale" ] || continue
   git -C "$CHROMIUM" ls-files --error-unmatch -- "$stale" >/dev/null 2>&1 && continue
   git -C "$CHROMIUM" check-ignore -q -- "$stale" && continue

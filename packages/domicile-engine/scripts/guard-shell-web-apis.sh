@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # Checks that the shell's own origin, `domicile://shell`, has notification
-# permission and can read a cross-origin fetch, as bar widgets need.
+# permission and can read a cross-origin fetch, as bar widgets need, and is
+# cross-origin isolated with memory it shares with a worker, as threaded wasm
+# needs.
 #
 #   nix develop .#full --command \
 #     ./packages/domicile-engine/scripts/guard-shell-web-apis.sh /build/chromium/src
 #
-# Patch 0105 allows notifications for `domicile://shell`, and patch 0066 classes
-# the shell as loopback.
+# Patch 0105 allows notifications for `domicile://shell`, patch 0066 classes
+# the shell as loopback, and patch 0225 isolates the shell with no COEP, so the
+# fetch still needs only CORS.
 #
 # Headless and software-composited, like guard-webview-notifications.sh, which
 # tests where notifications go.
 #
 # Asserts that the shell paints its box, which it does only when notifications
-# are granted and a fetch of `/cors` on another origin succeeds.
+# are granted, a fetch of `/cors` on another origin succeeds, `crossOriginIsolated`
+# is true and a worker's write to a SharedArrayBuffer is seen.
 #
 # NEGATIVE=1 runs two legs:
 #
@@ -177,13 +181,16 @@ FAILURE=""
 PASSED=""
 case "$MEASURED" in
 "granted 0")
-  PASSED="the shell's own page reads notifications as granted and reads an \
-answer another origin shares, so a bar item can notify and call a web API"
+  PASSED="the shell's own page reads notifications as granted, reads an \
+answer another origin shares, and shares memory with a worker, so a bar item \
+can notify and call a web API and a shell can run threaded wasm"
   ;;
 "granted 1")
   FAILURE="the shell drew but its box did not: notifications are not granted \
-to the shell's origin (patch 0105), or the fetch of /cors was refused -- the \
-engine log's GUARD line says which, and the server's log whether it was asked"
+to the shell's origin (patch 0105), the fetch of /cors was refused, or the \
+shell is not cross-origin isolated or shares no memory with a worker (patch \
+0225, IsCrossOriginIsolatedOrigin) -- the engine log's GUARD line says which, \
+and the server's log whether it was asked"
   ;;
 "granted 2")
   FAILURE="nothing was measured: the shell's own background never appeared, \

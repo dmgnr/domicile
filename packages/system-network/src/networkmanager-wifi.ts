@@ -18,17 +18,20 @@ import type { NetworkDesktop } from "./network-state";
 import { variant } from "./variant";
 import type {
   Ip,
+  SavedWifi,
   Wifi,
   WifiConnection,
   WifiDevice,
   WifiNetwork,
 } from "./wifi-state";
-import { WifiBackend } from "./wifi-state";
+import { WifiBackend, WifiSecurity } from "./wifi-state";
 
 const SERVICE = "org.freedesktop.NetworkManager";
 const ROOT = "/org/freedesktop/NetworkManager";
 const DEVICE = `${SERVICE}.Device`;
 const WIRELESS = `${SERVICE}.Device.Wireless`;
+const SETTINGS = `${ROOT}/Settings`;
+const PROFILE = `${SERVICE}.Settings.Connection`;
 /** The object path NetworkManager uses for "none". */
 const NO_OBJECT = "/";
 /** `NM_DEVICE_TYPE_WIFI`. */
@@ -123,6 +126,44 @@ export const disconnectNetworkManagerWifi = async (
     }),
   );
 
+/** Forget a saved network: delete its profile. */
+export const forgetNetworkManagerWifi = async (
+  domicile: NetworkDesktop,
+  _wifi: WifiDevice,
+  saved: SavedWifi,
+): Promise<Result<"done", SystemError>> =>
+  done(await call(domicile, saved.profile, PROFILE, "Delete"));
+
+/**
+ * Whether NetworkManager joins a saved network by itself. Writes the profile
+ * back as read with `connection.autoconnect` changed; NetworkManager keeps
+ * the secrets, which a read leaves out.
+ */
+export const setNetworkManagerWifiAutoJoin = async (
+  domicile: NetworkDesktop,
+  _wifi: WifiDevice,
+  saved: SavedWifi,
+  autoJoin: boolean,
+): Promise<Result<"done", SystemError>> =>
+  (await call(domicile, saved.profile, PROFILE, "GetSettings")).andThenAsync(
+    async ({ body }) => {
+      const [{ connection, ...sections }] = rawSettingsSchema.parse(body);
+      return done(
+        await domicile.dbus.call(
+          request(saved.profile, PROFILE, "Update", "a{sa{sv}}", [
+            {
+              ...sections,
+              connection: {
+                ...connection,
+                autoconnect: { signature: "b", value: autoJoin },
+              },
+            },
+          ]),
+        ),
+      );
+    },
+  );
+
 const request = (
   path: string,
   iface: string,
@@ -178,8 +219,11 @@ const matters = (paths: ReadonlySet<string>, signal: DbusSignal): boolean => {
   switch (signal.member) {
     case "AccessPointAdded":
     case "AccessPointRemoved":
+    case "ConnectionRemoved":
     case "DeviceAdded":
-    case "DeviceRemoved": {
+    case "DeviceRemoved":
+    case "NewConnection":
+    case "Updated": {
       return true;
     }
     case "PropertiesChanged": {
@@ -203,7 +247,7 @@ const readWifi = async (
     async ({ WirelessEnabled: enabled }) =>
       (await call(domicile, ROOT, SERVICE, "GetDevices")).andThenAsync(
         async ({ body }) => {
-          const listed = devicesSchema.parse(body)[0];
+          const listed = pathsSchema.parse(body)[0];
           for (const path of listed) {
             paths.add(path);
           }
@@ -252,7 +296,7 @@ const wifiOf = async (
       paths.add(device.Ip4Config);
       const [points, profiles, ip] = await Promise.all([
         accessPoints(domicile, radio.AccessPoints),
-        savedProfiles(domicile, device.AvailableConnections),
+        savedProfiles(domicile),
         radio.ActiveAccessPoint === NO_OBJECT || device.Ip4Config === NO_OBJECT
           ? Promise.resolve(Ok<Option<Ip>, SystemError>(None()))
           : ipOf(domicile, device.Ip4Config),
@@ -266,7 +310,12 @@ const wifiOf = async (
             enabled,
             hardwareAddress: device.HwAddress,
             interface: device.Interface,
-            networks: networksOf(read, saved, radio.ActiveAccessPoint),
+            networks: networksOf(
+              read,
+              availableOf(saved, device.AvailableConnections),
+              radio.ActiveAccessPoint,
+            ),
+            saved,
             scanning: false,
           })),
         ),
@@ -296,35 +345,81 @@ const accessPoints = async (
     ),
   );
 
-/** Each saved Wi-Fi profile's path, by its network's name. */
+/** Every saved Wi-Fi profile, leaving out hotspots this machine serves. */
 const savedProfiles = async (
   domicile: NetworkDesktop,
-  listed: readonly string[],
-): Promise<Result<Map<string, string>, SystemError>> =>
-  Result.collect(
-    await Promise.all(
-      listed.map(async (path) =>
-        (
-          await call(
-            domicile,
-            path,
-            `${SERVICE}.Settings.Connection`,
-            "GetSettings",
-          )
-        ).map(({ body }) => ({
-          path,
-          settings: settingsSchema.parse(body)[0],
-        })),
+): Promise<Result<SavedWifi[], SystemError>> =>
+  (
+    await call(domicile, SETTINGS, `${SERVICE}.Settings`, "ListConnections")
+  ).andThenAsync(async ({ body }) =>
+    Result.collect(
+      await Promise.all(
+        pathsSchema
+          .parse(body)[0]
+          .map(async (path) =>
+            (await call(domicile, path, PROFILE, "GetSettings")).map(
+              ({ body: read }) => savedOf(path, settingsSchema.parse(read)[0]),
+            ),
+          ),
       ),
-    ),
-  ).map(
-    (saved) =>
-      new Map(
-        saved.flatMap(({ path, settings }) => {
-          const ssid = settings["802-11-wireless"]?.ssid;
-          return ssid === undefined ? [] : [[ssid, path] as const];
-        }),
-      ),
+    ).map((saved) => saved.flatMap((found) => found)),
+  );
+
+/** A profile as a saved network, or nothing for one that isn't Wi-Fi. */
+const savedOf = (path: string, settings: Settings): SavedWifi[] => {
+  const wireless = settings["802-11-wireless"];
+  const timestamp = settings.connection.timestamp;
+  return wireless?.ssid === undefined || wireless.mode === "ap"
+    ? []
+    : [
+        {
+          autoJoin: settings.connection.autoconnect ?? true,
+          lastUsed:
+            timestamp === undefined || timestamp === 0
+              ? undefined
+              : new Date(timestamp * 1000),
+          profile: path,
+          security: securityOf(settings["802-11-wireless-security"]),
+          ssid: wireless.ssid,
+        },
+      ];
+};
+
+/** What a profile's `key-mgmt` asks of a person; no security section is open. */
+const securityOf = (
+  security: Settings["802-11-wireless-security"],
+): WifiSecurity => {
+  const keyManagement = security?.["key-mgmt"];
+  switch (keyManagement) {
+    case undefined:
+    case "owe": {
+      return WifiSecurity.Open;
+    }
+    case "none":
+    case "sae":
+    case "wpa-psk": {
+      return WifiSecurity.Password;
+    }
+    case "ieee8021x":
+    case "wpa-eap":
+    case "wpa-eap-suite-b-192": {
+      return WifiSecurity.Enterprise;
+    }
+    default: {
+      throw new Error(`NetworkManager key-mgmt ${keyManagement} is unknown`);
+    }
+  }
+};
+
+/** The device's usable profiles' paths, by their network's name. */
+const availableOf = (
+  saved: readonly SavedWifi[],
+  available: readonly string[],
+): Map<string, string> =>
+  new Map(
+    saved
+      .filter(({ profile }) => available.includes(profile))
+      .map(({ profile, ssid: name }) => [name, profile] as const),
   );
 
 const ipOf = async (
@@ -432,7 +527,8 @@ const ssid = z
 
 const rootSchema = z.object({ WirelessEnabled: variant(z.boolean()) });
 
-const devicesSchema = z.tuple([z.array(z.string())]);
+/** An `ao` reply: devices, or profiles. */
+const pathsSchema = z.tuple([z.array(z.string())]);
 
 const deviceSchema = z.object({
   AvailableConnections: variant(z.array(z.string())),
@@ -464,10 +560,30 @@ const accessPointSchema = z.object({
 
 type AccessPoint = z.infer<typeof accessPointSchema>;
 
+/** `autoconnect` is left out at its default, `true`; `timestamp` at `0`, never. */
 const settingsSchema = z.tuple([
   z.object({
-    "802-11-wireless": z.object({ ssid: variant(ssid).optional() }).optional(),
+    "802-11-wireless": z
+      .object({
+        mode: variant(z.string()).optional(),
+        ssid: variant(ssid).optional(),
+      })
+      .optional(),
+    "802-11-wireless-security": z
+      .object({ "key-mgmt": variant(z.string()) })
+      .optional(),
+    connection: z.object({
+      autoconnect: variant(z.boolean()).optional(),
+      timestamp: variant(z.number()).optional(),
+    }),
   }),
+]);
+
+type Settings = z.infer<typeof settingsSchema>[0];
+
+/** A profile's settings as read, to write back. */
+const rawSettingsSchema = z.tuple([
+  z.record(z.string(), z.record(z.string(), z.unknown())),
 ]);
 
 const ip4Schema = z.object({

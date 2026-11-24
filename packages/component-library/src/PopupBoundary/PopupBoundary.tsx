@@ -1,5 +1,6 @@
 import type { ReactNode, RefCallback } from "react";
 import { createContext, useCallback, useContext, useState } from "react";
+import { PopupScene } from "../PopupScene/PopupScene";
 import "../stylesheet";
 
 /** A box in page pixels. */
@@ -18,9 +19,14 @@ type Props = {
  *
  * The innermost one wins. A popup passed `spansWindows` leaves it for its
  * trigger's screen.
+ *
+ * Popups inside close when `box` moves or resizes, since what they point at
+ * moved with it. See `PopupScene`.
  */
 export const PopupBoundary = ({ box, children }: Props) => (
-  <Bounds value={box}>{children}</Bounds>
+  <PopupScene scene={JSON.stringify(box ?? null)}>
+    <Bounds value={box}>{children}</Bounds>
+  </PopupScene>
 );
 
 const Bounds = createContext<Box | undefined>(undefined);

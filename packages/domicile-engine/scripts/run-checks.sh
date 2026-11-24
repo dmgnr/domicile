@@ -21,6 +21,7 @@ SCRIPTS="$ROOT/packages/domicile-engine/scripts"
 FIRST=(
   build-produced-what-the-guards-load
   locales-are-trimmed
+  node-runs-on-the-engine
   unit-tests
   drm-unit-tests
   build-the-compositor
@@ -29,8 +30,10 @@ FIRST=(
   guard-client-window-in-memory
   guard-two-windows
   guard-buffer-transform
+  guard-buffer-formats
   guard-scrolling-bubble
   guard-webview-permissions
+  guard-electron-permissions
   guard-app-survives-load-shell
   guard-app-survives-compositor-restart
   guard-shell
@@ -42,10 +45,12 @@ FIRST=(
 # log. At most `CHECKS_AT_ONCE` at a time.
 TOGETHER=(
   guard-webview-framing
+  guard-agent-devtools-shell
   guard-shell-local-network
   guard-webview-notifications
   guard-notification-server-late
   guard-notification-window
+  guard-notification-site-icon
   guard-shell-web-apis
   guard-display-capture
   guard-headless-desk
@@ -53,6 +58,7 @@ TOGETHER=(
   guard-extension-installer
   guard-extension-in-private
   guard-extension-tray
+  guard-extension-menu
   guard-extension-open-popup
   guard-extension-side-panel
   guard-webview-keyboard
@@ -60,6 +66,7 @@ TOGETHER=(
   guard-webview-browser-page
   guard-webview-history
   guard-webview-history-new-window
+  guard-webview-history-menu
   guard-webview-untrusted-cert
   guard-webview-find
   guard-webview-click
@@ -78,7 +85,9 @@ TOGETHER=(
   guard-webview-wake-lock
   guard-webview-device-request
   guard-webview-media-devices
+  guard-media-services-at-rest
   guard-webview-count-matches
+  guard-webview-click-match
   guard-webview-dialog
   guard-webview-beforeunload
   guard-webview-external-app
@@ -88,8 +97,11 @@ TOGETHER=(
   guard-webview-resend-form
   guard-webview-page-picker
   guard-webview-chrome-sheets
+  guard-webview-sign-in-with
+  guard-webview-video-picture-in-picture
   guard-webview-print
   guard-webview-context-menu
+  guard-webview-spellcheck
   guard-webview-upload
   guard-webview-download
   guard-webview-save-picker
@@ -100,8 +112,12 @@ TOGETHER=(
   guard-webview-survives-load-shell
   guard-webview-hidden
   guard-webview-moved
+  guard-profile-routing
   guard-webview-paused
   guard-animation-main-frames
+  guard-one-spare-renderer
+  guard-webview-scale-animation
+  guard-webview-reshown-tiles
   guard-webview-crash
   guard-desktop-geometry
   guard-windows-state
@@ -111,15 +127,34 @@ TOGETHER=(
   guard-portal-requests
   guard-shortcut-chords
   guard-app-routes-input
+  guard-locked-keys-stay-on-the-page
   guard-shell-handover
   guard-shell-script-src
   guard-shell-crash
   guard-app-only-in-shell
   guard-domicile-fetch
+  guard-shell-hmr
+  guard-shell-workers
   guard-shell-pdf
+  guard-pdf-scaled-text
+  guard-pdf-after-hiding
+  guard-pdf-zoom
   guard-app-module
+  guard-electron-socket
+  guard-electron-window-open
+  guard-electron-preload
+  guard-electron-node
+  guard-electron-protocol
+  guard-electron-menu-bar
+  guard-electron-window-state
+  guard-electron-message-box
+  guard-electron-schemes
+  guard-electron-session
+  guard-electron-views
+  guard-electron-web-request
   guard-video-codecs
   guard-browser-brand
+  guard-clean-exit
 )
 
 # Run one at a time, after the rest. Latency measures time, so it runs alone.
@@ -133,27 +168,51 @@ LAST=(
 
 # Guards with no control run.
 ONCE=(
+  node-runs-on-the-engine
+  guard-agent-devtools-shell
   guard-app-only-in-shell
   guard-asks-promise
   guard-browser-brand
   guard-desk-state
   guard-desktop-geometry
   guard-domicile-fetch
+  guard-shell-hmr
+  guard-electron-menu-bar
+  guard-electron-window-state
+  guard-electron-message-box
+  guard-electron-node
+  guard-electron-preload
+  guard-electron-protocol
+  guard-electron-permissions
+  guard-electron-schemes
+  guard-electron-session
+  guard-electron-socket
+  guard-electron-views
+  guard-electron-web-request
+  guard-electron-window-open
   guard-held-moments
+  guard-pdf-scaled-text
+  guard-pdf-after-hiding
+  guard-pdf-zoom
   guard-portal-requests
   guard-shell-handover
   guard-shell-pdf
   guard-shell-script-src
+  guard-shell-workers
   guard-shortcut-chords
   guard-video-codecs
   guard-windows-state
 )
 
 # Guards that read a client's pixels, so they run under a headless wlroots
-# compositor: `--ozone-platform=headless` cannot import a dmabuf.
+# compositor: `--ozone-platform=headless` cannot import a dmabuf. And guards
+# whose page asks for a permission: PermissionRequestManager denies every
+# request on a headless screen before any prompt.
 UNDER_WAYLAND=(
   guard-app-survives-compositor-restart
+  guard-electron-permissions
   guard-app-survives-load-shell
+  guard-buffer-formats
   guard-buffer-transform
   guard-client-window
   guard-scrolling-bubble
@@ -204,7 +263,9 @@ one() { # name, args...
     guard-shell-manganese)
       engine_guard_and_control_under_wayland guard-shell.sh manganese ;;
     *)
-      if listed "$name" "${ONCE[@]}"; then
+      if listed "$name" "${ONCE[@]}" && listed "$name" "${UNDER_WAYLAND[@]}"; then
+        engine_guard_under_wayland "$name.sh"
+      elif listed "$name" "${ONCE[@]}"; then
         engine_guard "$name.sh"
       elif listed "$name" "${UNDER_WAYLAND[@]}"; then
         engine_guard_and_control_under_wayland "$name.sh"

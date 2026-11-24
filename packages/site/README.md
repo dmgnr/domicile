@@ -11,6 +11,13 @@ bun run start:dev     # http://localhost:3000
 bun run build:next
 ```
 
+Without a checkout, build any ref and serve it on http://localhost:3000
+(`PORT` to change), with that ref's unreleased release notes:
+
+```sh
+nix run github:cprussin/domicile/main#site-preview
+```
+
 - **Styling:** Panda CSS on the component library's preset, like every
   package. `Accent` sets `accent` to the product's color: violet for
   Domicile, the preset's cyan for manganese.

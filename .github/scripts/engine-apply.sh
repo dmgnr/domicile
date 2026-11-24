@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Apply the patch series over the pin, and assert that it went on.
+# Apply the patch series over the pin, and assert that it went on. Then put
+# Electron's Node in, with engine-node.sh.
 #
 #   .github/scripts/engine-apply.sh <path to chromium/src>
 #
@@ -35,3 +36,6 @@ packages/domicile-engine/scripts/apply.sh "$CHROMIUM" || {
 # only what this series changed.
 .github/scripts/engine-keep-mtimes.sh restore "$CHROMIUM"
 echo "series applied: $(git -C "$CHROMIUM" log --oneline "$pin..HEAD" | wc -l) patches"
+# Electron's Node and its patches to V8 and BoringSSL, which the build reads
+# from checkouts of their own.
+.github/scripts/engine-node.sh "$CHROMIUM"

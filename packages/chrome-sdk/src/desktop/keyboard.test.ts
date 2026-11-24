@@ -51,6 +51,18 @@ describe("keyboard", () => {
     expect(fake.calls).toStrictEqual([["grabShortcut", "Meta+Escape", true]]);
   });
 
+  it("grabs a tap held no longer than it says", () => {
+    const fake = new FakeDomicileHost();
+    const { keyboard } = desktop(fake.host);
+    keyboard.grab("Meta", { longestTap: 500 });
+    keyboard.grab("Alt", { longestTap: 200, whileInhibited: true });
+
+    expect(fake.calls).toStrictEqual([
+      ["grabShortcut", "Meta", false, 500],
+      ["grabShortcut", "Alt", true, 200],
+    ]);
+  });
+
   it("hears a grabbed chord pressed and let go", async () => {
     const fake = new FakeDomicileHost();
     const { keyboard } = desktop(fake.host);
@@ -101,6 +113,22 @@ describe("pointer", () => {
 
     expect(fake.calls).toStrictEqual([
       ["warpPointer", 10, 20, new DOMRectReadOnly(1, 2, 3, 4)],
+    ]);
+  });
+
+  it("asks the engine to hold the pointer in boxes, and to let go", () => {
+    const fake = new FakeDomicileHost();
+    const { pointer } = desktop(fake.host);
+    pointer.confine([{ height: 4, width: 3, x: 1, y: 2 }]).catch(() => {
+      /* never answered */
+    });
+    pointer.confine([]).catch(() => {
+      /* never answered */
+    });
+
+    expect(fake.calls).toStrictEqual([
+      ["confinePointer", [new DOMRectReadOnly(1, 2, 3, 4)]],
+      ["confinePointer", []],
     ]);
   });
 

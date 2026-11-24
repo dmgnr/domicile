@@ -5,6 +5,11 @@ import { ChatCircleTextIcon } from "@phosphor-icons/react/dist/ssr/ChatCircleTex
 type Options = {
   /** Its name in the launcher, such as `SMS`. `Messages` if not given. */
   launcherName?: string;
+  /**
+   * The id of the browser profile its window opens in, such as `personal`.
+   * By default, the one Messages' site opens in.
+   */
+  profile?: string;
 };
 
 /**
@@ -15,7 +20,7 @@ type Options = {
  * Messages for web runs in one place at a time, so this window is the only
  * Messages page to open.
  */
-export const messagesInbox = ({ launcherName }: Options = {}): Inbox =>
+export const messagesInbox = ({ launcherName, profile }: Options = {}): Inbox =>
   Inbox.Window({
     appId: "google-messages",
     countUnread: watchUnreadWith,
@@ -23,5 +28,6 @@ export const messagesInbox = ({ launcherName }: Options = {}): Inbox =>
     ...(launcherName === undefined ? {} : { launcherName }),
     name: "Messages",
     notifiesAs: "messages.google.com",
+    ...(profile === undefined ? {} : { profile }),
     url: "https://messages.google.com/web/",
   });

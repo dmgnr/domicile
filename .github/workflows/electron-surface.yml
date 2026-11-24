@@ -1,0 +1,33 @@
+# Weekly: brings electron-host's Electron surface up to Electron's newest
+# releases and opens a pull request with the gaps that adds. See "Every API"
+# in docs/architecture/ELECTRON-APPS.md.
+name: Electron surface
+
+on:
+  # Mondays, off the hour, where scheduled runs are delayed most.
+  schedule:
+    - cron: "41 14 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: electron-surface
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Open a pull request for any new Electron
+        env:
+          # GITHUB_TOKEN may not open the pull request, and one it opened would
+          # run no checks. See packages/domicile-engine/docs/RELEASES.md.
+          DOMICILE_WRITEBACK_TOKEN: ${{ secrets.DOMICILE_WRITEBACK_TOKEN }}
+        run: .github/scripts/electron-surface-refresh.sh

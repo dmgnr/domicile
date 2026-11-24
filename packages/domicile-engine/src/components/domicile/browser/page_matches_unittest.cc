@@ -32,5 +32,27 @@ TEST(PageMatchesTest, AnythingElseIsNoAnswer) {
   EXPECT_EQ(CountFrom(base::Value("3")), std::nullopt);
 }
 
+TEST(PageMatchesTest, TheClickPressesTheSelectorsFirstMatch) {
+  const std::u16string script = ClickMatchScript("tr [data-id=\"7\"]");
+  EXPECT_TRUE(script.starts_with(u"((selector) => {"));
+  EXPECT_TRUE(script.ends_with(u"})(\"tr [data-id=\\\"7\\\"]\")"));
+}
+
+TEST(PageMatchesTest, NoSelectorEndsTheClick) {
+  // As for the count, the selector stays one string.
+  EXPECT_TRUE(ClickMatchScript("a\"), alert(1), (\"")
+                  .ends_with(u"})(\"a\\\"), alert(1), (\\\"\")"));
+}
+
+TEST(PageMatchesTest, ABooleanSaysWhetherItClicked) {
+  EXPECT_EQ(ClickedFrom(base::Value(true)), std::make_optional(true));
+  EXPECT_EQ(ClickedFrom(base::Value(false)), std::make_optional(false));
+}
+
+TEST(PageMatchesTest, AnythingElseIsNoClick) {
+  EXPECT_EQ(ClickedFrom(base::Value()), std::nullopt);
+  EXPECT_EQ(ClickedFrom(base::Value(1)), std::nullopt);
+}
+
 }  // namespace
 }  // namespace domicile

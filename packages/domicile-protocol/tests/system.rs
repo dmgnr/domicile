@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use domicile_protocol::{
     Bus, ChromeMessage, DirEntry, FileType, HostMessage, InhibitorAction, KeymapChoice,
-    ListedKeymap, PreviewedWindow, ResizeEdges, Scale, Signal, Stream, SystemEnd, SystemError,
-    SystemErrorKind, SystemEvent, SystemReply, SystemRequest, UnlockRefusal, WindowRequest,
-    WindowState,
+    ListedKeymap, PreviewedWindow, ResizeEdges, Scale, ShellBinding, ShellCommandHelp, Signal,
+    Stream, SystemEnd, SystemError, SystemErrorKind, SystemEvent, SystemReply, SystemRequest,
+    UnlockRefusal, WindowRequest, WindowState,
 };
 
 fn chrome(json: &str) -> ChromeMessage {
@@ -473,7 +473,38 @@ fn a_shell_command_goes_to_each_page_that_listens_for_one() {
         chrome(r#"{"type":"system_request","id":12,"request":{"call":"shell_commands"}}"#),
         ChromeMessage::SystemRequest {
             id: 12,
-            request: SystemRequest::ShellCommands,
+            request: SystemRequest::ShellCommands {
+                commands: Vec::new(),
+                bindings: Vec::new(),
+            },
+        }
+    );
+    assert_eq!(
+        chrome(
+            r#"{"type":"system_request","id":12,"request":{"call":"shell_commands","commands":[{"usage":"lock","description":"Lock the desktop."}]}}"#
+        ),
+        ChromeMessage::SystemRequest {
+            id: 12,
+            request: SystemRequest::ShellCommands {
+                commands: vec![ShellCommandHelp {
+                    usage: "lock".into(),
+                    description: "Lock the desktop.".into(),
+                }],
+                bindings: Vec::new(),
+            },
+        }
+    );
+    assert_eq!(
+        chrome(
+            r#"{"type":"system_request","id":13,"request":{"call":"answer_shell_command","sent":4,"refused":"no command `x`"}}"#
+        ),
+        ChromeMessage::SystemRequest {
+            id: 13,
+            request: SystemRequest::AnswerShellCommand {
+                sent: 4,
+                refused: Some("no command `x`".into()),
+                output: None,
+            },
         }
     );
     assert_eq!(
@@ -490,18 +521,44 @@ fn a_shell_command_goes_to_each_page_that_listens_for_one() {
     assert_eq!(
         host(&HostMessage::SystemReply {
             id: 1,
-            reply: SystemReply::Sent,
+            reply: SystemReply::Sent { output: None },
         }),
         r#"{"type":"system_reply","id":1,"reply":{"kind":"sent"}}"#
+    );
+    assert_eq!(
+        host(&HostMessage::SystemReply {
+            id: 1,
+            reply: SystemReply::Sent {
+                output: Some("[]".into())
+            },
+        }),
+        r#"{"type":"system_reply","id":1,"reply":{"kind":"sent","output":"[]"}}"#
+    );
+    assert_eq!(
+        chrome(
+            r#"{"type":"system_request","id":12,"request":{"call":"shell_commands","bindings":[{"mode":"default","chord":"Meta+l","action":"send-shell lock"}]}}"#
+        ),
+        ChromeMessage::SystemRequest {
+            id: 12,
+            request: SystemRequest::ShellCommands {
+                commands: Vec::new(),
+                bindings: vec![ShellBinding {
+                    mode: "default".into(),
+                    chord: "Meta+l".into(),
+                    action: "send-shell lock".into(),
+                }],
+            },
+        }
     );
     assert_eq!(
         host(&HostMessage::SystemEvent {
             id: 12,
             event: SystemEvent::ShellCommand {
                 command: vec!["focus".into(), "right".into()],
+                sent: 4,
             },
         }),
-        r#"{"type":"system_event","id":12,"event":{"kind":"shell_command","command":["focus","right"]}}"#
+        r#"{"type":"system_event","id":12,"event":{"kind":"shell_command","command":["focus","right"],"sent":4}}"#
     );
 }
 
@@ -568,6 +625,43 @@ fn a_refused_unlock_goes_to_each_page_that_listens_for_one() {
 }
 /// The shell sets a window's `xdg_toplevel` states and hears what its client
 /// asks for.
+#[test]
+fn a_link_goes_to_the_page_that_claims_its_scheme() {
+    assert_eq!(
+        chrome(
+            r#"{"type":"system_request","id":3,"request":{"call":"claim_links","schemes":["mailto"]}}"#
+        ),
+        ChromeMessage::SystemRequest {
+            id: 3,
+            request: SystemRequest::ClaimLinks {
+                schemes: vec!["mailto".into()],
+            },
+        }
+    );
+    assert_eq!(
+        chrome(
+            r#"{"type":"system_request","id":4,"request":{"call":"open_link","url":"mailto:a@example.com"}}"#
+        ),
+        ChromeMessage::SystemRequest {
+            id: 4,
+            request: SystemRequest::OpenLink {
+                url: "mailto:a@example.com".into(),
+                app_id: None,
+            },
+        }
+    );
+    assert_eq!(
+        host(&HostMessage::SystemEvent {
+            id: 3,
+            event: SystemEvent::Link {
+                url: "mailto:a@example.com".into(),
+                app_id: Some("org.gnome.Evince".into()),
+            },
+        }),
+        r#"{"type":"system_event","id":3,"event":{"kind":"link","url":"mailto:a@example.com","app_id":"org.gnome.Evince"}}"#
+    );
+}
+
 #[test]
 fn the_shell_sets_window_states_and_hears_what_clients_ask_for() {
     assert_eq!(

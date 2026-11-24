@@ -17,7 +17,8 @@ mod running;
 
 use std::os::unix::net::UnixStream;
 
-use domicile_protocol::{ChromeMessage, HostMessage};
+use domicile_launch::compositor_socket::monitors;
+use domicile_protocol::{ChromeMessage, DisplayHdr, HostMessage, MonitorInfo};
 use wayland_client::protocol::{wl_output, wl_registry};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 
@@ -375,4 +376,24 @@ impl Dispatch<wl_output::WlOutput, ()> for LateBinder {
         _: &QueueHandle<LateBinder>,
     ) {
     }
+}
+
+#[test]
+fn settings_is_told_each_monitor_by_name_and_whether_it_takes_hdr() {
+    // `domicile-app-host` asks this for Settings. A described desktop has no
+    // panels, so no monitor takes HDR and only the output names are known.
+    let compositor = Compositor::started_with(TWO_DISPLAYS);
+    assert_eq!(
+        monitors(compositor.socket(), Some(std::time::Duration::from_secs(5))),
+        Ok(vec![
+            MonitorInfo {
+                names: vec!["left".to_string()],
+                hdr: DisplayHdr::Unsupported,
+            },
+            MonitorInfo {
+                names: vec!["right".to_string()],
+                hdr: DisplayHdr::Unsupported,
+            },
+        ])
+    );
 }

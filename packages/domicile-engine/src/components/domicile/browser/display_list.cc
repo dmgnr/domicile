@@ -54,6 +54,9 @@ std::vector<mojom::DisplayPtr> DisplayListFor(
     gfx::Size physical_size_mm = PhysicalSizeMm(screen);
     std::vector<mojom::DisplayModePtr> modes;
     mojom::AdaptiveSync adaptive_sync = mojom::AdaptiveSync::kUnsupported;
+    const DisplayPanel unpaneled;
+    const DisplayPanel& hdr =
+        panel != panels.end() ? panel->second : unpaneled;
     if (panel != panels.end()) {
       refresh_mhz = panel->second.refresh_mhz;
       adaptive_sync = panel->second.adaptive_sync;
@@ -68,7 +71,8 @@ std::vector<mojom::DisplayPtr> DisplayListFor(
         refresh_mhz,
         connector == connectors.end() ? std::string() : connector->second,
         gamma_size == gamma_sizes.end() ? 0u : gamma_size->second,
-        std::move(modes), adaptive_sync));
+        std::move(modes), adaptive_sync, hdr.hdr, hdr.max_luminance,
+        hdr.max_average_luminance, hdr.min_luminance, hdr.sdr_white_nits));
   }
   return list;
 }

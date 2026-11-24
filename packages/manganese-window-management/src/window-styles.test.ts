@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import { Layout } from "./tree/node";
 import {
+  clippedAlong,
   clippedTo,
   collapsedAlong,
   contentsScaledAbout,
@@ -10,6 +11,7 @@ import {
   scaledAbout,
   shuffledBy,
   slidAcross,
+  slidingAcross,
 } from "./window-styles";
 
 const RECT = { height: 200, width: 300, x: 10, y: 20 };
@@ -196,6 +198,39 @@ describe("clippedTo", () => {
   // A float dragged across screens draws on both.
   it("leaves any other window unclipped", () => {
     expect(clippedTo(SCREEN, "resting")).toStrictEqual({});
+  });
+});
+
+describe("slidingAcross", () => {
+  const SCREEN = { height: 1024, width: 1280, x: 1920, y: 0 };
+
+  it.each([
+    "arriving-from-end",
+    "arriving-from-start",
+    "leaving-to-end",
+    "leaving-to-start",
+  ] as const)("names the screen a %s window slides across", (motion) => {
+    expect(slidingAcross(SCREEN, motion)).toBe(SCREEN);
+  });
+
+  it("names none for a window no switch slides", () => {
+    expect(slidingAcross(SCREEN, "dropping")).toBeUndefined();
+  });
+});
+
+describe("clippedAlong", () => {
+  const SCREEN = { height: 1024, width: 1280, x: 1920, y: 0 };
+
+  // In the part's own box, so the clip slides with it and a float hanging
+  // off the screen's edge stays off its workspace.
+  it("clips a sliding part to its screen, from the part's own corner", () => {
+    expect(
+      clippedAlong(SCREEN, { height: 400, width: 600, x: 2800, y: 100 }),
+    ).toStrictEqual({ clip: "rect(-100px, 400px, 924px, -880px)" });
+  });
+
+  it("leaves a part no switch slides unclipped", () => {
+    expect(clippedAlong(undefined, RECT)).toStrictEqual({});
   });
 });
 

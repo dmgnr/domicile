@@ -46,8 +46,12 @@ std::optional<WebViewContextMenuAction> ActionNamed(const String& name) {
     return WebViewContextMenuAction::kCopyMediaAddress;
   } else if (name == "save-media-as") {
     return WebViewContextMenuAction::kSaveMediaAs;
+  } else if (name == "picture-in-picture") {
+    return WebViewContextMenuAction::kPictureInPicture;
   } else if (name == "inspect") {
     return WebViewContextMenuAction::kInspect;
+  } else if (name == "add-to-dictionary") {
+    return WebViewContextMenuAction::kAddToDictionary;
   } else {
     return std::nullopt;
   }
@@ -111,6 +115,18 @@ void DomicileContextMenuEvent::run(const String& action,
   owner_->RunContextMenuAction(*this, *named, exception_state);
 }
 
+void DomicileContextMenuEvent::replaceMisspelling(
+    const String& word,
+    ExceptionState& exception_state) {
+  if (menu_->misspelled_word.empty()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        "This context menu is not over a misspelled word.");
+    return;
+  }
+  owner_->ReplaceMisspelling(*this, word, exception_state);
+}
+
 bool DomicileContextMenuEvent::Offers(WebViewContextMenuAction action) const {
   const bool has_pixels = (menu_->media_type == WebViewMediaType::kImage ||
                            menu_->media_type == WebViewMediaType::kCanvas) &&
@@ -139,6 +155,10 @@ bool DomicileContextMenuEvent::Offers(WebViewContextMenuAction action) const {
       return has_source;
     case WebViewContextMenuAction::kSaveMediaAs:
       return has_pixels || has_source;
+    case WebViewContextMenuAction::kPictureInPicture:
+      return menu_->can_picture_in_picture;
+    case WebViewContextMenuAction::kAddToDictionary:
+      return !menu_->misspelled_word.empty();
   }
 }
 

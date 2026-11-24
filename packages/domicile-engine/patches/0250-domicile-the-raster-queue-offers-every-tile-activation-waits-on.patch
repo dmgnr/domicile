@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the raster queue offers every tile activation waits
+ on
+
+A page froze for good after a move or a resize on a desk with monitors
+of different densities: its pending tree at the new size never
+activated, and 0248 showed its compositor thread drawing the old surface
+with the pending tree waiting.
+
+0079 makes activation wait on a monitor's tiling (0072), and on the
+active tree on any tiling whose pending twin is a monitor's: the pending
+tree shares the twin's tiles where it did not invalidate them.
+TilingSetRasterQueueAll offered a tiling for a monitor only by its own
+ratio, though. After a move or a resize the active tree can stop using
+that twin for a monitor and keep it as an ordinary non-ideal tiling,
+which the queue never offers, so a tile of it that was evicted or never
+rastered stayed required and unrastered, and the page kept its old size.
+
+- The queue offers, on the active tree, every tiling whose pending twin
+  is a monitor's, as TilingSetRasterQueueRequired requires them.
+- Those come before the monitor tilings activation does not wait on, so
+  the cap of three never drops one; if more than three are required,
+  that is logged at ERROR, since the page would not activate.
+
+//cc/domicile's DomicileMonitorTwinActivationTest covers it.
+---
+ cc/tiles/tiling_set_raster_queue_all.cc | 43 +++++++++++++++++++++----
+ 1 file changed, 37 insertions(+), 6 deletions(-)
+
+diff --git a/cc/tiles/tiling_set_raster_queue_all.cc b/cc/tiles/tiling_set_raster_queue_all.cc
+index fa61354..15eeb07 100644
+--- a/cc/tiles/tiling_set_raster_queue_all.cc
++++ b/cc/tiles/tiling_set_raster_queue_all.cc
+@@ -6,8 +6,12 @@
+ 
+ #include <stddef.h>
+ 
++#include <algorithm>
++#include <iterator>
+ #include <utility>
++#include <vector>
+ 
++#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "cc/base/features.h"
+ #include "cc/tiles/picture_layer_tiling_set.h"
+@@ -49,19 +53,33 @@ std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
+   // These tilings are the only non-high res tilings that could have required
+   // for activation tiles, so they need to be considered for rasterization.
+   PictureLayerTiling* active_non_ideal_pending_high_res_tiling = nullptr;
+-  // DOMICILE: the less dense monitors' tilings with tiles still to raster.
++  // DOMICILE: the less dense monitors' tilings with tiles still to raster:
++  // a tiling that is a monitor's, and on the active tree one whose pending
++  // twin is a monitor's. TilingSetRasterQueueRequired requires the latter's
++  // tiles for activation (0079) whether or not the active tree still uses it
++  // for a monitor -- after a move or a resize it may be an ordinary non-ideal
++  // tiling there -- so a tile of it this queue never offered was never
++  // rastered, and the pending tree never activated: the page froze at its old
++  // size. Those come first, so that the cap below never drops one.
+   std::vector<PictureLayerTiling*> domicile_display_tilings;
++  std::vector<PictureLayerTiling*> domicile_display_tilings_not_required;
+   for (size_t i = 0; i < tiling_set->num_tilings(); ++i) {
+     PictureLayerTiling* tiling = tiling_set->tiling_at(i);
+     if (tiling->resolution() == HIGH_RESOLUTION)
+       high_res_tiling = tiling;
+-    if (tiling->domicile_display_ratio() != 0.f && tiling->has_tiles() &&
+-        !tiling->all_tiles_done()) {
+-      domicile_display_tilings.push_back(tiling);
++    const PictureLayerTiling* twin =
++        tree == ACTIVE_TREE ? client->GetPendingOrActiveTwinTiling(tiling)
++                            : nullptr;
++    const bool required_through_twin =
++        twin && twin->domicile_display_ratio() != 0.f;
++    if ((tiling->domicile_display_ratio() != 0.f || required_through_twin) &&
++        tiling->has_tiles() && !tiling->all_tiles_done()) {
++      (required_through_twin || tree == PENDING_TREE
++           ? domicile_display_tilings
++           : domicile_display_tilings_not_required)
++          .push_back(tiling);
+     }
+     if (tree == ACTIVE_TREE && tiling->resolution() != HIGH_RESOLUTION) {
+-      const PictureLayerTiling* twin =
+-          client->GetPendingOrActiveTwinTiling(tiling);
+       if (twin && twin->resolution() == HIGH_RESOLUTION)
+         active_non_ideal_pending_high_res_tiling = tiling;
+     }
+@@ -71,7 +89,20 @@ std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
+   // rastered twice.
+   std::erase(domicile_display_tilings,
+              active_non_ideal_pending_high_res_tiling);
++  std::erase(domicile_display_tilings_not_required,
++             active_non_ideal_pending_high_res_tiling);
++  const size_t required = domicile_display_tilings.size();
++  std::ranges::copy(domicile_display_tilings_not_required,
++                    std::back_inserter(domicile_display_tilings));
+   if (domicile_display_tilings.size() > kDomicileDisplays) {
++    // A tiling dropped here that activation waits on would freeze the page,
++    // so say so; it is an engine bug, not something to ride out.
++    if (required > kDomicileDisplays) {
++      LOG(ERROR) << "domicile: a layer has " << required
++                 << " monitors' tilings that activation waits on, but only "
++                 << kDomicileDisplays
++                 << " are rastered; its page will not activate";
++    }
+     domicile_display_tilings.resize(kDomicileDisplays);
+   }
+ 

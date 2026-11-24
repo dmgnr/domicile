@@ -56,3 +56,28 @@ export const LIST = `{
     {"index": 2, "name": "bluez_card.00_11", "properties": {}, "profiles": {}, "active_profile": null}
   ]
 }`;
+
+/**
+ * {@link LIST} behind a laptop's speaker correction: a filter sink to play
+ * to, and its stream into the hardware, tied by their link group. The
+ * hardware is muted.
+ */
+export const FILTERED_LIST = LIST.replace(
+  `"sinks": [`,
+  `"sinks": [
+    {"index": 76, "name": "audio_effect.laptop-convolver", "description": "Framework Speakers",
+     "mute": false, "volume": {"front-left": {"value": 45875}}, "monitor_source": "audio_effect.laptop-convolver.monitor",
+     "properties": {"node.link-group": "filter-chain-3901-18"}, "ports": [], "active_port": null},`,
+)
+  .replace(
+    `"sink_inputs": [`,
+    `"sink_inputs": [
+    {"index": 77, "sink": 51, "mute": false, "volume": {"mono": {"value": 65536}},
+     "properties": {"media.name": "Framework Speakers", "node.link-group": "filter-chain-3901-18"}},`,
+  )
+  .replace(
+    `"description": "Built-in Audio Analog Stereo",
+     "mute": false,`,
+    `"description": "Built-in Audio Analog Stereo",
+     "mute": true,`,
+  );

@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a guest may take its page's noopener window
+
+An Electron app decides what its page's new windows do with
+setWindowOpenHandler: Slack and Claude Desktop deny theirs and hand the
+link to the user's browser. Content opened a guest's noopener window
+itself, in the guest's partition, before the app could say no, so links
+opened in the app's storage, signed out.
+
+A guest's delegate may now take a noopener window
+(BrowserPluginGuestDelegate::TakeNoopenerWindow), with what the page asked
+for, and content then makes none: a noopener window.open() answers null
+anyway. WebViewGuest takes an Electron page's, and asks the app.
+---
+ .../browser/browser_plugin/browser_plugin_guest.cc | 10 ++++++++++
+ .../browser/browser_plugin/browser_plugin_guest.h  |  7 +++++++
+ content/browser/web_contents/web_contents_impl.cc  | 10 ++++++++++
+ .../browser/browser_plugin_guest_delegate.cc       |  9 +++++++++
+ .../public/browser/browser_plugin_guest_delegate.h | 14 ++++++++++++++
+ 5 files changed, 50 insertions(+)
+
+diff --git a/content/browser/browser_plugin/browser_plugin_guest.cc b/content/browser/browser_plugin/browser_plugin_guest.cc
+index 791474a..1e679fa 100644
+--- a/content/browser/browser_plugin/browser_plugin_guest.cc
++++ b/content/browser/browser_plugin/browser_plugin_guest.cc
+@@ -48,6 +48,16 @@ std::unique_ptr<WebContentsImpl> BrowserPluginGuest::CreateNewGuestWindow(
+       static_cast<WebContentsImpl*>(new_contents.release()));
+ }
+ 
++bool BrowserPluginGuest::TakeNoopenerWindow(
++    const GURL& target_url,
++    const std::string& frame_name,
++    WindowOpenDisposition disposition,
++    const blink::mojom::WindowFeatures& features,
++    const GURL& referrer) {
++  return delegate_->TakeNoopenerWindow(target_url, frame_name, disposition,
++                                       features, referrer);
++}
++
+ void BrowserPluginGuest::InitInternal(WebContentsImpl* owner_web_contents) {
+   RenderWidgetHostImpl* rwhi =
+       GetWebContents()->GetPrimaryMainFrame()->GetRenderWidgetHost();
+diff --git a/content/browser/browser_plugin/browser_plugin_guest.h b/content/browser/browser_plugin/browser_plugin_guest.h
+index 91c9f60..3c4239f 100644
+--- a/content/browser/browser_plugin/browser_plugin_guest.h
++++ b/content/browser/browser_plugin/browser_plugin_guest.h
+@@ -58,6 +58,13 @@ class BrowserPluginGuest : public WebContentsObserver {
+   std::unique_ptr<WebContentsImpl> CreateNewGuestWindow(
+       const WebContents::CreateParams& params);
+ 
++  // DOMICILE: see BrowserPluginGuestDelegate::TakeNoopenerWindow.
++  bool TakeNoopenerWindow(const GURL& target_url,
++                          const std::string& frame_name,
++                          WindowOpenDisposition disposition,
++                          const blink::mojom::WindowFeatures& features,
++                          const GURL& referrer);
++
+   // WebContentsObserver implementation.
+   void DidStartNavigation(NavigationHandle* navigation_handle) override;
+   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+index 3a2ef76..5f6b5b7 100644
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -5837,6 +5837,16 @@ FrameTree* WebContentsImpl::CreateNewWindow(
+       source_site_instance->GetSecurityPrincipal().IsGuest();
+   CHECK(!guest_site_instance || is_guest);
+ 
++  // DOMICILE: a guest may take its page's noopener window, as an Electron
++  // app's page asks its app's setWindowOpenHandler before any window opens.
++  if (is_guest && params.opener_suppressed &&
++      !base::FeatureList::IsEnabled(features::kGuestViewMPArch) &&
++      GetBrowserPluginGuest()->TakeNoopenerWindow(
++          params.target_url, params.frame_name, params.disposition,
++          *params.features, params.referrer ? params.referrer->url : GURL())) {
++    return nullptr;
++  }
++
+   // We usually create the new window in the same BrowsingInstance (group of
+   // script-related windows), by passing in the current SiteInstance.  However,
+   // if the opener is being suppressed, we need to ensure that the new
+diff --git a/content/public/browser/browser_plugin_guest_delegate.cc b/content/public/browser/browser_plugin_guest_delegate.cc
+index b6f3443..d731ea2 100644
+--- a/content/public/browser/browser_plugin_guest_delegate.cc
++++ b/content/public/browser/browser_plugin_guest_delegate.cc
+@@ -11,6 +11,15 @@ std::unique_ptr<WebContents> BrowserPluginGuestDelegate::CreateNewGuestWindow(
+   NOTREACHED();
+ }
+ 
++bool BrowserPluginGuestDelegate::TakeNoopenerWindow(
++    const GURL& target_url,
++    const std::string& frame_name,
++    WindowOpenDisposition disposition,
++    const blink::mojom::WindowFeatures& features,
++    const GURL& referrer) {
++  return false;
++}
++
+ WebContents* BrowserPluginGuestDelegate::GetOwnerWebContents() {
+   return nullptr;
+ }
+diff --git a/content/public/browser/browser_plugin_guest_delegate.h b/content/public/browser/browser_plugin_guest_delegate.h
+index 7c312d3..1c3b3ea 100644
+--- a/content/public/browser/browser_plugin_guest_delegate.h
++++ b/content/public/browser/browser_plugin_guest_delegate.h
+@@ -8,6 +8,10 @@
+ #include "base/memory/weak_ptr.h"
+ #include "content/common/content_export.h"
+ #include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/mojom/window_features/window_features.mojom-forward.h"
++#include "ui/base/window_open_disposition.h"
++
++class GURL;
+ 
+ namespace content {
+ class RenderFrameHost;
+@@ -21,6 +25,16 @@ class CONTENT_EXPORT BrowserPluginGuestDelegate {
+   virtual std::unique_ptr<WebContents> CreateNewGuestWindow(
+       const WebContents::CreateParams& create_params);
+ 
++  // DOMICILE: whether the guest takes the noopener window its page asked for
++  // at `target_url`, to open or not as its embedder decides, as an Electron
++  // app's setWindowOpenHandler does. Content then makes none: a noopener
++  // window.open() answers null anyway.
++  virtual bool TakeNoopenerWindow(const GURL& target_url,
++                                  const std::string& frame_name,
++                                  WindowOpenDisposition disposition,
++                                  const blink::mojom::WindowFeatures& features,
++                                  const GURL& referrer);
++
+   // Returns the WebContents that currently owns this guest.
+   virtual WebContents* GetOwnerWebContents();
+ 

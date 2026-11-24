@@ -1,29 +1,33 @@
 #!/usr/bin/env bash
-# An extension the config allows in private windows, running in a private page.
+# An extension a private profile turns on, running in that profile's page.
 #
 #   nix develop .#full --command \
 #     ./packages/domicile-engine/scripts/guard-extension-in-private.sh /build/chromium/src
 #
 # WHY THIS EXISTS. Chrome keeps an extension out of private pages until its
-# user allows it on chrome://extensions, which a desk has none of: the config's
-# `extensions.settings` says `"private": true` instead, and the engine sets it
-# once the extension installs (domicile_extension_settings.h). A private page
-# is a <webview private>, a guest of the off-the-record profile, so what the
+# user allows it on chrome://extensions, which a desk has none of. A private
+# page is in a private browser profile, off the record of a hidden profile that
+# holds the extensions the config's `browser.profiles.<id>.extensions` turns
+# on, and the engine allows each of those into its private pages
+# (ExtensionsFor in components/domicile/browser/browser_profiles.h). So what the
 # desk asked for is that the extension RUNS there. That is what this reads: the
-# fixture's content-script mark, in a <webview private>.
+# fixture's content-script mark, in a <webview private>, which opens in the
+# default private profile.
 #
 # guard-extension-installer.sh with a private page: its stand-in, its shell and
 # its probe, and a fixture of its own whose `key` fixes the id the settings
 # name.
 #
-# WHAT IT ASSERTS. That the stand-in sent the list naming the fixture as
-# `unpacked`, allowed in private windows, and that `COLOR` is then somewhere in
-# the window, with the shell's background as the witness.
+# WHAT IT ASSERTS. That the stand-in sent the profiles, the private one turning
+# the fixture on, and the list naming the fixture as `unpacked`, and that
+# `COLOR` is then somewhere in the window, with the shell's background as the
+# witness.
 #
-# HOW IT CAN FAIL. NEGATIVE=1 runs the control: the same list with no settings.
-# The extension installs as before and MUST NOT mark the private page, whose
-# own color is the witness -- so the claim's mark is the setting's, not
-# something that marks every private page.
+# HOW IT CAN FAIL. NEGATIVE=1 runs the control: the same list, and a private
+# profile that turns on no extensions. The extension installs into the default
+# profile as before and MUST NOT mark the private page, whose own color is the
+# witness -- so the claim's mark is the profile's, not something that marks
+# every private page.
 set -u
 
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
@@ -129,19 +133,26 @@ PORT="$(served_port "$HTTP_LOG")" || {
 }
 PAGE="http://127.0.0.1:$PORT/page"
 
-# 2. The compositor's end, naming the fixture allowed in private windows --
-#    or, for the control, naming it with no settings.
+# 2. The compositor's end, naming the fixture and a private profile that turns
+#    it on -- or, for the control, a private profile that turns on nothing.
 if [ "$NEGATIVE" = "1" ]; then
-  SETTINGS="{}"
+  PRIVATE_EXTENSIONS="[]"
   WITNESSED="$PAGE_COLOR"
   FOR_SECONDS="$(budget_for extension-in-private "$FOR_SECONDS")"
 else
-  SETTINGS="{\"$ID\": {\"private\": true}}"
+  PRIVATE_EXTENSIONS="[\"$ID\"]"
   WITNESSED="$WITNESS"
 fi
+PROFILES="{\"profiles\": [\
+{\"id\": \"default\", \"name\": \"Default\", \"color\": \"#0d9488\", \
+\"private\": false, \"extensions\": null}, \
+{\"id\": \"private\", \"name\": \"Private\", \"color\": \"#a78bfa\", \
+\"private\": true, \"extensions\": $PRIVATE_EXTENSIONS}], \
+\"default_profile\": \"default\", \"default_private_profile\": \"private\", \
+\"sites\": {}}"
 rm -f "$SOCKET_LOG"
 python3 "$SCRIPTS/guard-extension-installer-compositor.py" \
-  --socket "$CONTROL" --unpacked "$EXTENSION" --settings "$SETTINGS" \
+  --socket "$CONTROL" --unpacked "$EXTENSION" --browser-profiles "$PROFILES" \
   >"$SOCKET_LOG" 2>&1 &
 STARTED+=($!)
 wait_for_line 240 "listening on" "$SOCKET_LOG" || {
@@ -151,8 +162,8 @@ wait_for_line 240 "listening on" "$SOCKET_LOG" || {
 }
 
 # 3. The engine. No `--load-extension` and no `--disable-features`: the only
-#    way the fixture gets in is the list, and into a private page, its
-#    settings.
+#    way the fixture gets in is the list, and into a private page, the private
+#    profile's extensions.
 STARTED_AT="$(date +%s)"
 rm -f "$ENGINE_LOG"
 "$CHROMIUM/$OUT/chrome" \
@@ -191,7 +202,8 @@ STATUS="${PIPESTATUS[0]}"
 echo "the probe exited $STATUS"
 
 SENT=0
-grep -qF "sent the extensions" "$SOCKET_LOG" 2>/dev/null && SENT=1
+grep -qF "sent the browser profiles" "$SOCKET_LOG" 2>/dev/null &&
+  grep -qF "sent the extensions" "$SOCKET_LOG" 2>/dev/null && SENT=1
 
 if [ "$NEGATIVE" = "1" ]; then
   MEASURED="control $STATUS $SENT"
@@ -207,12 +219,13 @@ echo
 echo "measured: $MEASURED"
 
 # WHICH END TO BLAME. `packages/domicile-engine/tests/test-extension-in-private-guard.sh` runs
-# this block directly. The last field is whether the stand-in sent the list.
+# this block directly. The last field is whether the stand-in sent the
+# profiles and the list.
 FAILURE=""
 PASSED=""
 case "$MEASURED" in
 "allowed 0 1")
-  PASSED="an extension the config allowed in private windows ran in a \
+  PASSED="an extension the private profile turns on ran in a \
 <webview private>: its content script marked the private page"
   ;;
 "allowed 0 0")
@@ -226,28 +239,30 @@ compositor stand-in, so the shell's control channel did not bind. Nothing here \
 reached the installer"
   ;;
 "allowed 1 1")
-  FAILURE="the list was sent and the <webview private> showed no mark. The \
-shell drew, so the settings were not applied (the engine log has the \
-'domicile:' lines from the settings), or the extension is not allowed into \
-private pages after all, or a private guest gets no content scripts. If \
-guard-extension-installer.sh passes, the extension installs"
+  FAILURE="the profiles and the list were sent and the <webview private> \
+showed no mark. The shell drew, so the private profile's extensions were not \
+installed into its hidden profile (the engine log has a 'domicile: loaded \
+browser profile' line for it), or not allowed into its private pages, or the \
+page did not open in that profile, or a private guest gets no content \
+scripts. If guard-extension-installer.sh passes, the extension installs"
   ;;
 "allowed 2 "*)
   FAILURE="nothing was measured: the shell's own background never appeared, \
-so the browser drew no page at all. This is the harness, not the settings"
+so the browser drew no page at all. This is the harness, not the profile"
   ;;
 "allowed "*)
   FAILURE="the probe did not run for the claim ($MEASURED), so there is no \
 measurement here of any kind"
   ;;
 "control 1 1")
-  PASSED="the control is sharp: the same extension with no settings left the \
-same private page unmarked -- so the claim's mark is the setting's"
+  PASSED="the control is sharp: the same extension, in a private profile that \
+turns on nothing, left the same private page unmarked -- so the claim's mark \
+is the profile's"
   ;;
 "control 0 "*)
-  FAILURE="the private page was marked with no settings, so extensions run in \
-private pages unasked, or the profile was not fresh, and the claim proves \
-nothing"
+  FAILURE="the private page was marked though its profile turns on nothing, \
+so extensions run in private pages unasked, or the profile was not fresh, and \
+the claim proves nothing"
   ;;
 "control 1 0")
   FAILURE="the page drew unmarked, but the list was never sent, so the absence \

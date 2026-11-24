@@ -40,6 +40,25 @@ describe(routesOf, () => {
     ]);
   });
 
+  it("leaves out the hardware behind a filter, unless it is in use", () => {
+    const filter = device({ description: "Corrected", id: "output:filter" });
+    const hardware = device({ filtered: true });
+
+    expect(summary(routesOf([filter, hardware]))).toStrictEqual([
+      {
+        detail: undefined,
+        key: "output:filter",
+        label: "Corrected",
+        picked: true,
+      },
+    ]);
+    expect(
+      summary(routesOf([filter, { ...hardware, default: true }])).map(
+        ({ key }) => key,
+      ),
+    ).toStrictEqual(["output:filter", "output:speakers"]);
+  });
+
   it("keeps the port in use even with its jack empty", () => {
     const routes = routesOf([
       device({

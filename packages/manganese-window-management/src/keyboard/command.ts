@@ -2,7 +2,7 @@
 //
 // - Commands use sway's syntax where sway has one (`focus left`, `layout
 //   tabbed`), so sway bindings can be copied over. `lock`, `launcher`,
-//   `overview`, `clipboard`, `search-clipboard`, `screenshot`, `terminal`,
+//   `overview`, `layer`, `clipboard`, `search-clipboard`, `screenshot`, `terminal`,
 //   `volume`, `mic`,
 //   `brightness`, `keymap`, `notifications`, `idle-inhibitor`,
 //   `night-light`, `virtual-monitor` and `resize grow <direction>` are
@@ -16,6 +16,7 @@ import type { Result } from "@cprussin/option-result";
 import { Err, Ok } from "@cprussin/option-result";
 import { InhibitorAction } from "@domicile-desktop/sdk/inhibitor-action";
 import { KeymapChoice } from "@domicile-desktop/sdk/keymap-choice";
+import type { ShellCommandHelp } from "@domicile-desktop/sdk/shell-command";
 
 import { Axis, Direction } from "../direction";
 import { Layout } from "../tree/node";
@@ -47,6 +48,10 @@ const COMMANDS: ReadonlyMap<string, Action> = new Map<string, Action>([
   // Manganese's: one way each, for gestures that go one way.
   ["overview show", WindowAction.OverviewShown()],
   ["overview hide", WindowAction.OverviewDismissed()],
+  // Manganese's: up hides the scratchpad or else shows the overview; down
+  // closes the overview or else brings the scratchpad.
+  ["layer up", WindowAction.LayerRaised()],
+  ["layer down", WindowAction.LayerLowered()],
   // Clipboard history; a toggle, like the launcher.
   ["clipboard", WindowAction.ClipboardToggled()],
   // The area is picked in the screenshot dialog.
@@ -123,14 +128,138 @@ const COMMANDS: ReadonlyMap<string, Action> = new Map<string, Action>([
   ]),
 ]);
 
+/**
+ * Every command, for `domicile list-shell-commands`. Matches the tables in
+ * this package's docs/KEYS.md; `command.test.ts` checks each parses and none is missing.
+ */
+export const COMMAND_HELP: readonly ShellCommandHelp[] = [
+  {
+    description: "Close the window, or the `focus parent` selection.",
+    usage: "kill",
+  },
+  { description: "Move focus.", usage: "focus left|right|up|down" },
+  {
+    description: "Select the enclosing container, or go back to the window.",
+    usage: "focus parent|child",
+  },
+  {
+    description: "Switch between floating and tiled windows.",
+    usage: "focus mode_toggle",
+  },
+  {
+    description:
+      "Move the window, or the selection, along its tabs, then out of its group.",
+    usage: "move left|right|up|down",
+  },
+  {
+    description: "Hide the window in the scratchpad.",
+    usage: "move scratchpad",
+  },
+  {
+    description:
+      "Show the oldest hidden window, or hide the shown one; or one way only.",
+    usage: "scratchpad show|bring|hide",
+  },
+  {
+    description: "Send the window, or the selection, to workspace 1–10.",
+    usage: "move container to workspace <name>",
+  },
+  {
+    description: "Go to workspace 1–10, or back if it is shown.",
+    usage: "workspace <name>",
+  },
+  {
+    description: "Go to the next or previous workspace on this screen.",
+    usage: "workspace next_on_output|prev_on_output",
+  },
+  {
+    description:
+      "Move the window, or the selection, out of its tab group, right or below.",
+    usage: "split h|v",
+  },
+  {
+    description: "The same as `split h` and `split v`.",
+    usage: "splith|splitv",
+  },
+  {
+    description: "Set the container's layout.",
+    usage: "layout stacking|tabbed",
+  },
+  {
+    description: "Switch the container between splits and tabs.",
+    usage: "layout toggle split",
+  },
+  {
+    description: "Fullscreen on this screen, or every screen.",
+    usage: "fullscreen toggle [global]",
+  },
+  { description: "Float or tile the window.", usage: "floating toggle" },
+  {
+    description: "Grow the window that way.",
+    usage: "resize grow left|right|up|down",
+  },
+  { description: "Open the config's terminal.", usage: "terminal" },
+  { description: "Lock the desktop.", usage: "lock" },
+  {
+    description:
+      "Turn the focused tab into a group of its own, nested in its slot.",
+    usage: "group",
+  },
+  { description: "Toggle the launcher.", usage: "launcher" },
+  {
+    description:
+      "Toggle the overview of every screen's workspaces, or one way only.",
+    usage: "overview [show|hide]",
+  },
+  {
+    description:
+      "Step from the scratchpad to the desk to the overview, or back down.",
+    usage: "layer up|down",
+  },
+  { description: "Toggle the clipboard history.", usage: "clipboard" },
+  { description: "Take a screenshot, as Print does.", usage: "screenshot" },
+  {
+    description:
+      "Open the newest copy in a browser window, as a site or a search.",
+    usage: "search-clipboard",
+  },
+  {
+    description: "Step the default output's volume, or toggle its mute.",
+    usage: "volume up|down|mute",
+  },
+  { description: "Toggle the default microphone's mute.", usage: "mic mute" },
+  { description: "Step the brightness.", usage: "brightness up|down" },
+  {
+    description: "Toggle the notification drawer, or clear every notification.",
+    usage: "notifications [clear]",
+  },
+  { description: "Toggle keeping the screens on.", usage: "idle-inhibitor" },
+  { description: "Toggle the night light.", usage: "night-light" },
+  {
+    description: "Add a monitor with no connector, 1920x1080 by default.",
+    usage: "virtual-monitor add [<width>x<height>]",
+  },
+  {
+    description: "Remove the newest virtual monitor.",
+    usage: "virtual-monitor remove",
+  },
+  {
+    description: "Switch every keyboard to the next keymap, or the one named.",
+    usage: "keymap next|<name>",
+  },
+  {
+    description:
+      "Turn off, or back on, the focused window's hold on your shortcuts.",
+    usage: "shortcuts-inhibitor toggle|activate|deactivate",
+  },
+];
+
 /** Parse the words after `send-shell`, or `Err` for an unknown command. */
 export const parseCommand = (
   args: readonly string[],
 ): Result<Action, string> => {
   const [verb, ...argv] = args;
   switch (verb) {
-    case "exec":
-      return parseExec(argv);
     case "keymap":
       return parseKeymap(argv);
     case "virtual-monitor":
@@ -185,12 +314,6 @@ const virtualMonitorUsage = (args: readonly string[]): Result<Action, string> =>
   Err(
     `manganese: no command \`${args.join(" ")}\`; write \`virtual-monitor add [<width>x<height>]\` or \`virtual-monitor remove\``,
   );
-
-/** Parse `exec`'s argv, which must not be empty. */
-const parseExec = (argv: readonly string[]): Result<Action, string> =>
-  argv.length === 0
-    ? Err("manganese: `exec` names nothing to run")
-    : Ok(WindowAction.CommandExecuted(argv));
 
 /** Look up a command in {@link COMMANDS}. */
 const parseNamed = (args: readonly string[]): Result<Action, string> => {

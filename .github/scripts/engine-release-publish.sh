@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Publish the engine tarball as a GitHub release.
+# Publish the engine tarball as a GitHub release in the builds repository.
 #
-#   GITHUB_TOKEN=... .github/scripts/engine-release-publish.sh /build/engine-release name.tar.zst
+#   DOMICILE_BUILDS_TOKEN=... .github/scripts/engine-release-publish.sh /build/engine-release name.tar.zst
+#
+# Builds go to `DOMICILE_BUILDS_REPO` (default `cprussin/domicile-builds`), not
+# this repository, so people watching this one hear only of real releases.
+# `DOMICILE_BUILDS_TOKEN` needs Contents: write there.
 #
 # curl and jq rather than an action, so no third-party code gets the token.
 # See config/machines/crux/domicile-ci.nix in cprussin/dotfiles for the
@@ -27,8 +31,9 @@ esac
 
 STAGE="${1:-}"
 TARBALL="${2:-}"
-: "${GITHUB_TOKEN:?a token with contents: write is required}"
-: "${GITHUB_REPOSITORY:?}"
+: "${DOMICILE_BUILDS_TOKEN:?a token with Contents: write on the builds repository is required}"
+: "${GITHUB_SHA:?}"
+BUILDS_REPO="${DOMICILE_BUILDS_REPO:-cprussin/domicile-builds}"
 
 if [ -z "$STAGE" ] || [ -z "$TARBALL" ]; then
   echo "usage: engine-release-publish.sh <stage dir> <tarball name>" >&2
@@ -36,8 +41,8 @@ if [ -z "$STAGE" ] || [ -z "$TARBALL" ]; then
 fi
 [ -f "$STAGE/$TARBALL" ] || { echo "no $STAGE/$TARBALL to publish" >&2; exit 1; }
 
-API="https://api.github.com/repos/$GITHUB_REPOSITORY"
-UPLOADS="https://uploads.github.com/repos/$GITHUB_REPOSITORY"
+API="https://api.github.com/repos/$BUILDS_REPO"
+UPLOADS="https://uploads.github.com/repos/$BUILDS_REPO"
 
 # Retry API calls on a 5xx, a rate limit or no response, so a transient error
 # does not waste a finished build. Other errors fail at once. Five tries with
@@ -54,7 +59,7 @@ api() {
   while :; do
     # `-w` prints 000 when curl reached nothing; curl says why on stderr.
     status="$(curl -sS -o "$body" -w '%{http_code}' \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Authorization: Bearer $DOMICILE_BUILDS_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" "$@")" || true
     case "$status" in
@@ -137,12 +142,14 @@ BODY
 )
 
 # Create the release, or fetch it if creation failed. A create that returned
-# 500 may still have succeeded, and its retry then returns 422.
+# 500 may still have succeeded, and its retry then returns 422. No
+# `target_commitish`: this repository's commits are not in the builds
+# repository, so the tag goes on its default branch and the body names the
+# commit.
 create_release() { # tag, prerelease
   api -X POST "$API/releases" -d "$(
-    jq -n --arg tag "$1" --arg sha "$GITHUB_SHA" --arg body "$BODY" \
-          --argjson pre "$2" \
-      '{tag_name: $tag, target_commitish: $sha, name: $tag, body: $body, prerelease: $pre}'
+    jq -n --arg tag "$1" --arg body "$BODY" --argjson pre "$2" \
+      '{tag_name: $tag, name: $tag, body: $body, prerelease: $pre}'
   )" || {
     echo "  the create failed; filling $1 if GitHub made it anyway" >&2
     api "$API/releases/tags/$1"
@@ -177,7 +184,7 @@ upload_asset() {
     # the upload.
     if curl -sS -f -X POST \
          --connect-timeout 30 --max-time 600 \
-         -H "Authorization: Bearer $GITHUB_TOKEN" \
+         -H "Authorization: Bearer $DOMICILE_BUILDS_TOKEN" \
          -H "Content-Type: application/octet-stream" \
          --data-binary "@$STAGE/$asset" \
          "$UPLOADS/releases/$into/assets?name=$asset" >/dev/null; then

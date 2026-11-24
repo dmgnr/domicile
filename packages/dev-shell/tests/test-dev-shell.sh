@@ -66,8 +66,7 @@ echo "compositor=${DOMICILE_COMPOSITOR:-unset}"
 echo "bridge=${DOMICILE_BRIDGE:-unset}"
 # The two supervisor lines the script reads. Checks below confirm
 # `bin/domicile.rs` still prints them.
-echo "DOMICILE_SOCK=/run/user/1000/domicile-ipc.4242.sock"
-echo "domicile is up. Apps connect to the WAYLAND_DISPLAY the compositor names above."
+echo "domicile is up. shell /desk/shell.js · platform wayland · DOMICILE_SOCK=/run/user/1000/domicile-ipc.4242.sock"
 STUB
     chmod +x "$ROOT/target/debug/domicile"
     eval "$LAUNCH"
@@ -116,9 +115,9 @@ expect "the socket is taken from what the desktop printed" \
 
 # Both programs must agree on these strings, or a reword in Rust silently stops
 # the dev loop reloading.
-SUPERVISOR="$ROOT/packages/domicile-launch/src/bin/domicile.rs"
-expect "the supervisor still names its socket in a line of its own" "yes" \
-  "$(grep -qF 'println!("{VARIABLE}={}", places.control.display())' "$SUPERVISOR" &&
+SUPERVISOR="$ROOT/packages/domicile-launch/src/startup.rs"
+expect "the supervisor still ends its up line with its socket" "yes" \
+  "$(grep -qF '.chain([format!("{VARIABLE}={}", started.socket.display())])' "$SUPERVISOR" &&
      echo yes || echo no)"
 expect "and that variable is still the one the script matches on" "yes" \
   "$(grep -qF 'VARIABLE: &str = "DOMICILE_SOCK"' \
@@ -318,8 +317,7 @@ if [ "${1:-}" = load-shell ]; then
   echo "load-shell $2 sock=${DOMICILE_SOCK:-unset}" >>"$FIXTURE/handed"
   exit 0
 fi
-echo "DOMICILE_SOCK=/run/user/1000/domicile-ipc.4242.sock"
-echo "domicile is up. Apps connect to the WAYLAND_DISPLAY the compositor names above."
+echo "domicile is up. shell /desk/shell.js · platform wayland · DOMICILE_SOCK=/run/user/1000/domicile-ipc.4242.sock"
 : >"$FIXTURE/up"
 waited=0
 while [ ! -s "$FIXTURE/handed" ] && [ "$waited" -lt 150 ]; do

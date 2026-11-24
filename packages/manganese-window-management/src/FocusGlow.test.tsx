@@ -5,6 +5,7 @@ import { fireEvent, render } from "@testing-library/react";
 import { css } from "../styled-system/css";
 import { FocusGlow } from "./FocusGlow";
 import { recordedSettles } from "./recorded-settles";
+import { SlidingScreen } from "./sliding-screen";
 
 // Loads the real stylesheet so motion and settling styles resolve.
 loadEmittedStylesheet(
@@ -42,6 +43,20 @@ const glow = (container: HTMLElement): HTMLElement => {
 };
 
 describe("FocusGlow", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself to its workspace while a switch slides it", () => {
+    const { container } = render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <FocusGlow {...glowProps} motion="leaving-to-start" />
+      </SlidingScreen>,
+    );
+
+    expect(glow(container).style.clip).toBe(
+      "rect(-52px, 1260px, 948px, -20px)",
+    );
+  });
+
   it("rings its box in the accent, thicker in light mode, and glows into the gaps around it", () => {
     const { container } = render(<FocusGlow {...glowProps} />);
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { Option, Result } from "@cprussin/option-result";
-import { Err, None, Ok } from "@cprussin/option-result";
+import { Err, None, Ok, Some } from "@cprussin/option-result";
 import { PanelKeyboardContext } from "@domicile-desktop/manganese-bar/panel-keyboard";
 import type { SharedWatch } from "@domicile-desktop/react/shared-watch";
 import { FakeDomicileHost } from "@domicile-desktop/sdk/fake-host";
@@ -14,6 +14,10 @@ import { InterfaceKind } from "@domicile-desktop/system-network/interfaces";
 import type { Network as Reading } from "@domicile-desktop/system-network/network";
 import { Connectivity, Link } from "@domicile-desktop/system-network/network";
 import type { Wifi } from "@domicile-desktop/system-network/wifi";
+import {
+  WifiBackend,
+  WifiSecurity,
+} from "@domicile-desktop/system-network/wifi";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { css } from "../styled-system/css";
@@ -324,6 +328,45 @@ describe("Network", () => {
 
       expect(wifi.stopped).toBe(1);
       expect(addresses.stopped).toBe(1);
+    });
+
+    it("opens the saved networks' page", async () => {
+      const network = heldNetwork();
+      const wifi = held<Result<Option<Wifi>, SystemError>>();
+      render(<Item network={network.watch} wifi={wifi.watch} />);
+      network.report(online(Link.None()));
+      await userEvent.click(screen.getByRole("button"));
+      wifi.report(
+        Ok(
+          Some({
+            backend: WifiBackend.Iwd,
+            connection: undefined,
+            device: "/net/connman/iwd/0/4",
+            enabled: false,
+            hardwareAddress: "a4:c3:f0:85:ac:2d",
+            interface: "wlan0",
+            networks: [],
+            saved: [
+              {
+                autoJoin: true,
+                lastUsed: undefined,
+                profile: "/net/connman/iwd/486f6d65_psk",
+                security: WifiSecurity.Password,
+                ssid: "Home",
+              },
+            ],
+            scanning: false,
+          }),
+        ),
+      );
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /^\d+ saved$/ }),
+      );
+
+      expect(
+        screen.getByRole("list", { name: "Saved networks" }),
+      ).toHaveTextContent("Home");
     });
 
     it("shows each wired port, with its addresses one a line while open", async () => {

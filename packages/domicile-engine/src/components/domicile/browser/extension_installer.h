@@ -32,6 +32,8 @@ struct ExtensionChanges {
   std::vector<std::string> load_unpacked;
   // Ids to uninstall.
   std::vector<std::string> uninstall;
+  // Ids named and installed that `added` lacks, to record as added.
+  std::vector<std::string> claim;
 };
 
 // Decides which extensions to install, load and uninstall.
@@ -45,6 +47,8 @@ struct ExtensionChanges {
 //   Reloading a directory restarts its extension.
 // - Uninstalls only what this installer added. Browser windows share the
 //   profile, so it may hold extensions the user installed.
+// - Claims what it names and finds installed but not added: a crash can lose
+//   the record, and the user may have installed it first.
 ExtensionChanges ReconcileExtensions(
     const ExtensionList& wanted,
     const std::set<std::string>& installed,

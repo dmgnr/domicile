@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/rect.h"
@@ -94,6 +95,8 @@ class DamageClipsCrtc {
 // evdi hands DisplayLink each flip's clip to compress. A stale clip makes it
 // compress the same rect every frame.
 TEST(DrmDamageClipsTest, EachFlipNamesItsOwnDamage) {
+  // A DrmDevice is deleted on the sequence it was made on.
+  base::test::SingleThreadTaskEnvironment task_environment;
   DamageClipsCrtc crtc;
 
   crtc.Flip(gfx::Rect(0, 0, 4, 4));
@@ -106,6 +109,8 @@ TEST(DrmDamageClipsTest, EachFlipNamesItsOwnDamage) {
 // A dock is a DRM device of its own. A blob id from another device names
 // nothing there, or something else.
 TEST(DrmDamageClipsTest, EachDeviceNamesItsOwnBlob) {
+  // A DrmDevice is deleted on the sequence it was made on.
+  base::test::SingleThreadTaskEnvironment task_environment;
   DamageClipsCrtc panel;
   DamageClipsCrtc dock;
 
@@ -118,6 +123,8 @@ TEST(DrmDamageClipsTest, EachDeviceNamesItsOwnBlob) {
 // No clip means the whole plane changed, which is right for a frame that
 // names no damage.
 TEST(DrmDamageClipsTest, AFlipWithNoDamageSendsNoClip) {
+  // A DrmDevice is deleted on the sequence it was made on.
+  base::test::SingleThreadTaskEnvironment task_environment;
   DamageClipsCrtc crtc;
 
   crtc.Flip(gfx::Rect(1, 1, 1, 1));

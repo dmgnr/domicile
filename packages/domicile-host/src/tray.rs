@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use domicile_protocol::{TrayAction, TrayItem};
+use domicile_protocol::{Bus, SystemRequest, TrayAction, TrayItem};
 
 use crate::data_url::data_url;
 use crate::icon_theme;
@@ -105,6 +105,34 @@ pub fn method(action: TrayAction) -> &'static str {
     }
 }
 
+/// The bus a shell's system call clicks a tray menu entry on, if it is one:
+/// a `com.canonical.dbusmenu` `Event` of `clicked` on the session bus.
+///
+/// Entries such as "Show Slack" raise a window, so the click needs a token
+/// as an icon click does.
+pub fn menu_clicked(request: &SystemRequest) -> Option<&str> {
+    match request {
+        SystemRequest::DbusCall {
+            bus: Bus::Session,
+            destination,
+            interface,
+            member,
+            body,
+            ..
+        } if interface == "com.canonical.dbusmenu" && member == "Event" => {
+            // A body that does not parse is answered as an error by the call
+            // itself.
+            let arguments = serde_json::from_str::<Vec<serde_json::Value>>(body).ok();
+            arguments
+                .is_some_and(|arguments| {
+                    arguments.get(1).and_then(|event| event.as_str()) == Some("clicked")
+                })
+                .then_some(destination.as_str())
+        }
+        _ => None,
+    }
+}
+
 /// The items registered with the watcher, in registration order.
 ///
 /// Each item has four names:
@@ -124,6 +152,9 @@ struct Entry {
     bus: String,
     owner: String,
     path: String,
+    /// The process behind `owner`, if the bus said. A click lets it raise its
+    /// window with a token of its own.
+    pid: Option<u32>,
     /// The name for shells. `None` until its properties have been read.
     name: Option<String>,
     /// `None` until its properties have been read, and while it is passive.
@@ -131,9 +162,15 @@ struct Entry {
 }
 
 impl Registry {
-    /// Register the item at `path` on `bus`, owned by connection `owner`.
-    /// Returns its id, or `None` if already registered.
-    pub fn register(&mut self, bus: &str, owner: &str, path: &str) -> Option<String> {
+    /// Register the item at `path` on `bus`, owned by connection `owner` of
+    /// process `pid`. Returns its id, or `None` if already registered.
+    pub fn register(
+        &mut self,
+        bus: &str,
+        owner: &str,
+        path: &str,
+        pid: Option<u32>,
+    ) -> Option<String> {
         let id = format!("{bus}{path}");
         (!self.entries.iter().any(|entry| entry.id == id)).then(|| {
             self.entries.push(Entry {
@@ -141,6 +178,7 @@ impl Registry {
                 bus: bus.to_string(),
                 owner: owner.to_string(),
                 path: path.to_string(),
+                pid,
                 name: None,
                 shown: None,
             });
@@ -227,12 +265,40 @@ impl Registry {
         gone.into_iter().map(|entry: Entry| entry.id).collect()
     }
 
-    /// Record that well-known name `name` moved to connection `owner`, which
-    /// its items' signals now come from.
-    pub fn moved(&mut self, name: &str, owner: &str) {
+    /// Record that well-known name `name` moved to connection `owner` of
+    /// process `pid`, which its items' signals now come from.
+    pub fn moved(&mut self, name: &str, owner: &str, pid: Option<u32>) {
         for entry in self.entries.iter_mut().filter(|entry| entry.bus == name) {
             entry.owner = owner.to_string();
+            entry.pid = pid;
         }
+    }
+
+    /// The paths of the items answering on `bus`.
+    pub fn paths_on(&self, bus: &str) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.bus == bus)
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+
+    /// The process behind each item, by the bus it answers on, which its
+    /// menu is on too.
+    pub fn pids_on_buses(&self) -> HashMap<String, u32> {
+        self.entries
+            .iter()
+            .filter_map(|entry| Some((entry.bus.clone(), entry.pid?)))
+            .collect()
+    }
+
+    /// The process behind each item, by its name for shells. An item not yet
+    /// named, or whose process the bus would not give, is left out.
+    pub fn pids(&self) -> HashMap<String, u32> {
+        self.entries
+            .iter()
+            .filter_map(|entry| Some((entry.name.clone()?, entry.pid?)))
+            .collect()
     }
 
     /// Every registered item's id, for the watcher's item list.

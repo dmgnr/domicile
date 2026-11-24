@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the hidden pointer's Chromium art is no error
+
+kNull, the cursor nothing has set, has no name in a cursor theme, so
+the desk always draws Chromium's pointer for it. Saying so at ERROR on
+every start was noise beside the real case: a named cursor the theme
+lacks.
+---
+ ui/wm/core/cursor_loader.cc | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/ui/wm/core/cursor_loader.cc b/ui/wm/core/cursor_loader.cc
+index d11f13b..2237553 100644
+--- a/ui/wm/core/cursor_loader.cc
++++ b/ui/wm/core/cursor_loader.cc
+@@ -217,9 +217,12 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
+     // We will be notified when the theme is loaded, but at this time we have to
+     // fall back to the assets.
+     // Domicile: at ERROR, the level the engine logs at, so a pointer that is
+-    // Chromium's art says so. Once per type until the cursors unload.
+-    LOG(ERROR) << "domicile: the pointer's " << type << " cursor at scale "
+-               << scale_ << " is Chromium's: the platform has none";
++    // Chromium's art says so. Once per type until the cursors unload. kNull,
++    // "no cursor set", has no name in a cursor theme and is always Chromium's
++    // pointer, so it is no error.
++    LOG_IF(ERROR, type != CursorType::kNull)
++        << "domicile: the pointer's " << type << " cursor at scale " << scale_
++        << " is Chromium's: the platform has none";
+   }
+ 
+   // Loads the default Aura cursor bitmap for the cursor type. Falls back on

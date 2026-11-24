@@ -1,13 +1,16 @@
 import { ApertureIcon } from "@phosphor-icons/react/dist/ssr/Aperture";
+import { AppWindowIcon } from "@phosphor-icons/react/dist/ssr/AppWindow";
 import { ClipboardTextIcon } from "@phosphor-icons/react/dist/ssr/ClipboardText";
 import { CodeIcon } from "@phosphor-icons/react/dist/ssr/Code";
 import { CommandIcon } from "@phosphor-icons/react/dist/ssr/Command";
 import { GlobeIcon } from "@phosphor-icons/react/dist/ssr/Globe";
+import { HighDefinitionIcon } from "@phosphor-icons/react/dist/ssr/HighDefinition";
 import { KeyboardIcon } from "@phosphor-icons/react/dist/ssr/Keyboard";
 import { LockKeyIcon } from "@phosphor-icons/react/dist/ssr/LockKey";
 import { MonitorIcon } from "@phosphor-icons/react/dist/ssr/Monitor";
 import { PrinterIcon } from "@phosphor-icons/react/dist/ssr/Printer";
 import { TrayIcon } from "@phosphor-icons/react/dist/ssr/Tray";
+import { UserCircleIcon } from "@phosphor-icons/react/dist/ssr/UserCircle";
 import { VideoCameraIcon } from "@phosphor-icons/react/dist/ssr/VideoCamera";
 import { WifiHighIcon } from "@phosphor-icons/react/dist/ssr/WifiHigh";
 import type { ReactNode } from "react";
@@ -70,9 +73,19 @@ const LISTED: readonly { icon: ReactNode; title: string; body: string }[] = [
     title: "Apps without Electron",
   },
   {
+    body: "List Slack, Element or Claude in the config and they run on the desktop's engine, with menus and dialogs your shell draws.",
+    icon: <AppWindowIcon />,
+    title: "Electron apps on the engine",
+  },
+  {
     body: "Install any website as an app, with its own window and icon.",
     icon: <GlobeIcon />,
     title: "Sites as apps",
+  },
+  {
+    body: "Keep work and personal apart. Each profile has its own sign-ins and extensions, and sites open in the profile you give them.",
+    icon: <UserCircleIcon />,
+    title: "Browser profiles",
   },
   {
     body: "Open and save dialogs, print or save as PDF, open with, remote desktop and the keyring, all in your look.",
@@ -88,6 +101,11 @@ const LISTED: readonly { icon: ReactNode; title: string; body: string }[] = [
     body: "Plug into a dock and your monitors snap back to where you left them.",
     icon: <MonitorIcon />,
     title: "Monitor profiles",
+  },
+  {
+    body: "HDR on the monitors that have it, 10-bit panels without banding, and wide-gamut apps in their true colors.",
+    icon: <HighDefinitionIcon />,
+    title: "HDR and 10-bit color",
   },
   {
     body: "Discord, Slack and other apps that put an icon in the tray show it in yours.",
@@ -128,6 +146,8 @@ const GROUPS: readonly { title: string; items: readonly string[] }[] = [
       "Screen sharing and screenshots",
       "Notifications, tray icons and global shortcuts",
       "Chrome extensions in browser windows",
+      "Browser profiles",
+      "Electron apps on the engine",
       "Night light, monitor profiles and dark mode for apps",
       "A lock screen that stays locked",
     ],

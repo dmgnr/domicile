@@ -9,6 +9,7 @@ use zbus::zvariant::OwnedValue;
 #[derive(Debug, PartialEq)]
 struct Heard {
     app_name: String,
+    app_icon: String,
     summary: String,
     body: String,
     urgency: Option<u8>,
@@ -25,7 +26,7 @@ impl Server {
         &self,
         app_name: String,
         _replaces_id: u32,
-        _app_icon: String,
+        app_icon: String,
         summary: String,
         body: String,
         _actions: Vec<String>,
@@ -37,6 +38,7 @@ impl Server {
             .map(|value| u8::try_from(value).unwrap());
         self.heard.lock().unwrap().push(Heard {
             app_name,
+            app_icon,
             summary,
             body,
             urgency,
@@ -77,6 +79,7 @@ fn says_what_failed_as_domicile() {
     let (_server, client, heard) = paired();
     notify(
         &client,
+        "",
         "domicile.ts did not reload",
         "SyntaxError: Unexpected token",
     )
@@ -85,11 +88,19 @@ fn says_what_failed_as_domicile() {
         *heard.lock().unwrap(),
         [Heard {
             app_name: "Domicile".into(),
+            app_icon: String::new(),
             summary: "domicile.ts did not reload".into(),
             body: "SyntaxError: Unexpected token".into(),
             urgency: Some(2),
         }]
     );
+}
+
+#[test]
+fn draws_with_the_icon_given() {
+    let (_server, client, heard) = paired();
+    notify(&client, "element", "Element runs on its own Electron", "").unwrap();
+    assert_eq!(heard.lock().unwrap()[0].app_icon, "element");
 }
 
 #[test]
@@ -108,6 +119,6 @@ fn a_server_that_never_answers_is_an_error_not_a_hang() {
         connected(zbus::blocking::connection::Builder::async_io_unix_stream(ours).p2p()).unwrap();
     let _server = server.join().unwrap();
     let asked = std::time::Instant::now();
-    assert!(notify(&client, "summary", "body").is_err());
+    assert!(notify(&client, "", "summary", "body").is_err());
     assert!(asked.elapsed() < ANSWER_WITHIN * 2);
 }

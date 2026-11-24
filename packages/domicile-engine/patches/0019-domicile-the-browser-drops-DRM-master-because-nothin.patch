@@ -92,7 +92,7 @@ suite, so it actually executes.
  9 files changed, 119 insertions(+), 66 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 80d0e0f..5f2b41b 100644
+index 6715b5f..06f771e 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -122,6 +122,8 @@ source_set("gbm") {
@@ -104,7 +104,7 @@ index 80d0e0f..5f2b41b 100644
      "domicile/drm_modeset.cc",
      "domicile/drm_modeset.h",
      "domicile/drm_screen.cc",
-@@ -237,6 +239,7 @@ source_set("gbm_unittests") {
+@@ -239,6 +241,7 @@ source_set("gbm_unittests") {
      "gpu/mock_drm_modifiers_filter.h",
      "gpu/proxy_helpers_unittest.cc",
      "domicile/drm_fullscreen_unittest.cc",
@@ -155,10 +155,10 @@ index 8e8d9ec..078ee43 100644
  
    /**************
 diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
-index b10efb5..ff44869 100644
+index 866186e..82fdde7 100644
 --- a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
 +++ b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
-@@ -401,25 +401,33 @@ MovableDisplaySnapshots DrmGpuDisplayManager::GetDisplays() {
+@@ -425,25 +425,33 @@ MovableDisplaySnapshots DrmGpuDisplayManager::GetDisplays() {
  }
  
  bool DrmGpuDisplayManager::TakeDisplayControl() {
@@ -206,7 +206,7 @@ index b10efb5..ff44869 100644
  }
  
  bool DrmGpuDisplayManager::RelinquishDisplayControl() {
-@@ -432,13 +440,22 @@ bool DrmGpuDisplayManager::RelinquishDisplayControl() {
+@@ -456,13 +464,22 @@ bool DrmGpuDisplayManager::RelinquishDisplayControl() {
      return false;
    }
  
@@ -235,10 +235,10 @@ index b10efb5..ff44869 100644
  
    // Dissociate controllers from windows so that subsequent pageflips fail
 diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc
-index 5e2d41d..2949217 100644
+index 7b16beb..3a3da52 100644
 --- a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc
 +++ b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager_unittest.cc
-@@ -2048,46 +2048,6 @@ TEST_F(DrmGpuDisplayManagerTest, RelinquishDisplayControl) {
+@@ -2119,46 +2119,6 @@ TEST_F(DrmGpuDisplayManagerTest, RelinquishDisplayControl) {
    EXPECT_FALSE(drm->has_master());
  }
  
@@ -286,10 +286,10 @@ index 5e2d41d..2949217 100644
    base::test::ScopedFeatureList feature_list;
    feature_list.InitAndEnableFeature(display::features::kFastDrmMasterDrop);
 diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.cc b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
-index 1abcc8c..3aeb5ae 100644
+index 4896451..86a4d77 100644
 --- a/ui/ozone/platform/drm/gpu/fake_drm_device.cc
 +++ b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
-@@ -982,6 +982,10 @@ bool FakeDrmDevice::DropMaster() {
+@@ -988,6 +988,10 @@ bool FakeDrmDevice::DropMaster() {
    return succeed_drm_master_drop_;
  }
  
@@ -301,10 +301,10 @@ index 1abcc8c..3aeb5ae 100644
    return has_master_;
  }
 diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.h b/ui/ozone/platform/drm/gpu/fake_drm_device.h
-index 5e8719e..51af3ea 100644
+index 74b672e..928933e 100644
 --- a/ui/ozone/platform/drm/gpu/fake_drm_device.h
 +++ b/ui/ozone/platform/drm/gpu/fake_drm_device.h
-@@ -405,6 +405,7 @@ class FakeDrmDevice : public DrmDevice {
+@@ -415,6 +415,7 @@ class FakeDrmDevice : public DrmDevice {
  
    bool SetMaster() override;
    bool DropMaster() override;
@@ -313,7 +313,7 @@ index 5e8719e..51af3ea 100644
  
    // There is a circular reference between DrmDevice and
 diff --git a/ui/ozone/platform/drm/host/drm_display_host_manager.cc b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
-index 00e7048..269a57a 100644
+index f7f97f0..d2f8510 100644
 --- a/ui/ozone/platform/drm/host/drm_display_host_manager.cc
 +++ b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
 @@ -217,6 +217,15 @@ void OpenDeviceAsync(const base::FilePath& device_path,

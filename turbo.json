@@ -100,7 +100,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/packages/*/tests/*.sh",
-        "$TURBO_ROOT$/packages/domicile-protocol/wire/**"
+        "$TURBO_ROOT$/packages/domicile-protocol/wire/**",
+        "$TURBO_ROOT$/packages/domicile-engine/src/components/domicile/renderer/electron_preload.cc"
       ]
     }
   },

@@ -11,7 +11,8 @@
     Exposed=Window,
     RuntimeEnabled=DomicileControlChannel
 ] interface DomicileClipboardEntry {
-  // What DomicileHost.copyClipboardEntry() names this row by.
+  // What DomicileHost.copyClipboardEntry() and removeClipboardEntry() name
+  // this row by.
   //
   // Assigned by the compositor and never reused, so an id a shell holds names
   // the row it was told about or nothing. Not a position: reordering the list
@@ -35,4 +36,8 @@
   // panel can show what was copied. Empty for text, and for an image the
   // compositor could not read; its preview still names it.
   readonly attribute DOMString thumbnail;
+
+  // Whether this is what the clipboard holds. Only the newest row can be, and
+  // none is after removeClipboardEntry() removes it, until the next copy.
+  readonly attribute boolean current;
 };

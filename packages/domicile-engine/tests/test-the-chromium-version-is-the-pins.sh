@@ -9,8 +9,31 @@ ENGINE="$ROOT/packages/domicile-engine"
 PIN="$(tail -1 "$ENGINE/CHROMIUM_PIN")"
 URL="https://raw.githubusercontent.com/chromium/chromium/$PIN/chrome/VERSION"
 
-if ! UPSTREAM="$(curl -fsS --max-time 30 "$URL")"; then
-  echo "SKIP: could not read $URL"
+# GitHub rate-limits reads of chromium/chromium, from Actions runners above
+# all. When the mirror refuses, the same file comes from Chromium's own Gitiles
+# (base64, as ?format=TEXT serves it), then through the API with CI's token.
+GITILES="https://chromium.googlesource.com/chromium/src/+/$PIN/chrome/VERSION?format=TEXT"
+API="https://api.github.com/repos/chromium/chromium/contents/chrome/VERSION?ref=$PIN"
+read_upstream() {
+  local version
+  curl -fsS --max-time 30 --retry 2 --retry-all-errors --retry-delay 5 "$URL" && return
+  if version="$(curl -fsS --max-time 30 --retry 2 --retry-all-errors --retry-delay 5 "$GITILES")"; then
+    printf '%s' "$version" | base64 -d && return
+  fi
+  [ -n "${GITHUB_TOKEN:-}" ] || return 1
+  curl -fsS --max-time 30 --retry 2 --retry-all-errors --retry-delay 5 \
+    -H "Authorization: Bearer $GITHUB_TOKEN" \
+    -H "Accept: application/vnd.github.raw" "$API"
+}
+
+ERRORS="$(mktemp)"
+trap 'rm -f "$ERRORS"' EXIT
+if ! UPSTREAM="$(read_upstream 2>"$ERRORS")"; then
+  # What curl said, so a refusal in CI says whose and why.
+  SAID="$(sort -u "$ERRORS" | tr '\n' ' ')"
+  TOKEN="no token"
+  [ -n "${GITHUB_TOKEN:-}" ] && TOKEN="token tried"
+  echo "SKIP: could not read $URL ($TOKEN; $SAID)"
   exit 77
 fi
 EXPECTED="$(printf '%s\n' "$UPSTREAM" | sed -n 's/^[A-Z]*=//p' | paste -sd.)"

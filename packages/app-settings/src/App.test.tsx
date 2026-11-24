@@ -1,14 +1,27 @@
 import { describe, expect, it, setDefaultTimeout } from "bun:test";
 import type { Options } from "@domicile-desktop/sdk/options";
 import { defineOptions, option } from "@domicile-desktop/sdk/options";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { App } from "./App";
 import { hostExtensions } from "./extensions";
 import type { FakeHostState } from "./fake-host";
 import { fakeHost } from "./fake-host";
-import type { InstalledExtension, SettingsFiles } from "./host";
+import type {
+  BrowserProfiles,
+  InstalledExtension,
+  KnownAgents,
+  Monitor,
+  SettingsFiles,
+  WebAgents,
+} from "./host";
 
 const CONFIG_PATH = "/home/me/.config/domicile/domicile.json";
 const SHELL_PATH = "/home/me/.config/domicile/shell.ts";
@@ -88,10 +101,11 @@ const INSTALLED: InstalledExtension[] = [
   {
     description: "An efficient content blocker.",
     enabled: true,
+    icon: undefined,
     id: UBLOCK,
     name: "uBlock Origin Lite",
     optionsUrl: `chrome-extension://${UBLOCK}/dashboard.html`,
-    settings: { file_access: false, private: false, site_access: "all_sites" },
+    settings: { file_access: false, site_access: "all_sites" },
     version: "2025.1",
   },
 ];
@@ -104,17 +118,29 @@ const ublock = async () =>
 const renderApp = async (
   page: string,
   {
+    agents,
     chosen = "/home/me/src/my-extension",
     config = {},
     configExtensions = [],
+    monitors,
     options,
+    profiles,
     refuse,
+    webAgents,
     writable = true,
   }: {
+    /** Agents on the web; none by default. */
+    webAgents?: WebAgents;
+    /** The agents in now and remembered; none by default. */
+    agents?: KnownAgents;
+    /** The browser profiles the engine runs. */
+    profiles?: BrowserProfiles;
     /** The folder the picker returns; `null` for a canceled picker. */
     chosen?: string | null;
     config?: Record<string, unknown>;
     configExtensions?: string[];
+    /** The lit monitors; none by default. */
+    monitors?: Monitor[];
     /** What the shell declares; none by default. */
     options?: Options;
     refuse?: string;
@@ -122,14 +148,18 @@ const renderApp = async (
   } = {},
 ) => {
   const host = fakeHost({
+    agents: structuredClone(agents),
     chosen: chosen ?? undefined,
     configExtensions,
     files: files(config, writable, options),
     installed: structuredClone(INSTALLED),
     media: structuredClone(MEDIA),
+    monitors,
+    profiles: structuredClone(profiles),
     refuse,
     siteData: structuredClone(SITE_DATA),
     sites: structuredClone(SITES),
+    webAgents: structuredClone(webAgents),
   });
   const user = userEvent.setup();
   render(<App extensions={hostExtensions(host.host)} host={host.host} />);
@@ -144,6 +174,55 @@ const written = (writes: { file: string; text: string }[]) => {
   expect(last?.file).toBe("config");
   return JSON.parse(last?.text ?? "");
 };
+
+/** The config's profiles, as the Profiles page tests start them. */
+const BROWSER = {
+  default_private_profile: "private",
+  default_profile: "personal",
+  profiles: {
+    personal: { color: "#0d9488", name: "Personal" },
+    private: { color: "#a78bfa", name: "Private", private: true },
+    work: { color: "#d97706", extensions: [UBLOCK], name: "Work" },
+  },
+  sites: { "*.acme.com": "work" },
+};
+
+/** What the engine runs for {@link BROWSER}, with a site the user pinned. */
+const PROFILES: BrowserProfiles = {
+  defaultPrivateProfile: "private",
+  defaultProfile: "personal",
+  profiles: [
+    {
+      color: "#0d9488",
+      extensions: [{ enabled: false, id: UBLOCK, locked: false }],
+      id: "personal",
+      name: "Personal",
+      private: false,
+    },
+    {
+      color: "#d97706",
+      extensions: [{ enabled: true, id: UBLOCK, locked: true }],
+      id: "work",
+      name: "Work",
+      private: false,
+    },
+    {
+      color: "#a78bfa",
+      extensions: [{ enabled: false, id: UBLOCK, locked: false }],
+      id: "private",
+      name: "Private",
+      private: true,
+    },
+  ],
+  sites: [
+    { pinned: false, profile: "work", site: "*.acme.com" },
+    { pinned: true, profile: "work", site: "github.com/acme" },
+  ],
+};
+
+/** A profile's card on the Profiles page. */
+const profileCard = async (name: string) =>
+  within(await screen.findByRole("region", { name }));
 
 const choose = async (
   user: ReturnType<typeof userEvent.setup>,
@@ -437,6 +516,90 @@ describe(App, () => {
       });
     });
 
+    it("turns on HDR for a display in a profile", async () => {
+      const { host, user } = await renderApp("Displays", {
+        config: {
+          output: {
+            profiles: [{ displays: [{ display: "drm-1" }], name: "laptop" }],
+          },
+        },
+      });
+      expect(
+        screen.queryByRole("textbox", { name: "drm-1 everyday brightness" }),
+      ).toBeNull();
+      await user.click(screen.getByRole("switch", { name: "drm-1 HDR" }));
+      await waitFor(() => {
+        expect(written(host.writes).output.profiles).toEqual([
+          { displays: [{ display: "drm-1", hdr: true }], name: "laptop" },
+        ]);
+      });
+    });
+
+    it("says a plugged-in monitor that can't show HDR can't, in place of its switch", async () => {
+      await renderApp("Displays", {
+        config: {
+          output: {
+            profiles: [
+              {
+                displays: [
+                  { display: "DEL DELL U3219Q 2ZLS413" },
+                  { display: "drm-2" },
+                  { display: "drm-3" },
+                ],
+                name: "desk",
+              },
+            ],
+          },
+        },
+        monitors: [
+          {
+            hdr: "unsupported",
+            names: [
+              "drm-1",
+              "DEL DELL U3219Q 2ZLS413",
+              "Dell Inc. DELL U3219Q 2ZLS413",
+            ],
+          },
+          { hdr: "off", names: ["drm-2"] },
+        ],
+      });
+      await screen.findByText("Not supported");
+      expect(screen.getAllByText("Not supported")).toHaveLength(1);
+      expect(
+        screen.queryByRole("switch", { name: "DEL DELL U3219Q 2ZLS413 HDR" }),
+      ).toBeNull();
+      // One that takes it, and one not plugged in, keep their switches.
+      screen.getByRole("switch", { name: "drm-2 HDR" });
+      screen.getByRole("switch", { name: "drm-3 HDR" });
+    });
+
+    it("sets how bright everyday content is on a display in HDR", async () => {
+      const { host, user } = await renderApp("Displays", {
+        config: {
+          output: {
+            profiles: [
+              { displays: [{ display: "drm-1", hdr: true }], name: "laptop" },
+            ],
+          },
+        },
+      });
+      const white = screen.getByRole("textbox", {
+        name: "drm-1 everyday brightness",
+      });
+      expect(white).toHaveValue("203");
+      await user.clear(white);
+      await user.type(white, "250");
+      await user.tab();
+      await waitFor(() => {
+        expect(written(host.writes).output.profiles).toEqual([
+          {
+            displays: [{ display: "drm-1", hdr: true, sdr_white: 250 }],
+            name: "laptop",
+          },
+        ]);
+      });
+    });
+
     it("writes a profile monitor's position at the origin", async () => {
       // A profile monitor with no position goes right of the others, so
       // `[0, 0]` has to be written out.
@@ -600,12 +763,12 @@ describe(App, () => {
       const { user } = await renderApp("Extensions");
       const row = await ublock();
       expect(
-        row.getByRole("switch", { name: "Allow in private windows" }),
+        row.getByRole("switch", { name: "Allow on local files" }),
       ).toBeVisible();
       await user.click(row.getByRole("switch", { name: "uBlock Origin Lite" }));
       await waitFor(() => {
         expect(
-          row.queryByRole("switch", { name: "Allow in private windows" }),
+          row.queryByRole("switch", { name: "Allow on local files" }),
         ).not.toBeInTheDocument();
       });
     });
@@ -621,16 +784,16 @@ describe(App, () => {
       ).not.toBeInTheDocument();
     });
 
-    it("allows an extension in private windows", async () => {
+    it("allows an extension on local files", async () => {
       const { host, user } = await renderApp("Extensions");
       await user.click(
         (await ublock()).getByRole("switch", {
-          name: "Allow in private windows",
+          name: "Allow on local files",
         }),
       );
       await waitFor(() => {
         expect(host.configured).toEqual([
-          { id: UBLOCK, settings: { private: true } },
+          { id: UBLOCK, settings: { file_access: true } },
         ]);
       });
       expect(host.writes).toEqual([]);
@@ -638,16 +801,18 @@ describe(App, () => {
 
     it("changes a setting the config sets in the config", async () => {
       const { host, user } = await renderApp("Extensions", {
-        config: { extensions: { settings: { [UBLOCK]: { private: true } } } },
+        config: {
+          extensions: { settings: { [UBLOCK]: { file_access: true } } },
+        },
       });
       const allowed = (await ublock()).getByRole("switch", {
-        name: "Allow in private windows",
+        name: "Allow on local files",
       });
       expect(allowed).toBeChecked();
       await user.click(allowed);
       await waitFor(() => {
         expect(written(host.writes)).toEqual({
-          extensions: { settings: { [UBLOCK]: { private: false } } },
+          extensions: { settings: { [UBLOCK]: { file_access: false } } },
         });
       });
       expect(host.configured).toEqual([]);
@@ -655,12 +820,14 @@ describe(App, () => {
 
     it("leaves a setting a read-only config sets", async () => {
       await renderApp("Extensions", {
-        config: { extensions: { settings: { [UBLOCK]: { private: true } } } },
+        config: {
+          extensions: { settings: { [UBLOCK]: { file_access: true } } },
+        },
         writable: false,
       });
       expect(
         (await ublock()).getByRole("switch", {
-          name: "Allow in private windows",
+          name: "Allow on local files",
         }),
       ).toHaveAttribute("aria-disabled", "true");
     });
@@ -718,12 +885,14 @@ describe(App, () => {
 
     it("reads a config that sets a setting to null as leaving it", async () => {
       await renderApp("Extensions", {
-        config: { extensions: { settings: { [UBLOCK]: { private: null } } } },
+        config: {
+          extensions: { settings: { [UBLOCK]: { file_access: null } } },
+        },
         writable: false,
       });
       expect(
         (await ublock()).getByRole("switch", {
-          name: "Allow in private windows",
+          name: "Allow on local files",
         }),
       ).not.toHaveAttribute("aria-disabled", "true");
     });
@@ -886,9 +1055,7 @@ describe(App, () => {
       expect(screen.getByText("notes.example")).toBeInTheDocument();
       expect(screen.queryByText("mail.example")).not.toBeInTheDocument();
       await user.type(screen.getByRole("searchbox"), "zzz");
-      expect(
-        screen.getByText("No site with data matches."),
-      ).toBeInTheDocument();
+      expect(screen.getByText("No site matches")).toBeInTheDocument();
     });
 
     it("removes a site's data once asked", async () => {
@@ -905,6 +1072,328 @@ describe(App, () => {
       });
       await waitFor(() => {
         expect(screen.queryByText("mail.example")).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  describe("agents", () => {
+    const AGENTS: KnownAgents = {
+      connected: [
+        {
+          agent: "Claude Code",
+          reach: {
+            type: "windows",
+            windows: [
+              { id: "n1", title: "Notes" },
+              { id: "w1", title: "Pull requests" },
+            ],
+          },
+          session: 4,
+        },
+      ],
+      remembered: [{ agent: "Codex", lastUsedMs: Date.now() }],
+    };
+
+    it("lists each agent connected now, then those remembered", async () => {
+      await renderApp("Agents", { agents: AGENTS });
+      expect(
+        await screen.findByText("Connected now · Notes and Pull requests"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Remembered · Your whole desktop · Last used today"),
+      ).toBeInTheDocument();
+    });
+
+    it("stops a connected agent and forgets a remembered one", async () => {
+      const { host, user } = await renderApp("Agents", { agents: AGENTS });
+      await user.click(
+        await screen.findByRole("button", { name: "Stop Claude Code" }),
+      );
+      await user.click(screen.getByRole("button", { name: "Forget Codex" }));
+      await waitFor(() => {
+        expect(screen.queryByText("Codex")).not.toBeInTheDocument();
+      });
+      expect(host.state.agents).toEqual({ connected: [], remembered: [] });
+      expect(
+        screen.getByText(/No agent is connected or remembered/u),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("troubleshooting", () => {
+    it("turns detailed logging on", async () => {
+      const { host, user } = await renderApp("Troubleshooting");
+      const detailed = await screen.findByRole("switch", {
+        name: "Detailed logging",
+      });
+      await waitFor(() => {
+        expect(detailed).toBeEnabled();
+      });
+      await user.click(detailed);
+      await waitFor(() => {
+        expect(host.state.detailed).toBe(true);
+      });
+      expect(detailed).toBeChecked();
+    });
+
+    it("saves the logs hidden, then opens Downloads", async () => {
+      const { host, user } = await renderApp("Troubleshooting");
+      await user.click(screen.getByRole("button", { name: "Save logs" }));
+      expect(
+        await screen.findByText(/Saved domicile-logs-2026-11-27-091203.txt/u),
+      ).toBeInTheDocument();
+      expect(host.exported).toEqual([true]);
+      await user.click(screen.getByRole("button", { name: "Open Downloads" }));
+      expect(host.downloadsOpened.times).toBe(1);
+    });
+
+    it("saves everything once hiding is off", async () => {
+      const { host, user } = await renderApp("Troubleshooting");
+      await user.click(
+        screen.getByRole("switch", {
+          name: "Hide web addresses and window titles",
+        }),
+      );
+      await user.click(screen.getByRole("button", { name: "Save logs" }));
+      await waitFor(() => {
+        expect(host.exported).toEqual([false]);
+      });
+    });
+  });
+
+  describe("agents on the web", () => {
+    const ADDRESS = "https://desk.mcp.domicile-desktop.com/mcp";
+    const WEB: WebAgents = {
+      signedIn: [{ client: "c1", lastUsedMs: Date.now(), name: "claude.ai" }],
+      status: { address: ADDRESS, problem: undefined, ready: true },
+    };
+
+    it("turns connecting from the web on in the config", async () => {
+      const { host, user } = await renderApp("Agents");
+      expect(screen.queryByText("Your desktop's address")).toBeNull();
+      await user.click(
+        await screen.findByRole("switch", { name: "Connect from the web" }),
+      );
+      await waitFor(() => {
+        expect(written(host.writes).agents).toEqual({ web: true });
+      });
+    });
+
+    it("shows the address to copy once the relay gives it", async () => {
+      await renderApp("Agents", {
+        config: { agents: { web: true } },
+        webAgents: WEB,
+      });
+      expect(await screen.findByText(ADDRESS)).toBeInTheDocument();
+      expect(
+        screen.getByText("Add it to the agent as a connector."),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    });
+
+    it("asks the desk to try again when it couldn't get ready", async () => {
+      const { host, user } = await renderApp("Agents", {
+        config: { agents: { web: true } },
+        webAgents: {
+          signedIn: [],
+          status: {
+            address: ADDRESS,
+            problem: "Couldn't get a certificate, trying again in 2 minutes",
+            ready: false,
+          },
+        },
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Try again" }),
+      );
+      expect(host.retried.times).toBe(1);
+    });
+
+    it("signs an agent on the web out", async () => {
+      const { host, user } = await renderApp("Agents", {
+        config: { agents: { web: true } },
+        webAgents: WEB,
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Sign out claude.ai" }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("claude.ai")).toBeNull();
+      });
+      expect(host.state.webAgents?.signedIn).toEqual([]);
+    });
+  });
+
+  describe("profiles", () => {
+    const openProfiles = (writable = true) =>
+      renderApp("Profiles", {
+        config: { browser: BROWSER },
+        profiles: PROFILES,
+        writable,
+      });
+
+    it("switches an extension in one profile through the desktop", async () => {
+      const { host, user } = await openProfiles();
+      const personal = await profileCard("Personal");
+      await user.click(
+        personal.getByRole("switch", {
+          name: "uBlock Origin Lite in Personal",
+        }),
+      );
+      await waitFor(() => {
+        expect(host.switched).toEqual([
+          { enabled: true, id: UBLOCK, profile: "personal" },
+        ]);
+      });
+      expect(host.writes).toEqual([]);
+    });
+
+    it("switches an extension the config locks in the config", async () => {
+      const { host, user } = await openProfiles();
+      const work = await profileCard("Work");
+      await user.click(
+        work.getByRole("switch", { name: "uBlock Origin Lite in Work" }),
+      );
+      await waitFor(() => {
+        expect(written(host.writes).browser.profiles.work.extensions).toEqual(
+          [],
+        );
+      });
+      expect(host.switched).toEqual([]);
+    });
+
+    it("locks what the config sets when the config is read-only", async () => {
+      await openProfiles(false);
+      const work = await profileCard("Work");
+      expect(
+        work.getByRole("switch", { name: "uBlock Origin Lite in Work" }),
+      ).toHaveAttribute("aria-disabled", "true");
+      expect(
+        screen.getByRole("combobox", { name: "Where *.acme.com opens" }),
+      ).toBeDisabled();
+      expect(
+        screen.queryByRole("button", { name: "Remove *.acme.com" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("combobox", { name: "Where github.com/acme opens" }),
+      ).toBeEnabled();
+      expect(
+        screen.queryByRole("button", { name: "Make default" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("adds a site through the desktop", async () => {
+      const { host, user } = await openProfiles();
+      await user.type(
+        await screen.findByRole("textbox", { name: "Add a site" }),
+        "Chase.com",
+      );
+      await choose(user, "Profile to open it in", "Private");
+      await user.click(screen.getByRole("button", { name: "Add" }));
+      await waitFor(() => {
+        expect(host.pinned).toEqual([
+          { profile: "private", site: "chase.com" },
+        ]);
+      });
+      expect(
+        await screen.findByRole("combobox", { name: "Where chase.com opens" }),
+      ).toHaveTextContent("Private");
+    });
+
+    it("refuses a site that is already listed, pointing at its row", async () => {
+      const { host, user } = await openProfiles();
+      await user.type(
+        await screen.findByRole("textbox", { name: "Add a site" }),
+        "github.com/acme",
+      );
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "github.com/acme already opens in Work. Change its profile in its row above.",
+      );
+      expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+      expect(host.pinned).toEqual([]);
+    });
+
+    it("moves the config's site in the config and the user's through the desktop", async () => {
+      const { host, user } = await openProfiles();
+      await screen.findByRole("combobox", { name: "Where *.acme.com opens" });
+      await choose(user, "Where *.acme.com opens", "Private");
+      await waitFor(() => {
+        expect(written(host.writes).browser.sites).toEqual({
+          "*.acme.com": "private",
+        });
+      });
+      await user.click(
+        screen.getByRole("button", { name: "Remove github.com/acme" }),
+      );
+      await waitFor(() => {
+        expect(host.pinned).toEqual([
+          { profile: "personal", site: "github.com/acme" },
+        ]);
+      });
+    });
+
+    it("makes a profile the default, unlisting its sites", async () => {
+      const { host, user } = await openProfiles();
+      const work = await profileCard("Work");
+      await user.click(work.getByRole("button", { name: "Make default" }));
+      await waitFor(() => {
+        const { browser } = written(host.writes);
+        expect(browser.default_profile).toBe("work");
+        expect(browser.sites).toEqual({});
+      });
+    });
+
+    it("moves a profile in the config's order", async () => {
+      const { host, user } = await openProfiles();
+      const personal = await profileCard("Personal");
+      expect(
+        personal.getByRole("button", { name: "Move Personal up" }),
+      ).toBeDisabled();
+      const work = await profileCard("Work");
+      await user.click(work.getByRole("button", { name: "Move Work up" }));
+      // Unordered, the config lists them by id: personal, private, work.
+      await waitFor(() => {
+        expect(written(host.writes).browser.order).toEqual([
+          "personal",
+          "work",
+          "private",
+        ]);
+      });
+    });
+
+    it("sets any color from the well", async () => {
+      const { host } = await openProfiles();
+      const work = await profileCard("Work");
+      const well = work.getByLabelText("Work's color, any color");
+      fireEvent.change(well, { target: { value: "#2bd96b" } });
+      fireEvent.blur(well);
+      await waitFor(() => {
+        expect(written(host.writes).browser.profiles.work?.color).toBe(
+          "#2bd96b",
+        );
+      });
+    });
+
+    it("adds and removes a profile in the config", async () => {
+      const { host, user } = await openProfiles();
+      await user.type(
+        await screen.findByRole("textbox", { name: "New profile's name" }),
+        "Side Project",
+      );
+      await user.click(screen.getByRole("button", { name: "Add profile" }));
+      await waitFor(() => {
+        expect(written(host.writes).browser.profiles["side-project"]).toEqual({
+          color: "#06b6d4",
+          name: "Side Project",
+          private: false,
+        });
+      });
+      const work = await profileCard("Work");
+      await user.click(work.getByRole("button", { name: "Remove Work" }));
+      await waitFor(() => {
+        const { browser } = written(host.writes);
+        expect(Object.keys(browser.profiles)).not.toContain("work");
+        expect(browser.sites).toEqual({});
       });
     });
   });

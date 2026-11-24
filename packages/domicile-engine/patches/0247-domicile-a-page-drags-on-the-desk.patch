@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page drags on the desk
+
+Dragging text, an image or a link out of a page did nothing on a tty. Ozone
+DRM and headless windows have no `WmDragHandler`, and
+`DesktopDragDropClientOzone::StartDragAndDrop` answers a drag with no
+handler with kNone before it starts. Nothing logged it.
+
+`DesktopWindowTreeHostPlatform::CreateDragDropClient` now gives such a
+window the desk's own handler, `DeskDragHandler`
+(ui/views/widget/desktop_aura/domicile/desk_drag_handler.h), as ash runs
+its own drags:
+
+- An `aura::Env` pre-target handler takes every event while the drag runs,
+  in the root window's DIPs, and hands moves and the release to the
+  window's drop handler, which is the client itself.
+- Escape or a touch cancel cancels.
+- The drag image is a layer at the top of the root window.
+
+The client finds a drop's target with `aura::DeskWindowAt`, so a drop on
+another monitor of the desk reaches the desk page, as an event there does.
+
+Every platform with a window manager keeps its own handler.
+
+`DeskDragTest` covers the drag's steps. `test-a-page-drags-on-the-desk.sh`
+reads the series for the wiring.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ ui/views/BUILD.gn                                      |  6 +++++-
+ .../desktop_aura/desktop_drag_drop_client_ozone.cc     |  6 ++++--
+ .../desktop_aura/desktop_window_tree_host_platform.cc  | 10 ++++++++++
+ .../desktop_aura/desktop_window_tree_host_platform.h   |  6 ++++++
+ 4 files changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/ui/views/BUILD.gn b/ui/views/BUILD.gn
+index 7e3d6be..b694296 100644
+--- a/ui/views/BUILD.gn
++++ b/ui/views/BUILD.gn
+@@ -948,7 +948,11 @@ component("views") {
+         "widget/desktop_aura/desktop_screen_position_client.cc",
+         "widget/desktop_aura/desktop_window_tree_host.cc",
+       ]
+-      deps += [ "//ui/views/widget/desktop_aura/domicile:cursor_color_scheme" ]
++      deps += [
++        "//ui/aura/domicile:desk_targeter",
++        "//ui/views/widget/desktop_aura/domicile:cursor_color_scheme",
++        "//ui/views/widget/desktop_aura/domicile:desk_drag",
++      ]
+       if (is_win) {
+         public += [
+           "widget/desktop_aura/desktop_drag_drop_client_win.h",
+diff --git a/ui/views/widget/desktop_aura/desktop_drag_drop_client_ozone.cc b/ui/views/widget/desktop_aura/desktop_drag_drop_client_ozone.cc
+index 03f0a87..8b0f465 100644
+--- a/ui/views/widget/desktop_aura/desktop_drag_drop_client_ozone.cc
++++ b/ui/views/widget/desktop_aura/desktop_drag_drop_client_ozone.cc
+@@ -15,6 +15,7 @@
+ #include "ui/aura/client/capture_client.h"
+ #include "ui/aura/client/cursor_client.h"
+ #include "ui/aura/client/drag_drop_client_observer.h"
++#include "ui/aura/domicile/desk_targeter.h"
+ #include "ui/aura/env.h"
+ #include "ui/aura/window.h"
+ #include "ui/aura/window_tracker.h"
+@@ -432,8 +433,9 @@ std::unique_ptr<ui::DropTargetEvent>
+ DesktopDragDropClientOzone::UpdateTargetAndCreateDropEvent() {
+   CHECK(data_to_drop_, base::NotFatalUntil::M163);
+ 
+-  aura::Window* window = root_window_->GetEventHandlerForPoint(
+-      gfx::ToFlooredPoint(drag_location_));
++  // DOMICILE: on a desk spanning monitors, a point outside the host window is
++  // the desk page's, as an event's is. See ui/aura/domicile/desk_targeter.h.
++  aura::Window* window = aura::DeskWindowAt(root_window_, drag_location_);
+ 
+   if (!window) {
+     ResetDragDropTarget();
+diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
+index 83aae7b..0456a41 100644
+--- a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
++++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
+@@ -397,6 +397,16 @@ DesktopWindowTreeHostPlatform::CreateTooltip() {
+ std::unique_ptr<aura::client::DragDropClient>
+ DesktopWindowTreeHostPlatform::CreateDragDropClient() {
+   ui::WmDragHandler* drag_handler = ui::GetWmDragHandler(*(platform_window()));
++  // DOMICILE: A DESK WITH NOBODY TO RUN ITS DRAGS RUNS THEM ITSELF. Ozone DRM
++  // and headless windows have no drag handler, and upstream's client answers
++  // every drag there with kNone before it starts: no page on the desk could
++  // drag text, an image or a link anywhere, and nothing said so. Every other
++  // platform's window manager runs the drag, and keeps doing so.
++  if (!drag_handler) {
++    desk_drag_handler_ =
++        std::make_unique<DeskDragHandler>(window(), *platform_window());
++    drag_handler = desk_drag_handler_.get();
++  }
+   std::unique_ptr<DesktopDragDropClientOzone> drag_drop_client =
+ #if BUILDFLAG(IS_LINUX)
+       std::make_unique<DesktopDragDropClientOzoneLinux>(window(), drag_handler);
+diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
+index 675393f..92aade0 100644
+--- a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
++++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
+@@ -23,6 +23,7 @@
+ #include "ui/platform_window/extensions/workspace_extension_delegate.h"
+ #include "ui/views/views_export.h"
+ #include "ui/views/widget/desktop_aura/desktop_window_tree_host.h"
++#include "ui/views/widget/desktop_aura/domicile/desk_drag_handler.h"
+ #include "ui/views/widget/desktop_aura/window_move_client_platform.h"
+ 
+ namespace ui {
+@@ -302,6 +303,11 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform
+ 
+   std::unique_ptr<ui::ExternalBeginFrameAdapter> begin_frame_adapter_;
+ 
++  // DOMICILE: runs drags where the platform window cannot. See
++  // `CreateDragDropClient`. Outlives the drag-drop client, which
++  // `DesktopNativeWidgetAura` destroys before this host.
++  std::unique_ptr<DeskDragHandler> desk_drag_handler_;
++
+   // Used for tab dragging in move loop requests.
+   WindowMoveClientPlatform window_move_client_;
+ 

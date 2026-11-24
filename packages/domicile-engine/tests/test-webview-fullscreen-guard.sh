@@ -10,6 +10,7 @@
 #   - Escape that does not leave fails: a page could keep the user in.
 #   - `exitPageFullscreen()` that does not leave fails: a shell could not take
 #     the page out with its window.
+#   - A fault reported after the page left each time fails: a false alarm.
 #   - In the control, any fullscreen report fails: the press was on the part of
 #     the page that asks for nothing.
 #
@@ -57,6 +58,7 @@ judge() { # $1 NEGATIVE, then NAME=value overrides
     SAW_REENTERED=1
     SAW_EXITED=1
     SAW_ANY=1
+    SAW_FAULT=0
     NEGATIVE="$1"
     shift
     for override in "$@"; do
@@ -122,6 +124,10 @@ expect "a page still fullscreen after Escape is a failure" "fail" \
 expect "no second entry is a failure" "fail" "$(verdict 0 SAW_REENTERED=0)"
 expect "no exit from the shell blames exitPageFullscreen" "yes" \
   "$(blames "exitPageFullscreen" 0 SAW_EXITED=0)"
+expect "a fault after a clean exit is a failure" "fail" \
+  "$(verdict 0 SAW_FAULT=1)"
+expect "a fault after a clean exit blames CheckLeftFullscreen" "yes" \
+  "$(blames "CheckLeftFullscreen" 0 SAW_FAULT=1)"
 
 echo
 echo "the control run — a press on the half that asks for nothing"

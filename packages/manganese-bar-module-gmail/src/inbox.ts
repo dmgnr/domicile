@@ -10,9 +10,16 @@ export enum InboxKind {
 export const Inbox = {
   /**
    * Every conversation, and the unread ones, with the newest message of each
-   * of the newest unread conversations.
+   * of the newest unread conversations, and the addresses the account sends
+   * from: its own, then its aliases.
    */
-  Counted: (total: number, unread: number, latest: readonly Mail[] = []) => ({
+  Counted: (
+    total: number,
+    unread: number,
+    latest: readonly Mail[] = [],
+    addresses: readonly string[] = [],
+  ) => ({
+    addresses,
     kind: InboxKind.Counted as const,
     latest,
     total,

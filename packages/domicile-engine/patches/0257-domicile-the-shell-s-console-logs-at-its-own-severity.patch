@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the shell's console logs at its own severity
+
+A shell's console.error was logged at INFO, like any page's, so a desktop
+logging errors alone dropped it. The shell and app modules are built-in
+components now, so their console messages keep their severity: an error
+is an error, and a console.debug is VERBOSE.
+---
+ chrome/browser/chrome_content_browser_client.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 7a5496f..095741c 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -8333,6 +8333,13 @@ std::optional<gfx::ImageSkia> ChromeContentBrowserClient::GetProductLogo() {
+ bool ChromeContentBrowserClient::IsBuiltinComponent(
+     content::BrowserContext* browser_context,
+     const url::Origin& origin) {
++  // Domicile: the shell and app modules are the desktop's own, so their
++  // console logs at its own severity, as an extension's does: an error is an
++  // error in the desktop's logs, which keep errors alone by default. Any
++  // other page's console is `INFO`. See docs/LOGGING.md.
++  if (origin.scheme() == domicile::kDomicileScheme) {
++    return true;
++  }
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   return ChromeContentBrowserClientExtensionsPart::IsBuiltinComponent(
+       browser_context, origin);

@@ -6,6 +6,7 @@ import { Keymap } from "@domicile-desktop/manganese-bar-module-keymap";
 import { LauncherButton } from "@domicile-desktop/manganese-bar-module-launcher-button";
 import { Notifications } from "@domicile-desktop/manganese-bar-module-notifications";
 import { Sharing } from "@domicile-desktop/manganese-bar-module-sharing";
+import { Agents } from "@domicile-desktop/manganese-bar-module-sharing/agents";
 import { Tray } from "@domicile-desktop/manganese-bar-module-tray";
 import { WorkspaceSwitcher } from "@domicile-desktop/manganese-bar-module-workspace-switcher";
 import { QuickSettings } from "@domicile-desktop/manganese-quick-settings";
@@ -34,9 +35,10 @@ describe("DEFAULT_BAR", () => {
     expect(types(rest)).toEqual([WorkspaceSwitcher]);
   });
 
-  it("is sharing, keep awake, casting, downloads, the keymap, quick settings and the bell on the right", () => {
+  it("is sharing, agents, keep awake, casting, downloads, the keymap, quick settings and the bell on the right", () => {
     expect(types(DEFAULT_BAR.right)).toEqual([
       Sharing,
+      Agents,
       KeptAwake,
       Cast,
       Downloads,

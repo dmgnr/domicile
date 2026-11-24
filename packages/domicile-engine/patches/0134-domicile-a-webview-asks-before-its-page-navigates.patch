@@ -21,7 +21,7 @@ job builds it on `crux`.
  3 files changed, 5 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 10f93f7..43bf035 100644
+index 8879f0f..4fff2b5 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1224,6 +1224,8 @@ generated_interface_sources_in_core = [
@@ -34,7 +34,7 @@ index 10f93f7..43bf035 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index e76aaf2..bc8f80b 100644
+index 379441b..f0b8602 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -470,6 +470,7 @@ static_idl_files_in_core = [
@@ -46,7 +46,7 @@ index e76aaf2..bc8f80b 100644
    "//third_party/blink/renderer/core/html/html_head_element.idl",
    "//third_party/blink/renderer/core/html/html_heading_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 63e56dc..50eb956 100644
+index 377916b..470b86a 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -108,6 +108,8 @@ blink_core_sources_html = [

@@ -85,6 +85,9 @@ plus.addEventListener("click", () => {
 - **`browser.countMatches(id, selector)`** counts the elements matching a CSS
   selector in window `id`'s page, as a `<webview>`'s `countMatches` does. A
   hidden window answers.
+- **`browser.clickMatch(id, selector)`** clicks the first shown element matching
+  a CSS selector in window `id`'s page, as a `<webview>`'s `clickMatch` does,
+  and resolves whether one matched.
 - **Set `window` before the view enters the document.** The engine reads it
   once, when the view connects. A window shows in one view at a time: a second
   view naming it stays empty, so never remount the view drawing it.
@@ -138,12 +141,57 @@ view.addEventListener(WEBVIEW_WILL_NAVIGATE_EVENT, (event) => {
   `isPrivate: true`. Draw it so the user can tell.
 - **`<webview private>`** makes your own page private, such as a preview. Set
   `private` before the view enters the document.
-- A private page is in Chrome's off-the-record profile: its cookies, cache and
-  storage stay in memory, shared by every private page and none of the user's.
-- Private data ends when the last private page closes, whether a private
+- A private page is in the default private profile, off the record: its
+  cookies, cache and storage stay in memory, shared by every page of that
+  profile and none of the user's others.
+- Private data ends when the profile's last page closes, whether a private
   window or a `<webview private>`. The next private page starts empty.
 - A private window's new windows are private too.
-- Extensions see no private page.
+- Only the extensions switched on in the private profile see its pages.
+
+## Browser profiles
+
+A browser profile is a set of sign-ins, site data and extensions, from the
+config's `browser.profiles`. See
+[BROWSER-PROFILES.md](architecture/BROWSER-PROFILES.md).
+
+- **`domicile.browserProfiles`** lists them, each with its `id`, `name`,
+  `color`, `isPrivate`, and whether it `isDefault` or `isDefaultPrivate`. It
+  changes with `browserprofileschanged`.
+- Every browser window is listed with its `profile` id, a site's app window
+  (`openAppWindow`) included. An app module's or Electron app's window has
+  `null`.
+- **`domicile.openAppWindow(url, appId, reuse, profile)`** opens a new app
+  window in `profile`, or with `""` where its site goes.
+- **`domicile.openBrowserWindow(url, partition, profile)`** opens a window in
+  `profile`. `""` opens it where its site goes: the most specific of the
+  config's `browser.sites` that matches `url`, or the default profile.
+  **`domicile.browserProfileFor(url)`** resolves to that profile's id, and
+  **`domicile.browserSiteFor(url)`** to the `browser.sites` entry that
+  matched, or `""`.
+- **`domicile.pinBrowserSite(site, profile)`** opens a site in a profile from
+  now on, as a profile menu's pin does. The engine keeps the pin across
+  restarts and lists it in the profile's `pinnedSites`. The config wins: a
+  site in its `browser.sites` is in the profile's `configSites` and the pin is
+  refused. Pinning to the default profile removes the pin.
+- **`<webview profile="work">`** puts your own page in one. Set it before the
+  view enters the document.
+- **The engine moves pages between profiles.** When the user takes a window
+  to a site of another profile with a link, the address bar or back and
+  forward, the page moves there in place. A page you moved by hand stays
+  while it stays on the same site. Redirects, a page's own script and pages
+  with an opener stay where they are, so a sign-in finishes where it started.
+- **`domicile.reopenBrowserWindow(id, profile)`** moves window `id` to
+  `profile`, for the user picking a profile. The page reloads there.
+- **A moved window keeps its id.** Its `<webview window>` shows the new page
+  on its own, and the next list shows its new `profile`. The back and forward
+  list comes along as addresses. Form input does not, and anything the old
+  page was asking, such as a permission, is withdrawn.
+- A page's new window with no opener opens where its site goes, as above. A
+  private page's new windows stay in its profile, and a private page never
+  moves on its own.
+- A profile the desk no longer has opens in the default one, or the default
+  private one for a private page.
 
 ## Partitions
 
@@ -170,6 +218,13 @@ user's and every other partition, like a separate browser profile:
   with a copy of the view's history and take the step there, as a middle
   click on Chrome's back button does. The view stays on its page. A private
   view's window is private.
+- **`history()`** lists the pages behind and ahead of the current one, each
+  side nearest first, with each page's `id`, `url`, `title` and `favicon` (a
+  `data:` URL, or `""`), for a back or forward menu like Chrome's.
+  `goToHistoryEntry(id)` goes to one; `goToHistoryEntryInNewWindow(id)` goes
+  there in a new window, as `goBackInNewWindow` does. An `id` gone from the
+  history does nothing. Manganese lists them on a long press or right click
+  on Back or Forward.
 - `src` is reflected: setting the property or the attribute navigates. A view
   drawing a browser window does not send `src` on connect, since the page is
   already loaded.
@@ -201,6 +256,12 @@ user's and every other partition, like a separate browser profile:
   cannot change the answer. A hidden page answers. It throws `SyntaxError` for
   a bad selector, and rejects with `InvalidStateError` before the view has a
   page or when the page gave no number, as when it navigated first.
+- **`view.clickMatch(selector)`** clicks the first shown element in the page's
+  main document that matches a CSS selector, as a press of the mouse's main
+  button on it does: scrolled into view, it gets `pointerdown`, `mousedown`,
+  `pointerup`, `mouseup` and `click`, which the page hears as untrusted events.
+  A hidden page is clicked too. It resolves whether an element matched, throws
+  and rejects as `countMatches` does.
 
 ## State: history, loading, address
 
@@ -335,9 +396,19 @@ Bind browser keys yourself:
 
 - `domicile-guest-keydown`: a `KeyboardEvent` for each chord (Ctrl, Alt or
   Meta held) the page did not `preventDefault`. Plain keys never arrive.
+- `domicile-guest-keyup`: a `KeyboardEvent` for each modifier (Alt, Control,
+  Meta or Shift) let go of that the page did not `preventDefault`. With
+  `domicile-guest-keydown`, it tells a lone Alt tap from Alt held for a chord.
+  Other keys' releases never arrive.
+- `domicile-key-delivered`: a plain `Event` for each key press the page gets
+  (not a modifier, a repeat or a grabbed chord). Names no key. `<app>` fires
+  the same for its client.
 - `domicile-zoom-in-request` / `domicile-zoom-out-request`: Ctrl+wheel. They
   zoom nothing. Call `view.setZoom(factor)` (0.25 to 5). Zoom is per host, as
-  in Chrome.
+  in Chrome. A page an extension set to another zoom mode keeps it:
+  - `manual`, such as a PDF: the page zooms itself to `factor`, and `zoom`
+    reports it.
+  - `disabled`: nothing zooms, and `zoom` stays.
 - `view.find(text, backward)` searches; the same text again goes to the next
   match. `view.stopFinding()` ends it. A navigation ends it too. Matches are
   counted across all frames.
@@ -351,17 +422,26 @@ Draw the context menu yourself:
 
 - `domicile-context-menu`: a right click the page did not `preventDefault`.
   The event carries what was under the click: `linkUrl`, `srcUrl`,
-  `mediaType`, `selectionText`, `isEditable`, the `can*` edit flags, and `x` /
-  `y` relative to the view.
+  `mediaType`, `selectionText`, `isEditable`, the `can*` edit flags,
+  `canPictureInPicture` / `inPictureInPicture` for a video, and `x` / `y`
+  relative to the view.
+- Over a misspelled word in a field, `misspelledWord` names it and
+  `spellingSuggestions` lists the dictionary's fixes, best first. Both are
+  empty elsewhere. `event.replaceMisspelling(word)` puts `word` in its place;
+  `event.run("add-to-dictionary")` stops it being marked. Both throw over
+  anything but a misspelling. Languages come from the config's
+  [`spellcheck`](SHELL-CONFIG.md#spelling).
 - `event.run(action)` does what only the browser can: `copy-link-address`,
-  `save-link-as`, `copy-image`, `copy-media-address`, `save-media-as`, the
-  edit commands (`cut`, `paste`, …) and `inspect`. A save asks
-  `domicile-file-chooser` where. See `WEBVIEW_CONTEXT_MENU_ACTIONS`.
+  `save-link-as`, `copy-image`, `copy-media-address`, `save-media-as`,
+  `picture-in-picture` (enters, or leaves when in), the edit commands (`cut`,
+  `paste`, …), `add-to-dictionary` and `inspect`. A save asks `domicile-file-chooser` where. See `WEBVIEW_CONTEXT_MENU_ACTIONS`.
 - Back, reload and "open in new window" (`browser.open`) need no menu
   action.
 - `view.inspect()` opens DevTools for the page in a new browser window. It
   arrives in the next `browser_windows`, like any other window. DevTools draws
   its own context menus, so its window fires no `domicile-context-menu`.
+- An Electron app's windows and views fire no `domicile-context-menu`
+  either: their app draws their menus, as on Electron.
 - Manganese's `browser/page-menu.ts` builds Chrome's menu from the event.
 
 Desktop chords from `bindKeys` still work while a guest has focus. They arrive
@@ -389,6 +469,176 @@ the opener, the window name and a form's POST body are kept. It is listed once
 the page shows it, at the address it opens. A middle click opens the link with
 no opener, as in Chrome.
 
+## Views
+
+An Electron app's window can be made of several pages: its own, and views
+(`WebContentsView`) the app places over it. Claude Desktop's window is a
+title bar page with the whole chat in a view under it.
+
+- **Views are listed apart, in `domicile.browser.views`**, bottom first,
+  each with `parent` set to its window's `id`. `domicile.browser.windows`
+  holds no views, so your window list, task switcher and tiling never see
+  one. A view is listed only while a window holds it.
+- **Draw it with `<webview window>`** as any window, inside or over its
+  window. Its app asks for it at `x`, `y`, `width` and `height`, in CSS pixels
+  from the top left of the window's page. Honor that and the app looks as it
+  does elsewhere, or lay views out your own way, such as in tabs.
+- **`isHidden`:** the app hid the view. Keep it laid out, out of sight, as
+  a page draws only while laid out.
+- The app hears the size you give each page, its window's and its views', and
+  lays itself out again, so a view you draw at another size still fits.
+- Manganese draws each view where its app asks
+  (`packages/manganese-window-management/src/browser/PageViews.tsx`).
+
+```js
+for (const view of domicile.browser.views ?? []) {
+  const element = drawn.get(view.id);
+  element.style.left = `${view.x}px`;
+  element.style.top = `${view.y}px`;
+  element.style.width = `${view.width}px`;
+  element.style.height = `${view.height}px`;
+  element.style.visibility = view.isHidden ? "hidden" : "visible";
+}
+```
+
+See "Windows" in [ELECTRON-APPS.md](architecture/ELECTRON-APPS.md).
+
+## Menu bars
+
+An Electron app window can have a menu bar (File, Edit, View, ...), which
+the shell draws under the window's tab.
+
+- **`menu`** is the menu's entries as JSON, or `undefined` for none. Each
+  entry has an `id` (a whole number from 1), a `type` (`normal`,
+  `separator`, `submenu`, `checkbox` or `radio`), a `label` with Electron's
+  `&` mnemonics (`&File`; `&&` is an ampersand), `enabled`, `visible` and
+  `checked`, and maybe an `accelerator` as the app wrote it
+  (`CmdOrCtrl+Shift+N`), an `icon` (a PNG `data:` URL) and a `submenu` of
+  entries.
+- **`menuBarVisible`** says whether the bar shows. With **`menuBarAutoHide`**,
+  as Electron's `autoHideMenuBar`, it shows after Alt is tapped, and hides
+  again after a click or Escape. An Alt tap over the window is an Alt
+  `domicile-guest-keydown` then an Alt `domicile-guest-keyup` with no other
+  chord between.
+- **Click an entry** with `domicile.browser.clickMenu(id, entry.id)`.
+  The app runs it: a checkbox or radio changes, and the next list shows it.
+- **Accelerators** run the entry, as Electron's menus do: match each
+  `domicile-guest-keydown` against them. The page gets the key first, so a
+  page that takes the chord keeps it.
+
+`@domicile-desktop/sdk/app-menu` reads the menu: `appMenu(window.menu)` gives
+its entries with mnemonics found, hidden ones left out and accelerators
+parsed (with a `label` such as `Ctrl+Shift+N` to show). `acceleratedBy` finds
+the entry a `domicile-guest-keydown` runs, and `openedByMnemonic` the menu Alt
+and a letter open.
+
+<!-- tab: React -->
+
+```tsx
+import { useDomicile } from "@domicile-desktop/react/domicile-provider";
+import { acceleratedBy, appMenu } from "@domicile-desktop/sdk/app-menu";
+import { type RefObject, useEffect, useMemo } from "react";
+
+const AppMenu = ({
+  id,
+  menu,
+  view,
+}: {
+  id: string;
+  menu: string;
+  view: RefObject<HTMLElement | null>;
+}) => {
+  const { browser } = useDomicile();
+  const entries = useMemo(() => appMenu(menu), [menu]);
+  useEffect(() => {
+    const element = view.current;
+    const run = (event: KeyboardEvent) => {
+      const entry = acceleratedBy(entries, event);
+      if (entry !== undefined) {
+        browser.clickMenu(id, entry.id);
+      }
+    };
+    element?.addEventListener("domicile-guest-keydown", run);
+    return () => element?.removeEventListener("domicile-guest-keydown", run);
+  }, [browser, entries, id, view]);
+  return (
+    <MenuBar
+      entries={entries}
+      onChoose={(entry) => browser.clickMenu(id, entry.id)}
+    />
+  );
+};
+```
+
+<!-- tab: JavaScript -->
+
+```js
+import { acceleratedBy, appMenu } from "@domicile-desktop/sdk/app-menu";
+
+for (const window of domicile.browser.windows ?? []) {
+  if (window.menu !== undefined && window.menuBarVisible) {
+    const entries = appMenu(window.menu);
+    drawMenuBar(window.id, entries, (entry) => {
+      domicile.browser.clickMenu(window.id, entry.id);
+    });
+    viewOf(window.id).addEventListener("domicile-guest-keydown", (event) => {
+      const entry = acceleratedBy(entries, event);
+      if (entry !== undefined) {
+        domicile.browser.clickMenu(window.id, entry.id);
+      }
+    });
+  }
+}
+```
+
+<!-- /tabs -->
+
+Manganese draws it with the component library's `MenuBar`.
+
+An app can also pop a menu up (`Menu.popup`), as Claude's menu button does:
+
+- **`popupMenu`** is the menu as JSON, `{menu, x, y}`, or `undefined` for
+  none: `menu` holds entries as `menu` does, and `x` and `y` are where it
+  goes, in CSS pixels from the window's page's top left.
+- **Answer it** with `domicile.browser.answerPopupMenu(id, entry.id)` for
+  the entry chosen, or `0` when it is put away with none. The app runs the
+  entry, and the next list has no `popupMenu`.
+
+`appPopupMenu(window.popupMenu)` in `@domicile-desktop/sdk/app-menu` reads it
+as `{entries, at}`. Manganese draws it with the component library's
+`ContextMenu`.
+
+See "Desktop pieces" in [ELECTRON-APPS.md](architecture/ELECTRON-APPS.md).
+
+## Message boxes
+
+An Electron app window can ask a message box ("Quit Claude?"), which the
+shell draws over the window's page, as it draws a page's
+[dialogs](#dialogs).
+
+- **`messageBox`** is the box the window shows as JSON, or `undefined` for
+  none: its `type` (`none`, `info`, `error`, `question` or `warning`),
+  `title`, `message`, `detail`, `buttons` (labels, in the app's order),
+  `defaultId` (the button Enter presses, or -1 for none), `cancelId` (the
+  button Escape presses), `checkboxLabel` (empty for no checkbox) and
+  `checkboxChecked`.
+- **Answer it** with `domicile.browser.answerMessageBox(id, button,
+  checkboxChecked)`, `button` an index into `buttons`. The app hears the
+  answer, and the window lists its next box, if it asked another.
+- A window that closes under a box answers it with `cancelId`.
+- **`@domicile-desktop/sdk/message-box`**'s `messageBox` reads the JSON into
+  what to draw, with no default or checkbox as `undefined`.
+
+```js
+for (const window of domicile.browser.windows ?? []) {
+  if (window.messageBox !== undefined) {
+    drawMessageBox(window.id, JSON.parse(window.messageBox), (button, checked) => {
+      domicile.browser.answerMessageBox(window.id, button, checked);
+    });
+  }
+}
+```
+
 ## Fullscreen
 
 A page's `requestFullscreen()`, such as a video's fullscreen button, makes it
@@ -402,6 +652,57 @@ fullscreen at once:
 
 Manganese fills the screen with the window while its page is fullscreen
 (`usePageFullscreen`).
+
+An Electron app can ask for its window's state too (`win.maximize`,
+`minimize`, `setFullScreen`). The shell decides:
+
+- **`wantsMaximized`**, **`wantsMinimized`** and **`wantsFullscreen`** are
+  what the app asks; each is false for any other window, and `change` fires
+  when one changes.
+- **Report what you made the window** with
+  `domicile.browser.setWindowState(id, {maximized, minimized, fullscreen})`,
+  whether or not the app asked, such as when the user takes it out of
+  fullscreen. The app hears each change, and reads `isMaximized()` and the
+  rest from it. Reporting the same state again is fine: the app hears only
+  changes. Any other window ignores it.
+
+Manganese fills the screen with a window whose app wants fullscreen, as for a
+fullscreen page, and reports whether the window fills its screen. Its windows
+tile, so it reports none maximized or minimized (`useAppWindowState`).
+
+## Picture-in-picture video
+
+A page's `requestPictureInPicture()`, its video controls' button, or the
+context menu's `picture-in-picture` lists the video in
+`domicile.pictureInPicture.videos`; `change` fires as videos come and go, play
+and pause. Each has the browser window it plays in (`window`), its
+own size, which controls the site offers, and its length and position.
+
+Show one with `<app picture-in-picture="id">`: the element draws the page's
+own video, stretched to its box. It fires `PICTURE_IN_PICTURE_SHOWN_EVENT`
+(`@domicile-desktop/sdk/desktop/picture-in-picture`) once it embeds the
+video's first surface: show the element, or start its motion, from there
+rather than over an empty box. It keeps its last frame after the video leaves
+picture-in-picture, for a fade. Tell the page how big it is shown with
+`pictureInPicture.resize(id, width, height)`, move it with
+`pictureInPicture.seek(id, seconds)`, and act on it with
+`pictureInPicture.act(id, action)`:
+
+- `"play"`, `"pause"`, `"previous-track"` and `"next-track"`, as the video's
+  controls do.
+- `"back-to-page"` ends picture-in-picture, leaves the video playing in its
+  page and asks for its window in front (`WEBVIEW_FOCUS_REQUEST_EVENT` on
+  its `<webview>`).
+- `"close"` ends it and pauses the video.
+
+A video's `width` and `height` are 0 until its page says them; keep its box
+in the shape it has now.
+
+Manganese floats each video over every window, in the bottom-right corner of
+its window's screen, with its controls and progress bar under the pointer. It
+grows out of its place in the page once drawn; "Back to tab" and close
+shrink it back in before acting, and it fades there once the page has the
+video again.
 
 ## Crashed pages
 
@@ -662,6 +963,9 @@ frame.addEventListener(WEBVIEW_PERMISSION_REQUEST_EVENT, (event) => {
   A browser window is captured as a tab: its page alone, its sound,
   `cropTo()` and its capture handle. `preferCurrentTab` opens the same
   picker, where the page's own browser window is listed with the rest.
+  A `getUserMedia()` with `chromeMediaSource: "desktop"`, as Electron apps
+  capture a `desktopCapturer` source, opens it too, whatever source it
+  names.
   - The promise waits for the pick. Canceling the picker rejects it with
     `NotAllowedError`.
   - The pick opens two portal sessions: the picker's, then the capture's,
@@ -790,7 +1094,7 @@ Manganese draws it over the page it pauses
 
 ## Links for applications
 
-A link for an application, such as `zoommtg:` or `mailto:`, fires
+A link for an application, such as `zoommtg:`, fires
 `domicile-external-app` instead of Chrome's "Open xdg-open?" dialog:
 
 <!-- tab: React -->
@@ -833,7 +1137,10 @@ frame.addEventListener(WEBVIEW_EXTERNAL_APP_EVENT, (event) => {
 - **`open(remember)`:** launches the scheme's default application. With
   `remember` and `mayRemember` (secure sites only), the site opens these links
   without asking from then on.
-- **Not fired** for a blocked scheme or a site already remembered.
+- **Not fired** for a blocked scheme or a site already remembered, or for
+  `mailto:`, which Chrome opens without asking through `xdg-email`. A shell
+  that claims `mailto:` gets it from `domicile.shell.links`
+  ([Links](WRITING-A-SHELL.md#links)).
 - **One at a time.** A newer one replaces the open one, which opens nothing
   and fires `domicile-external-app-withdrawn`.
 
@@ -1009,6 +1316,69 @@ frame.addEventListener(WEBVIEW_PICKER_EVENT, (event) => {
   fires `domicile-picker-withdrawn`, as does one the page closes.
 
 Manganese draws them over the page (`manganese-page-requests/PickerAsk.tsx`).
+
+## "Sign in with"
+
+A site that signs in with an identity provider ("Sign in with Google",
+FedCM) fires `domicile-identity` for each step of it, instead of Chrome's
+account chooser:
+
+<!-- tab: React -->
+
+```tsx
+import { WEBVIEW_IDENTITY_EVENT } from "@domicile-desktop/sdk/webview-element";
+
+useEffect(() => {
+  const frame = frameRef.current; // the browser window's element
+  const asked = (event) => {
+    event.preventDefault(); // claim it
+    show(event.step, event.site, event.providers(), event.accounts()).then(
+      (account) => event.choose(account),
+      () => event.dismiss(),
+    );
+  };
+  frame?.addEventListener(WEBVIEW_IDENTITY_EVENT, asked);
+  return () => frame?.removeEventListener(WEBVIEW_IDENTITY_EVENT, asked);
+}, []);
+```
+
+<!-- tab: JavaScript -->
+
+```js
+import { WEBVIEW_IDENTITY_EVENT } from "@domicile-desktop/sdk/webview-element";
+
+frame.addEventListener(WEBVIEW_IDENTITY_EVENT, (event) => {
+  event.preventDefault(); // claim it
+  show(event.step, event.site, event.providers(), event.accounts()).then(
+    (account) => event.choose(account),
+    () => event.dismiss(),
+  );
+});
+```
+
+<!-- /tabs -->
+
+- **`preventDefault()`:** claims it. Unclaimed, the request fails.
+- **`step`:** `loading`, `accounts`, `signed-out`, `verifying` or `error`;
+  `WEBVIEW_IDENTITY_STEPS` gives what each shows and takes.
+- **`button`:** the page asked from its own sign-in button, so show it over
+  the page. False when the site offers it unasked, as many do on load: leave
+  the page usable.
+- **`site`**, **`purpose`:** the site signing in and what for (`sign-in`,
+  `sign-up`, `use`, `continue`), to title it.
+- **`providers()`**, **`accounts()`:** each account names its provider and
+  what signing in with it `shared`s with the site the first time. A
+  provider lists the site's privacy policy and terms of service.
+- **`choose(account)`:** signs in. **`signInToProvider(provider)`:** opens
+  the provider's sign-in page in a browser window, when signed out or for
+  another account. **`moreDetails()`:** opens an `error`'s page.
+  **`dismiss()`:** the user's close, which quiets the site's unasked offers
+  for a while, as Chrome's ✕ does.
+- **One step at a time.** The next step replaces the open one, which fires
+  `domicile-identity-withdrawn`, as does one the browser drops.
+
+Manganese asks over the page after the site's button, and in the page's
+corner otherwise (`manganese-page-requests/IdentityAsk.tsx`).
 
 ## Error, warning and crashed pages
 

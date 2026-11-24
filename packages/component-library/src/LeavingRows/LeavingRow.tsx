@@ -83,6 +83,8 @@ const rowStyles = cva({
       opacity: 0,
       pointerEvents: "none",
       transform: "translateX({spacing.6})",
+      // main-thread animation: a row's height opens or closes once, so the rows
+      // below make room.
       transition:
         "opacity {durations.normal} {easings.in} calc(var(--leave-order) * {durations.fastest}), transform {durations.normal} {easings.in} calc(var(--leave-order) * {durations.fastest}), grid-template-rows {durations.normal} {easings.in-out} calc(var(--leave-order) * {durations.fastest} + {durations.normal}), margin-block-end {durations.normal} {easings.in-out} calc(var(--leave-order) * {durations.fastest} + {durations.normal})",
     },
@@ -94,6 +96,8 @@ const rowStyles = cva({
     opacity: 1,
     overflow: "hidden",
     transform: "translateX(0)",
+    // main-thread animation: a row's height opens or closes once, so the rows
+    // below make room.
     transition:
       "background-color {durations.fast} {easings.default}, opacity {durations.slow} {easings.outQuart}, transform {durations.slow} {easings.outQuart}, grid-template-rows {durations.normal} {easings.in-out}, margin-block-end {durations.normal} {easings.in-out}",
   },

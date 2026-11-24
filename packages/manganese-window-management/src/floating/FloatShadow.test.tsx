@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { loadEmittedStylesheet } from "@domicile-desktop/test-support/emitted-stylesheet";
 import { render } from "@testing-library/react";
 import { recordedSettles } from "../recorded-settles";
+import { SlidingScreen } from "../sliding-screen";
 import { FloatShadow } from "./FloatShadow";
 
 loadEmittedStylesheet(
@@ -19,6 +20,25 @@ const shadow = (container: HTMLElement): Element => {
 };
 
 describe("FloatShadow", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself to its workspace while a switch slides it", () => {
+    const { container } = render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <FloatShadow
+          depth={0}
+          dragging={false}
+          frame={{ height: 300, width: 400, x: 20, y: 52 }}
+          motion="leaving-to-start"
+        />
+      </SlidingScreen>,
+    );
+
+    expect((shadow(container) as HTMLElement).style.clip).toBe(
+      "rect(-52px, 1260px, 948px, -20px)",
+    );
+  });
+
   it("stays opaque while its window is dragged", () => {
     const { container } = render(
       <FloatShadow

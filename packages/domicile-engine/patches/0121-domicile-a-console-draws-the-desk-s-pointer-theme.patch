@@ -30,7 +30,7 @@ job builds it on `crux`.
  4 files changed, 47 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 100bfe9..ab9fbfe 100644
+index 7c93170..803836d 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -21,6 +21,7 @@
@@ -41,7 +41,7 @@ index 100bfe9..ab9fbfe 100644
  
  #include <utility>
  
-@@ -587,6 +588,13 @@ void PopulateChromeFrameBinders(
+@@ -619,6 +620,13 @@ void PopulateChromeFrameBinders(
                          &domicile::InstallExtensionsInto,
                          Profile::FromBrowserContext(frame->GetBrowserContext())
                              ->GetWeakPtr())),
@@ -56,7 +56,7 @@ index 100bfe9..ab9fbfe 100644
                  // of its <webview>s is told to, and no other page.
                  domicile::Page{frame->GetGlobalId().child_id.value(),
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index d9d59df..a34023a 100644
+index 9dbb280..175b384 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -181,6 +181,11 @@ source_set("gbm") {
@@ -71,7 +71,7 @@ index d9d59df..a34023a 100644
      "//ui/base/cursor/mojom:cursor_type",
      "//ui/base/ime",
      "//ui/display",
-@@ -338,6 +343,10 @@ source_set("gbm_unittests") {
+@@ -340,6 +345,10 @@ source_set("gbm_unittests") {
      "//ui/gfx/linux:test_support",
      "//ui/ozone:platform",
      "//ui/ozone/common",
@@ -83,10 +83,10 @@ index d9d59df..a34023a 100644
  }
  
 diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
-index 8a97d5d..be3b4bc 100644
+index dae5128..a13d8c1 100644
 --- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
 +++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
-@@ -23,6 +23,7 @@ DesktopNativeCursorManager::DesktopNativeCursorManager() {
+@@ -24,6 +24,7 @@ DesktopNativeCursorManager::DesktopNativeCursorManager() {
        ui::NativeTheme::GetInstanceForNativeUi(),
        base::BindRepeating(&DesktopNativeCursorManager::SetCursorColors,
                            base::Unretained(this)));
@@ -94,7 +94,7 @@ index 8a97d5d..be3b4bc 100644
  }
  
  DesktopNativeCursorManager::~DesktopNativeCursorManager() {
-@@ -118,6 +119,14 @@ void DesktopNativeCursorManager::SetCursorColor(
+@@ -120,6 +121,14 @@ void DesktopNativeCursorManager::SetCursorColor(
  void DesktopNativeCursorManager::SetCursorColors(const CursorColors& colors) {
    cursor_loader_.SetColor(colors.fill);
    cursor_loader_.SetOutlineColor(colors.outline);
@@ -110,7 +110,7 @@ index 8a97d5d..be3b4bc 100644
    // set and so before there is anything on screen to redraw.
    if (delegate_) {
 diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
-index fcb66b2..59e423c 100644
+index bfb6e8e..65de2f2 100644
 --- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
 +++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.h
 @@ -10,6 +10,8 @@

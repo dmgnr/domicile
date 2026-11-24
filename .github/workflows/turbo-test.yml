@@ -13,10 +13,10 @@ concurrency:
 
 env:
   # Nothing in this group may skip: bun is set up below and turbo needs nothing
-  # else. On a pull request that changes the fork, the pinned-engine check skips
-  # until `engine.yml` writes the new pin back.
+  # else. On a pull request that changes the fork, the pinned-engine check fails
+  # until `engine.yml` writes the new pin back, so the pull request is not
+  # mergeable before its engine exists.
   DOMICILE_CHECK_STRICT: "1"
-  DOMICILE_CHECK_ALLOW_SKIP: ${{ github.event_name == 'pull_request' && 'test-the-pinned-engine-is-this-series' || '' }}
 
 # `actions: read` so the pinned-engine check can ask whether engine.yml's run
 # for this head is still going.
@@ -61,8 +61,8 @@ jobs:
       - run: .github/scripts/turbo-cache-prune.sh mark .turbo/cache
 
       # `TURBO_CACHE_DIR` points turbo at the restored cache. The
-      # pull request's head and base let the pinned-engine check tell a pending
-      # write-back from a missing one; on main they are empty and it is strict.
+      # pull request's head and base let the pinned-engine check say whether a
+      # write-back is still coming; it fails either way.
       - env:
           TURBO_CACHE_DIR: .turbo/cache
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

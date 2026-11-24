@@ -169,7 +169,14 @@ fn a_locked_desk_runs_nothing_but_reads_the_kernel() {
     assert!(matches!(reply(&mut chrome, 2), SystemReply::Stat { .. }));
 
     // A page reloaded while locked still hears commands after unlock.
-    call(&mut chrome, 3, SystemRequest::ShellCommands);
+    call(
+        &mut chrome,
+        3,
+        SystemRequest::ShellCommands {
+            commands: Vec::new(),
+            bindings: Vec::new(),
+        },
+    );
     assert_eq!(reply(&mut chrome, 3), SystemReply::Started);
     call(
         &mut chrome,
@@ -196,13 +203,21 @@ fn a_locked_desk_runs_nothing_but_reads_the_kernel() {
 }
 
 /// `domicile send-shell` writes one line on the chrome socket without saying
-/// `hello`, and every page listening hears the command.
+/// `hello`. Every page listening hears the command, and it is sent once one
+/// ran it.
 #[test]
 fn a_command_sent_on_the_socket_reaches_every_page_listening() {
     let compositor = Compositor::started_with(A_DESK);
     let mut pages = [compositor.chrome(), compositor.chrome()];
     for page in &mut pages {
-        call(page, 7, SystemRequest::ShellCommands);
+        call(
+            page,
+            7,
+            SystemRequest::ShellCommands {
+                commands: Vec::new(),
+                bindings: Vec::new(),
+            },
+        );
         assert_eq!(reply(page, 7), SystemReply::Started);
     }
 
@@ -213,6 +228,39 @@ fn a_command_sent_on_the_socket_reaches_every_page_listening() {
               \"command\":[\"focus\",\"right\"]}}\n",
         )
         .expect("the compositor reads the command");
+    let mut sent = Vec::new();
+    for page in &mut pages {
+        let heard = page
+            .wait_for(|message| {
+                matches!(
+                    message,
+                    HostMessage::SystemEvent {
+                        id: 7,
+                        event: SystemEvent::ShellCommand { command, .. },
+                    } if *command == ["focus", "right"]
+                )
+            })
+            .expect("every page listening hears the command");
+        let HostMessage::SystemEvent {
+            event: SystemEvent::ShellCommand { sent: number, .. },
+            ..
+        } = heard
+        else {
+            unreachable!("the wait matched on this variant")
+        };
+        sent.push(number);
+    }
+    assert_eq!(sent[0], sent[1], "one command, one number");
+    let sent = sent[0];
+    call(
+        &mut pages[0],
+        8,
+        SystemRequest::AnswerShellCommand {
+            sent,
+            refused: None,
+            output: None,
+        },
+    );
     let mut answer = String::new();
     BufReader::new(sender)
         .read_line(&mut answer)
@@ -222,16 +270,4 @@ fn a_command_sent_on_the_socket_reaches_every_page_listening() {
         answer,
         "{\"type\":\"system_reply\",\"id\":1,\"reply\":{\"kind\":\"sent\"}}\n"
     );
-    for page in &mut pages {
-        page.wait_for(|message| {
-            *message
-                == HostMessage::SystemEvent {
-                    id: 7,
-                    event: SystemEvent::ShellCommand {
-                        command: vec!["focus".into(), "right".into()],
-                    },
-                }
-        })
-        .expect("every page listening hears the command");
-    }
 }

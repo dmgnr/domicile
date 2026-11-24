@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 22 Nov 2026 16:29:27 +0000
+Subject: [PATCH] domicile: a hidden webview keeps its page's viewport
+
+A <webview> under `display: none` has no layout object, and
+RemoteFrameView::UpdateCompositingRect set its compositing rect to
+empty. That rect is the page's compositor viewport, so a hidden page's
+viewport went to 0x0. cc then threw away the tiles patch 0252 keeps for
+a hidden page, and showing the page again rastered its whole viewport.
+
+manganese hides the windows of other workspaces this way. A lyra trace
+of workspace switches on battery shows the arriving claude.ai page
+rastering about 400 tiles before its first frame on every switch, with
+the GPU process busy for the whole slide.
+
+- A <webview> with no layout object keeps the compositing rect it had.
+- Its frame rect, visibility and every other frame's rect are as
+  before.
+
+Guarded by `guard-webview-reshown-tiles.sh`, which now fails when the
+page's compositor viewport goes to 0x0 (the pinned engine: once per
+hide).
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+
+Co-Authored-By: Connor Prussin <connor@prussin.net>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011frZaqdnEUiniYFYDxHzpg
+---
+ .../blink/renderer/core/frame/remote_frame_view.cc   | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/third_party/blink/renderer/core/frame/remote_frame_view.cc b/third_party/blink/renderer/core/frame/remote_frame_view.cc
+index 251d6dc..cce00db 100644
+--- a/third_party/blink/renderer/core/frame/remote_frame_view.cc
++++ b/third_party/blink/renderer/core/frame/remote_frame_view.cc
+@@ -272,10 +272,20 @@ gfx::Rect RemoteFrameView::ComputeCompositingRect() const {
+ void RemoteFrameView::UpdateCompositingRect() {
+   remote_frame_->UpdateCompositedLayerBounds();
+   gfx::Rect previous_rect = compositing_rect_;
+-  compositing_rect_ = gfx::Rect();
+   LocalFrameView* local_root_view = ParentLocalRootFrameView();
+   LayoutEmbeddedContent* owner_layout_object =
+       remote_frame_->OwnerLayoutObject();
++  // Domicile: a <webview> with no layout object, as under `display: none`,
++  // keeps its compositing rect. The rect is its page's compositor viewport
++  // (RemoteFrame::SynchronizeVisualProperties), and an empty one throws away
++  // the tiles a hidden page keeps (patch 0252). Shells hide the windows of
++  // other workspaces this way, and an empty rect would make every workspace
++  // switch raster the arriving page in the middle of its slide.
++  if (!owner_layout_object &&
++      IsA<HTMLWebViewElement>(remote_frame_->DeprecatedLocalOwner())) {
++    return;
++  }
++  compositing_rect_ = gfx::Rect();
+   if (!local_root_view || !owner_layout_object) {
+     SetNeedsFrameRectPropagation();
+     return;

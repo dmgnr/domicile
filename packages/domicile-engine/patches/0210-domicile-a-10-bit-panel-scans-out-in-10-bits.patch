@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a 10-bit panel scans out in 10 bits
+
+A panel whose EDID reports 10 bits a channel scanned out of an 8-bit
+framebuffer, over a link the driver may have held to 8 bits.
+
+- The browser draws such a display in RGBA_1010102 or BGRA_1010102
+  where its planes take XB30 or XR30 (domicile/drm_screen.cc).
+- DrmDisplay asks its connector for 10 bits a channel through
+  `max bpc`, as wlroots does, so the framebuffer is not dithered.
+- domicile/ten_bit_scanout.cc decides both, so they agree.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ ui/ozone/platform/drm/BUILD.gn           |  2 ++
+ ui/ozone/platform/drm/gpu/drm_display.cc | 33 ++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
+index b1fdabb..f79f43b 100644
+--- a/ui/ozone/platform/drm/BUILD.gn
++++ b/ui/ozone/platform/drm/BUILD.gn
+@@ -73,6 +73,8 @@ source_set("gbm") {
+     "domicile/drm_vt_switcher.h",
+     "domicile/edid_name.cc",
+     "domicile/edid_name.h",
++    "domicile/ten_bit_scanout.cc",
++    "domicile/ten_bit_scanout.h",
+     "gpu/crtc_commit_request.cc",
+     "gpu/crtc_commit_request.h",
+     "gpu/crtc_controller.cc",
+diff --git a/ui/ozone/platform/drm/gpu/drm_display.cc b/ui/ozone/platform/drm/gpu/drm_display.cc
+index eb8bf9d..dfd9a22 100644
+--- a/ui/ozone/platform/drm/gpu/drm_display.cc
++++ b/ui/ozone/platform/drm/gpu/drm_display.cc
+@@ -22,6 +22,7 @@
+ #include "ui/ozone/platform/drm/common/drm_util.h"
+ #include "ui/ozone/platform/drm/common/hardware_display_controller_info.h"
+ #include "ui/ozone/platform/drm/common/scoped_drm_types.h"
++#include "ui/ozone/platform/drm/domicile/ten_bit_scanout.h"
+ #include "ui/ozone/platform/drm/gpu/drm_device.h"
+ #include "ui/ozone/platform/drm/gpu/screen_manager.h"
+ 
+@@ -37,6 +38,30 @@ std::vector<drmModeModeInfo> GetDrmModeVector(drmModeConnector* connector) {
+   return modes;
+ }
+ 
++// DOMICILE: asks `connector` for at least `bits` a channel on the link, as
++// wlroots does, so a 10-bit framebuffer is not dithered to 8 bits. A driver
++// with no `max bpc` property picks the depth itself.
++void AskForBitsPerChannel(DrmDevice& drm,
++                          drmModeConnector* connector,
++                          uint64_t bits) {
++  ScopedDrmPropertyPtr property(drm.GetProperty(connector, "max bpc"));
++  if (!property || !(property->flags & DRM_MODE_PROP_RANGE) ||
++      property->count_values < 2) {
++    return;
++  }
++  const uint64_t wanted = std::clamp(bits, UNSAFE_TODO(property->values[0]),
++                                     UNSAFE_TODO(property->values[1]));
++  uint64_t current = 0;
++  if (GetConnectorPropertyValue(connector, property->prop_id, &current) &&
++      current >= wanted) {
++    return;
++  }
++  if (!drm.SetProperty(connector->connector_id, property->prop_id, wanted)) {
++    PLOG(ERROR) << "domicile: cannot set 'max bpc' to " << wanted
++                << " on connector " << connector->connector_id;
++  }
++}
++
+ }  // namespace
+ 
+ DrmDisplay::PrivacyScreenProperty::PrivacyScreenProperty(
+@@ -224,6 +249,14 @@ DrmDisplay::DrmDisplay(const scoped_refptr<DrmDevice>& drm,
+     drm_->plane_manager()->SetOutputColorSpace(crtc_connector_pair.crtc_id,
+                                                output_primaries);
+   }
++  // DOMICILE: the browser draws this display in 10 bits when this holds; see
++  // ui/ozone/platform/drm/domicile/ten_bit_scanout.h.
++  if (TenBitScanoutFourcc(display_snapshot).has_value()) {
++    for (const auto& crtc_connector_pair : crtc_connector_pairs_) {
++      AskForBitsPerChannel(*drm_, crtc_connector_pair.connector.get(),
++                           kTenBitsPerChannel);
++    }
++  }
+ 
+   vsync_rate_min_from_edid_ = info->edid_parser().has_value()
+                                   ? info->edid_parser()->vsync_rate_min()

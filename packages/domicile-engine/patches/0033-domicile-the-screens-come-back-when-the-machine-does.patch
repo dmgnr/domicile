@@ -36,7 +36,7 @@ Co-Authored-By: Connor Prussin <connor@prussin.net>
  2 files changed, 16 insertions(+)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index c481ebc..500e2e4 100644
+index 3334a87..5b00714 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -134,6 +134,8 @@ source_set("gbm") {
@@ -48,7 +48,7 @@ index c481ebc..500e2e4 100644
      "domicile/drm_vt_switcher.cc",
      "domicile/drm_vt_switcher.h",
      "domicile/edid_name.cc",
-@@ -258,6 +260,7 @@ source_set("gbm_unittests") {
+@@ -260,6 +262,7 @@ source_set("gbm_unittests") {
      "domicile/drm_master_unittest.cc",
      "domicile/drm_modeset_unittest.cc",
      "domicile/drm_screen_unittest.cc",

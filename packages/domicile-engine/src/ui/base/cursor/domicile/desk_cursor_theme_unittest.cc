@@ -5,6 +5,8 @@
 
 #include <optional>
 
+#include "base/test/mock_log.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ui {
@@ -51,6 +53,23 @@ TEST(DeskCursorThemeSourceTest, TheSameThemeAgainIsNoChange) {
   EXPECT_EQ(observer.changes_, 3);
 
   source.RemoveObserver(&observer);
+}
+
+// A theme dropped is every pointer turning into Chromium's art, so it is said
+// at ERROR, the level the engine logs at.
+TEST(DeskCursorThemeSourceTest, DroppingTheThemeIsAnError) {
+  DeskCursorThemeSource source;
+  source.Set(DeskCursorTheme{.name = "Adwaita", .size = 32});
+  base::test::MockLog log;
+  EXPECT_CALL(log, Log).Times(testing::AnyNumber());
+  EXPECT_CALL(log, Log(logging::LOGGING_ERROR, testing::_, testing::_,
+                       testing::_, testing::HasSubstr("no pointer theme")))
+      .Times(1);
+  log.StartCapturingLogs();
+
+  source.Set(std::nullopt);
+
+  log.StopCapturingLogs();
 }
 
 }  // namespace

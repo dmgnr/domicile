@@ -16,10 +16,10 @@ frame it is embedded in; the registry tells only that page.
  1 file changed, 5 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 78dc322..5cc5ef8 100644
+index 42092d7..eebf9e1 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
-@@ -581,7 +581,11 @@ void PopulateChromeFrameBinders(
+@@ -613,7 +613,11 @@ void PopulateChromeFrameBinders(
                      base::BindRepeating(
                          &domicile::InstallExtensionsInto,
                          Profile::FromBrowserContext(frame->GetBrowserContext())

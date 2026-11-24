@@ -2,6 +2,7 @@ import type { Display } from "@domicile-desktop/component-library/display-source
 import { typedAddress } from "@domicile-desktop/manganese-address/typed-address";
 import type { Domicile } from "@domicile-desktop/sdk/desktop/desktop";
 import type { ClientWindow } from "@domicile-desktop/sdk/desktop/windows";
+import { logger } from "@domicile-desktop/sdk/logger";
 import { SystemErrorKind } from "@domicile-desktop/sdk/system";
 import type { WindowRequest } from "@domicile-desktop/sdk/window-state";
 import { WindowRequestKind } from "@domicile-desktop/sdk/window-state";
@@ -22,6 +23,7 @@ import { openCommand } from "./open-command";
 import type { PlacedScreen } from "./screens/screen-toward";
 import { appIdOf, appWindowId, browserIdOf } from "./window";
 import { windowChanges } from "./window-changes";
+import { describedAction, describedChange } from "./window-log";
 import { hearWindowRequests } from "./window-requests";
 import type { WindowAction, WindowState } from "./window-state";
 import {
@@ -54,6 +56,8 @@ export type Windows = WindowState & {
   handed: HandedDrag | undefined;
 };
 
+const log = logger("windows");
+
 /** No app runs in the background. One array, so the default never changes. */
 const NO_BACKGROUND_APPS: readonly string[] = [];
 
@@ -79,11 +83,21 @@ export const useWindows = (
   backgroundApps: readonly string[] = NO_BACKGROUND_APPS,
   openFile: typeof openCommand = openCommand,
 ): Windows => {
-  const [state, dispatch] = useReducer(reduceWindows, NO_WINDOWS);
+  const [state, dispatchUnlogged] = useReducer(reduceWindows, NO_WINDOWS);
+  // Every action, so `domicile set-log-level debug shell` says what the desk
+  // was asked to do and what it did. See `window-log.ts`.
+  const dispatch = useCallback((action: WindowAction) => {
+    log.debug(describedAction(action));
+    dispatchUnlogged(action);
+  }, []);
   // The state as last drawn, for `act` to read without depending on it. A new
   // `act` would re-add every listener that runs commands.
   const drawn = useRef(state);
   useLayoutEffect(() => {
+    const changed = describedChange(drawn.current, state);
+    if (changed !== undefined) {
+      log.debug(changed);
+    }
     drawn.current = state;
   }, [state]);
 
@@ -95,9 +109,6 @@ export const useWindows = (
   const act = useCallback(
     (action: WindowAction) => {
       dispatch(action);
-      if (action.kind === WindowActionKind.CommandExecuted) {
-        domicile.processes.launch(action.argv);
-      }
       if (action.kind === WindowActionKind.DeskLocked) {
         domicile.session.lock();
       }
@@ -124,8 +135,13 @@ export const useWindows = (
           }
         }
       }
+      if (action.kind === WindowActionKind.TabDropped) {
+        domicile.browser.open(action.url);
+      }
       if (action.kind === WindowActionKind.BrowserOpened) {
-        if (action.isPrivate) {
+        if (action.profile !== undefined) {
+          domicile.browser.open(action.src, { profile: action.profile });
+        } else if (action.isPrivate) {
           domicile.browser.openPrivate(action.src);
         } else {
           domicile.browser.open(action.src);
@@ -155,7 +171,7 @@ export const useWindows = (
         );
       }
     },
-    [domicile, openFile],
+    [domicile, openFile, dispatch],
   );
 
   // The host's last window list, diffed against the next. A ref, not
@@ -205,7 +221,7 @@ export const useWindows = (
         stop();
       }
     };
-  }, [backgroundApps, domicile, floating]);
+  }, [backgroundApps, domicile, floating, dispatch]);
 
   const [handed, setHanded] = useState<HandedDrag | undefined>(undefined);
   // Clients' requests, which the compositor reports without granting.
@@ -232,14 +248,14 @@ export const useWindows = (
       hearing.stop();
       presses.stop();
     };
-  }, [domicile]);
+  }, [domicile, dispatch]);
 
   // The desk the host described, which bounds where windows can go.
   useEffect(() => {
     if (displays !== undefined) {
       dispatch(Action.ScreensDescribed(placedOf(displays)));
     }
-  }, [displays]);
+  }, [displays, dispatch]);
 
   return useMemo(
     () => ({
@@ -343,16 +359,16 @@ const takeScreenshot = (domicile: Pick<Domicile, "capture">) => {
 };
 
 /**
- * The newest copy as a site or a search URL, or `undefined` when the clipboard
- * holds no text.
+ * The copy on the clipboard as a site or a search URL, or `undefined` when the
+ * clipboard holds no text.
  *
  * Reads the row's preview, so a long copy is cut short.
  */
 const clipboardUrl = (
   domicile: Pick<Domicile, "clipboard">,
 ): string | undefined => {
-  const newest = domicile.clipboard.entries?.[0];
-  return newest === undefined ? undefined : typedAddress(newest.preview)?.url;
+  const current = domicile.clipboard.entries?.find((entry) => entry.current);
+  return current === undefined ? undefined : typedAddress(current.preview)?.url;
 };
 
 /** Asks the compositor or the engine to close each window in `ids`. */

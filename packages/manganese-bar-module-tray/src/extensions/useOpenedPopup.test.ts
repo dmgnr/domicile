@@ -17,6 +17,7 @@ const wallet: Extension = {
   id: ID,
   name: "Wallet",
   popup: undefined,
+  profile: "default",
   title: "Wallet",
 };
 
@@ -35,12 +36,17 @@ describe("useOpenedPopup", () => {
     const { hook } = opening();
 
     act(() => {
-      hook.result.current.open("HDMI-1", { id: ID, popup: POPUP });
+      hook.result.current.open("HDMI-1", {
+        id: ID,
+        popup: POPUP,
+        profile: "default",
+      });
     });
 
     expect(hook.result.current.opened).toStrictEqual({
       id: ID,
       popup: POPUP,
+      profile: "default",
       screen: "HDMI-1",
     });
   });
@@ -48,7 +54,11 @@ describe("useOpenedPopup", () => {
   it("closes the popup only from the bar it is on", () => {
     const { hook } = opening();
     act(() => {
-      hook.result.current.open("HDMI-1", { id: ID, popup: POPUP });
+      hook.result.current.open("HDMI-1", {
+        id: ID,
+        popup: POPUP,
+        profile: "default",
+      });
     });
 
     act(() => {
@@ -71,12 +81,14 @@ describe("useOpenedPopup", () => {
       fake.dispatch("extensionpopuprequested", {
         extensionId: ID,
         popup: POPUP,
+        profile: "default",
       });
     });
 
     expect(hook.result.current.opened).toStrictEqual({
       id: ID,
       popup: POPUP,
+      profile: "default",
       screen: "DP-1",
     });
   });
@@ -92,6 +104,7 @@ describe("useOpenedPopup", () => {
       fake.dispatch("extensionpopuprequested", {
         extensionId: ID,
         popup: POPUP,
+        profile: "default",
       });
     });
 
@@ -108,6 +121,7 @@ describe("useOpenedPopup", () => {
       fake.dispatch("extensionpopuprequested", {
         extensionId: ID,
         popup: POPUP,
+        profile: "default",
       });
     });
 
@@ -117,7 +131,11 @@ describe("useOpenedPopup", () => {
   it("closes the popup when its action leaves the tray", () => {
     const { hook } = opening();
     act(() => {
-      hook.result.current.open("DP-1", { id: ID, popup: POPUP });
+      hook.result.current.open("DP-1", {
+        id: ID,
+        popup: POPUP,
+        profile: "default",
+      });
     });
 
     hook.rerender({ shown: [{ ...wallet, enabled: false }] });

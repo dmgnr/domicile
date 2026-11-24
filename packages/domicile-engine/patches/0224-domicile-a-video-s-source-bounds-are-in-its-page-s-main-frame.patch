@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Sun, 15 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a video's source bounds are in its page's main
+ frame
+
+Blink sends a video's bounds in its frame's local root, which for a video
+in an out-of-process iframe is the iframe. PictureInPictureServiceImpl
+moves them into the WebContents' main frame, where GetSourceBounds() says
+they are, so the shell grows the video out of its place in the page.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../picture_in_picture_service_impl.cc        | 36 +++++++++++++++++--
+ 1 file changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/content/browser/picture_in_picture/picture_in_picture_service_impl.cc b/content/browser/picture_in_picture/picture_in_picture_service_impl.cc
+index ad7ce57..2f72614 100644
+--- a/content/browser/picture_in_picture/picture_in_picture_service_impl.cc
++++ b/content/browser/picture_in_picture/picture_in_picture_service_impl.cc
+@@ -10,10 +10,14 @@
+ #include "content/browser/picture_in_picture/video_picture_in_picture_window_controller_impl.h"
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
+ #include "content/public/browser/disallow_activation_reason.h"
++#include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "media/base/video_spatial_format.h"
+ #include "mojo/public/cpp/bindings/callback_helpers.h"
++#include "ui/gfx/geometry/point_conversions.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/rect.h"
+ 
+ namespace content {
+ namespace {
+@@ -23,6 +27,34 @@ bool IsFrameActive(RenderFrameHost& rfh) {
+       DisallowActivationReasonId::kPictureInPictureService);
+ }
+ 
++// Domicile's engine fork: Blink sends `bounds` in `frame`'s local root, which
++// for a video in an out-of-process iframe is the iframe. Moved into the
++// WebContents' main frame, where GetSourceBounds() says they are, so the
++// shell grows the video out of its place in the page. Translation only; an
++// iframe that is scaled or rotated keeps its size.
++gfx::Rect InMainFrame(RenderFrameHost& frame, const gfx::Rect& bounds) {
++  RenderWidgetHostView* view = frame.GetView();
++  RenderWidgetHostView* page =
++      WebContents::FromRenderFrameHost(&frame)->GetRenderWidgetHostView();
++  // A page drawn nowhere has no place to grow the video out of.
++  if (!view || !page) {
++    return gfx::Rect();
++  }
++  if (view == page) {
++    return bounds;
++  }
++  // Both views' root is the outermost page's, in DIPs; `bounds` is in
++  // physical pixels.
++  const float scale = view->GetDeviceScaleFactor();
++  const gfx::Vector2dF offset =
++      view->TransformPointToRootCoordSpaceF(
++          gfx::ScalePoint(gfx::PointF(bounds.origin()), 1.f / scale)) -
++      page->TransformPointToRootCoordSpaceF(gfx::PointF());
++  return gfx::Rect(
++      gfx::ToRoundedPoint(gfx::ScalePoint(gfx::PointF() + offset, scale)),
++      bounds.size());
++}
++
+ }  // namespace
+ 
+ struct PictureInPictureServiceImpl::PendingSession {
+@@ -87,8 +119,8 @@ void PictureInPictureServiceImpl::StartSession(
+ 
+   auto pending_session = std::make_unique<PendingSession>(
+       player_id, std::move(player_remote), surface_id, natural_size,
+-      show_play_pause_button, std::move(observer), source_bounds,
+-      spatial_format,
++      show_play_pause_button, std::move(observer),
++      InMainFrame(render_frame_host(), source_bounds), spatial_format,
+       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+           std::move(callback), mojo::NullRemote(), gfx::Size()));
+ 

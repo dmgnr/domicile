@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { loadEmittedStylesheet } from "@domicile-desktop/test-support/emitted-stylesheet";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { Button } from "../Button/Button";
@@ -81,7 +81,7 @@ describe(ListRow, () => {
       expect(screen.getByText("10.42.0.17")).toBeVisible();
     });
 
-    it("pads its drawer, centering a footer between its rule and the tile's edge, inset from its side", async () => {
+    it("pads its drawer tightly, centering a footer between its rule and the tile's edge, inset from its side", async () => {
       render(
         <List>
           <ListRow disclosure="Details" label="Centar">
@@ -96,6 +96,7 @@ describe(ListRow, () => {
         footer.parentElement as Element,
       );
       expect(drawer.paddingBlockStart).toBe("0.375rem");
+      expect(drawer.paddingBlockEnd).toBe("0.375rem");
       expect(drawer.paddingBlockEnd).toBe(
         globalThis.getComputedStyle(footer).paddingBlockStart,
       );
@@ -125,6 +126,102 @@ describe(ListRow, () => {
         screen.getByRole("button", { name: "PrussinNet: 3 unread" }),
       );
       expect(await pressed).toBe(true);
+    });
+
+    it("puts its actions beside its button, not in it", async () => {
+      const pressed: string[] = [];
+      render(
+        <List>
+          <ListRow
+            actions={
+              <Button
+                onClick={() => {
+                  pressed.push("pin");
+                }}
+              >
+                Pin
+              </Button>
+            }
+            label="Dark Reader"
+            onPress={() => {
+              pressed.push("row");
+            }}
+          />
+        </List>,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Pin" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Dark Reader" }),
+      );
+
+      expect(pressed).toStrictEqual(["pin", "row"]);
+    });
+
+    it("cuts a long label short rather than pushing its actions out", () => {
+      render(
+        <List>
+          <ListRow
+            actions={<Button>Pin</Button>}
+            label="An extension whose name runs past the panel's edge"
+            onPress={() => undefined}
+          />
+        </List>,
+      );
+
+      const row = globalThis.getComputedStyle(
+        screen.getByRole("button", {
+          name: "An extension whose name runs past the panel's edge",
+        }),
+      );
+      expect(row.flexGrow).toBe("1");
+      expect(row.minInlineSize).toBe("0rem");
+    });
+
+    it("takes a middle click or a Ctrl+click apart from a click", async () => {
+      const pressed: string[] = [];
+      render(
+        <List label="Profiles">
+          <ListRow
+            label="Work"
+            onPress={() => {
+              pressed.push("press");
+            }}
+            onPressInNew={() => {
+              pressed.push("new");
+            }}
+          />
+        </List>,
+      );
+      const row = screen.getByRole("button", { name: "Work" });
+      const user = userEvent.setup();
+
+      await user.pointer({ keys: "[MouseMiddle]", target: row });
+      await user.keyboard("{Control>}");
+      await user.click(row);
+      await user.keyboard("{/Control}");
+      await user.click(row);
+
+      expect(pressed).toStrictEqual(["new", "new", "press"]);
+    });
+
+    it("takes a right click where it lands, in place of the page's menu", async () => {
+      const pressed = Promise.withResolvers<{ x: number; y: number }>();
+      render(
+        <List label="Apps">
+          <ListRow
+            label="Syncthing"
+            onPress={() => undefined}
+            onSecondaryPress={pressed.resolve}
+          />
+        </List>,
+      );
+      const row = screen.getByRole("button", { name: "Syncthing" });
+
+      const shown = fireEvent.contextMenu(row, { clientX: 12, clientY: 34 });
+
+      expect(await pressed.promise).toStrictEqual({ x: 12, y: 34 });
+      expect(shown).toBe(false);
     });
 
     it("says it is busy while its request is out", () => {

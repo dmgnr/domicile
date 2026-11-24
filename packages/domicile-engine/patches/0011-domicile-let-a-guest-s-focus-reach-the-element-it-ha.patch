@@ -107,7 +107,7 @@ index 4013a15..7008ae6 100644
    bool IsURLAttribute(const Attribute&) const final;
    bool HasLegalLinkAttribute(const QualifiedName&) const final;
 diff --git a/third_party/blink/renderer/core/page/focus_controller.cc b/third_party/blink/renderer/core/page/focus_controller.cc
-index 11a26e9..05da124 100644
+index bcad86e..6805eb4 100644
 --- a/third_party/blink/renderer/core/page/focus_controller.cc
 +++ b/third_party/blink/renderer/core/page/focus_controller.cc
 @@ -30,6 +30,7 @@
@@ -126,7 +126,7 @@ index 11a26e9..05da124 100644
  #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
  #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
  #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
-@@ -1827,6 +1829,72 @@ void FocusController::SetFocusedFrame(Frame* frame, bool notify_embedder) {
+@@ -1842,6 +1844,72 @@ void FocusController::SetFocusedFrame(Frame* frame, bool notify_embedder) {
        // invocation of the function to run.
        SetFocusedElement(fenced_frame, frame);
      }

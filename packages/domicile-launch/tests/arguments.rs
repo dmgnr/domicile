@@ -376,3 +376,22 @@ fn a_directory_of_pam_services_is_read_as_a_path() {
 
     assert_eq!(parsed.pam_confdir, Some(PathBuf::from("/run/pam.d")));
 }
+
+#[test]
+fn electron_entries_are_written_only_where_the_command_line_says() {
+    assert_eq!(parse(the_required_two()).unwrap().electron_entries, None);
+    let parsed = parse([
+        "--chrome-socket",
+        "/run/chrome.sock",
+        "--session",
+        "/run/session.json",
+        "--electron-entries",
+        "/run/domicile/share",
+    ])
+    .expect("an entries directory parses");
+
+    assert_eq!(
+        parsed.electron_entries.as_deref(),
+        Some(Path::new("/run/domicile/share"))
+    );
+}

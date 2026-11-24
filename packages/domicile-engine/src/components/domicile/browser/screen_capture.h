@@ -15,14 +15,23 @@
 namespace domicile {
 
 // Whether a media request asking for `video` is a page's `getDisplayMedia()`,
-// with or without `preferCurrentTab`. Both open the desktop's picker, whose
-// browser windows include the page's own.
+// with or without `preferCurrentTab`, or a `getUserMedia()` with
+// `chromeMediaSource: "desktop"`, as Electron apps ask with a
+// `desktopCapturer` source. All open the desktop's picker, whose browser
+// windows include the page's own: the picker, not the source's id, says what
+// is captured.
 bool IsScreenCapture(blink::mojom::MediaStreamType video);
 
-// `answer`, its video as the request's `video` type asks: content opens a
-// `preferCurrentTab` request's pick as its own type.
+// Whether a screen capture asking for `audio` wants the source's sound:
+// `getDisplayMedia()`'s `audio`, or a desktop `getUserMedia()`'s.
+bool WantsScreenSound(blink::mojom::MediaStreamType audio);
+
+// `answer`, its video and sound as the request's `video` and `audio` types
+// ask: content opens a `preferCurrentTab` or desktop `getUserMedia()`
+// request's pick as its own types.
 blink::mojom::StreamDevicesSetPtr AsRequested(
     blink::mojom::MediaStreamType video,
+    blink::mojom::MediaStreamType audio,
     blink::mojom::StreamDevicesSetPtr answer);
 
 // What the desktop says a ScreenCast portal pick shows: the compositor's

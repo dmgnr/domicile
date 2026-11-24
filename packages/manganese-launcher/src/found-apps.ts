@@ -19,6 +19,8 @@ export type DesktopEntry = {
 export type Bookmark = {
   name: string;
   url: string;
+  /** The browser profile it opens in, or `undefined` for its site's. */
+  profile?: string | undefined;
   /** The icon its site names, as a `data:` URL, or `undefined` for none found. */
   icon: string | undefined;
 };

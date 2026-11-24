@@ -15,7 +15,7 @@ name in a generated-bindings list.
  2 files changed, 12 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 97d9097..56fec93 100644
+index 58a884c..432e08b 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -301,6 +301,8 @@ generated_dictionary_sources_in_modules = [
@@ -36,7 +36,7 @@ index 97d9097..56fec93 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_effective_connection_type.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_effective_connection_type.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_encoded_audio_chunk_type.cc",
-@@ -2390,6 +2394,10 @@ generated_interface_sources_in_modules = [
+@@ -2394,6 +2398,10 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_theme_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_theme_event.h",

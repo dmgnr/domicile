@@ -28,7 +28,7 @@ the engine job.
  3 files changed, 5 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 828223a..27d875c 100644
+index 93b63b2..1ce01a5 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1212,6 +1212,8 @@ generated_interface_sources_in_core = [
@@ -41,7 +41,7 @@ index 828223a..27d875c 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index e9f153b..c43e8e5 100644
+index ca01e64..4f77193 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -464,6 +464,7 @@ static_idl_files_in_core = [
@@ -53,7 +53,7 @@ index e9f153b..c43e8e5 100644
    "//third_party/blink/renderer/core/html/html_head_element.idl",
    "//third_party/blink/renderer/core/html/html_heading_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 32fa09d..959cdb9 100644
+index 0be81a8..3e8dd74 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -102,6 +102,8 @@ blink_core_sources_html = [

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/display/types/display_color_management.h"
@@ -36,6 +37,9 @@ display::GammaAdjustment Warm() {
 // rather than the legacy ramp (patch 0161).
 class DrmColorCommitTest : public testing::Test {
  protected:
+  // A DrmDevice is deleted on the sequence it was made on.
+  base::test::SingleThreadTaskEnvironment task_environment_;
+
   void SetUp() override {
     drm_ = base::MakeRefCounted<FakeDrmDevice>(
         std::make_unique<MockGbmDevice>());

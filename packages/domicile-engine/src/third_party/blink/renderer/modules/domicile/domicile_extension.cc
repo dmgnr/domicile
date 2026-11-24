@@ -12,7 +12,8 @@ DomicileExtension::DomicileExtension(const String& id,
                                      const String& badge_text,
                                      const String& badge_color,
                                      const String& popup,
-                                     bool enabled)
+                                     bool enabled,
+                                     const String& profile)
     : id_(id),
       name_(name),
       title_(title),
@@ -20,7 +21,8 @@ DomicileExtension::DomicileExtension(const String& id,
       badge_text_(badge_text),
       badge_color_(badge_color),
       popup_(popup),
-      enabled_(enabled) {}
+      enabled_(enabled),
+      profile_(profile) {}
 
 DomicileExtension::~DomicileExtension() = default;
 

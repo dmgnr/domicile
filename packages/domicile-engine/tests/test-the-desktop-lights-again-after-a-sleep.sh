@@ -5,10 +5,10 @@
 # devices or drop DRM master, so across a suspend the evdev descriptors stay
 # open, master is kept, and the session stays `Active`.
 #
-# The GPU resumes with its CRTCs reset, but the connectors report the same
-# panels and modes. `ModesetWouldChangeAnything` then sees no change and the
-# panels stay dark. On resume the driver must forget what the hardware
-# confirmed before the sleep.
+# The GPU resumes with its CRTCs reset, and the connectors report the same
+# panels and modes. The hardware no longer holds what the driver confirmed
+# before the sleep, so on resume the driver forgets it and modesets every
+# display.
 #
 # logind broadcasts `PrepareForSleep(b)` on `org.freedesktop.login1.Manager`:
 # `true` going down, `false` on return. It sends `false` even after a failed
@@ -92,7 +92,7 @@ else
     "no DrmModeset::Relight in domicile/drm_modeset.cc"
 fi
 
-# `ModesetWouldChangeAnything` compares against what the hardware last
+# `ModesetParamsThatChange` compares against what the hardware last
 # confirmed. Clearing that is what forces the modeset.
 if in_modeset 'confirmed_.clear()'; then
   ok "a relight forgets what the hardware confirmed"

@@ -27,6 +27,11 @@
 #     and not the shell's document      guest's hook reports
 #   an unclaimed chord came back        Ctrl+R returns to the shell as
 #     and a plain key did not           `domicile-guest-keydown`
+#   each unclaimed key was delivered    `domicile-key-delivered` once for the
+#     and the chord was not             plain key and once for Ctrl+R, not for
+#                                        Alt+Tab
+#   a lone Alt let go came back         as `domicile-guest-keyup`, which shows
+#     and a plain key's release did not an Electron app's menu bar
 #   the requested zoom arrives          the shell answers Ctrl+R with
 #                                        setZoom(1.5); the element reports it
 #                                        and the page's width changes
@@ -92,6 +97,12 @@ UNCLAIMED_EVDEV=19
 UNCLAIMED_CODE="KeyR"
 UNCLAIMED_KEY="r"
 UNCLAIMED_VKEY=82
+
+# Alt alone, pressed and let go: its release must come back to the shell.
+ALT_EVDEV=56
+ALT_CODE="AltLeft"
+ALT_KEY="Alt"
+ALT_VKEY=18
 
 OUT="${OUT:-out/Domicile}"
 BROKER="${BROKER:-/tmp/domicile-webview-keyboard-broker}"
@@ -264,8 +275,34 @@ python3 "$SCRIPTS/guard-webview-keyboard-key.py" \
 # handled. A fixed wait, because some readings below are absences.
 sleep 5
 
+# The readings above come from the log as it is now: the keys below change the
+# modifiers too, which would answer for the plain key's hook.
+BEFORE_ALT="$ENGINE_LOG.before-alt"
+cp "$ENGINE_LOG" "$BEFORE_ALT"
+
+# 8. Alt alone, then the plain key's release. Only the first is a modifier.
+python3 "$SCRIPTS/guard-webview-keyboard-key.py" \
+  --port "$DEBUG_PORT" --code "$ALT_CODE" --key "$ALT_KEY" \
+  --evdev "$ALT_EVDEV" --windows-key-code "$ALT_VKEY" --alt \
+  >>"$KEY_LOG" 2>&1 ||
+  echo "Alt could not be driven; see $KEY_LOG" >&2
+
+python3 "$SCRIPTS/guard-webview-keyboard-key.py" \
+  --port "$DEBUG_PORT" --code "$ALT_CODE" --key "$ALT_KEY" \
+  --evdev "$ALT_EVDEV" --windows-key-code "$ALT_VKEY" --up \
+  >>"$KEY_LOG" 2>&1 ||
+  echo "Alt's release could not be driven; see $KEY_LOG" >&2
+
+python3 "$SCRIPTS/guard-webview-keyboard-key.py" \
+  --port "$DEBUG_PORT" --code "$PLAIN_CODE" --key "$PLAIN_KEY" \
+  --evdev "$PLAIN_EVDEV" --windows-key-code "$PLAIN_VKEY" --up \
+  >>"$KEY_LOG" 2>&1 ||
+  echo "the plain key's release could not be driven; see $KEY_LOG" >&2
+
+sleep 3
+
 saw() { # $1 pattern
-  grep -qF "$1" "$ENGINE_LOG" && echo 1 || echo 0
+  grep -qF "$1" "$BEFORE_ALT" && echo 1 || echo 0
 }
 
 SAW_CLAIM=$(saw "GUARD claimed")
@@ -285,6 +322,10 @@ SAW_GUEST_CHORD=$(saw "GUARD guest-chord key=$UNCLAIMED_KEY code=$UNCLAIMED_CODE
 SAW_PLAIN_CHORD=$(saw "GUARD guest-chord key=$PLAIN_KEY")
 SAW_ZOOM=$(saw "GUARD zoom factor=1.5")
 SAW_ZOOM_DRAWN=$(saw "GUARD guest-resized")
+# The plain key and Ctrl+R; a third is the claimed chord.
+DELIVERED=$(grep -cF "GUARD key-delivered" "$BEFORE_ALT")
+SAW_ALT_UP=$(grep -qF "GUARD guest-keyup key=$ALT_KEY code=$ALT_CODE" "$ENGINE_LOG" && echo 1 || echo 0)
+SAW_PLAIN_UP=$(grep -qF "GUARD guest-keyup key=$PLAIN_KEY" "$ENGINE_LOG" && echo 1 || echo 0)
 
 echo
 echo "claimed=$SAW_CLAIM loaded=$SAW_PAGE focused=$SAW_FOCUS relayed=$SAW_RELAY"
@@ -292,6 +333,8 @@ echo "shortcut=$SAW_SHORTCUT release=$SAW_RELEASE modifiers=$SAW_MODIFIERS hook-
 echo "the shell's document saw: before=$SAW_SHELL_KEY after=$SAW_DOCUMENT_KEY"
 echo "the page in the window saw: after=$SAW_GUEST_KEY"
 echo "handed back: chord=$SAW_GUEST_CHORD plain=$SAW_PLAIN_CHORD; zoom=$SAW_ZOOM drawn=$SAW_ZOOM_DRAWN"
+echo "delivered: $DELIVERED of 2"
+echo "let go: alt=$SAW_ALT_UP plain=$SAW_PLAIN_UP"
 echo
 
 # The verdict. `packages/domicile-engine/tests/test-webview-keyboard-guard.sh` runs this block
@@ -356,6 +399,21 @@ elif [ "$SAW_PLAIN_CHORD" = "1" ]; then
   FAILURE="a plain key was handed back to the shell as domicile-guest-keydown. \
 Only chords may be: this is every keystroke typed into a page, a password's \
 included, copied into the shell's document"
+elif [ "$SAW_ALT_UP" != "1" ]; then
+  FAILURE="Alt, pressed and let go alone, never came back to the shell as \
+domicile-guest-keyup, so Alt cannot show an Electron app's menu bar over its \
+window. WebViewGuest::HandleKeyboardEvent did not send UnhandledModifierUp for \
+the release, or the element did not dispatch it"
+elif [ "$SAW_PLAIN_UP" = "1" ]; then
+  FAILURE="a plain key's release was handed back to the shell as \
+domicile-guest-keyup. Only modifiers may be: this is every keystroke typed \
+into a page, a password's included, copied into the shell's document"
+elif [ "$DELIVERED" != "2" ]; then
+  FAILURE="the shell heard domicile-key-delivered $DELIVERED times where the \
+plain key and Ctrl+R owed 2. Fewer: WebViewGuest::PreHandleKeyboardEvent did \
+not send KeyDelivered for an unclaimed key, or the element did not dispatch \
+it, so typing in a browser window does not end a selection around it. More: \
+the claimed chord was counted as typing in the page"
 elif [ "$SAW_ZOOM" != "1" ]; then
   FAILURE="the shell asked for 150% and the element never reported it. \
 Either SetZoom never reached the browser, or HostZoomMap set it and ReportZoom \

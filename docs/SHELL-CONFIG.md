@@ -22,7 +22,7 @@ For what a shell does with these settings, see
 - `domicile` prints which config it used before starting:
 
 ```
-config: /home/you/.config/domicile/domicile.json, found where a config lives
+config: /home/you/.config/domicile/domicile.json
 config: ./desk.json, because --config names it
 config: none -- no domicile.{ts,tsx,js,mjs,json} in /home/you/.config/domicile -- so the compositor's defaults
 ```
@@ -144,7 +144,9 @@ An edit applies to the running desktop, and windows stay open:
 | `theme.font_name`, `monospace_font_name` | Windows that read the settings portal follow |
 | `theme.force_dark` | Those sites are drawn dark from their next load |
 | `theme.icon_theme` | Shell and windows that read the settings portal follow; tray icons redrawn and later notifications drawn in it; manganese on the next menu or launcher opening, and title bars when a new app id appears |
+| `spellcheck` | Text fields check spelling in the new languages, or stop |
 | `files.omit` | Launcher file index rebuilt |
+| `electron.apps` | Starting a newly listed app runs it on the engine; apps already running stay as they are |
 | `extensions` | Extensions installed or removed ([EXTENSIONS.md](/docs/architecture/EXTENSIONS.md)) |
 | `lockdown` | Applications told through the Lockdown portal |
 | `terminal` | Processes started from then on get the new terminal: the launcher's next opening, the next `domicile open` from a new window, and Meta+Return |
@@ -174,6 +176,18 @@ An edit applies to the running desktop, and windows stay open:
   argv: `[["emacs", "--daemon"], ["sh", "-c", "…"]]`.
 - `files`: what the launcher's file index leaves out. See
   [LAUNCHER.md](LAUNCHER.md).
+- `electron.apps`: desktop file ids of installed Electron apps that run on
+  the desktop's engine instead of the Electron they ship:
+  `{ "electron": { "apps": ["slack.desktop"] } }`. Whatever starts the
+  entry (the launcher, a link, a notification) runs it with
+  `domicile open --electron`. An entry in `~/.local/share/applications`
+  can't be overridden, and is logged. See
+  [ELECTRON-APPS.md](architecture/ELECTRON-APPS.md).
+- `browser`: browser profiles and the profile each site opens in. Each
+  profile has its own sign-ins, site data and extensions, and a private one
+  keeps nothing past its last page. A page the user takes to a listed site
+  moves to its profile; see
+  [BROWSER-PROFILES.md](architecture/BROWSER-PROFILES.md).
 - `terminal`: see [Terminal](#terminal).
 - `output.max_scale`: the highest scale advertised for the output that
   follows Domicile's window. Applies only when `output.displays` is empty.
@@ -344,6 +358,19 @@ display the pointer is on.
   an EDID description.
 - Details: [DISPLAYS.md](DISPLAYS.md#tablets-and-touchscreens).
 
+## Agents
+
+```json
+{ "agents": { "web": true } }
+```
+
+`agents.web` lets agents on the web, such as claude.ai, reach the desktop
+through Domicile's relay. While it is `true`, the compositor runs `domicile
+mcp --relay`, and runs it again if it exits; setting it back to `false`
+stops it. Each agent still signs in only once you allow it on the desktop,
+and asks before it uses anything. Defaults to `false`. Settings › Agents › Connect
+from the web sets it ([AGENTS.md](AGENTS.md#agents-on-the-web)).
+
 ## Idle
 
 `idle.blank_after_seconds` is how long the desktop goes without input before
@@ -448,9 +475,14 @@ The engine draws every pointer on a tty, including a window's, from
   `~/.icons`, `icons` under each of `XDG_DATA_DIRS`, and
   `/usr/share/pixmaps`, in that order. Inherited themes are followed.
 - A cursor the theme lacks is Chromium's own.
-- The engine logs `the desk's pointer theme is "<theme>" at <size> px`, then
-  `loaded <n> cursors from "<theme>"`, or `no cursor theme "<theme>" on
-  the XCursor path`.
+- The theme loads once per size in pixels. Until a monitor's size loads, the
+  nearest loaded size stands in; before any has loaded, the pointer is
+  Chromium's.
+- The engine logs these at `ERROR`, which reaches the journal:
+  `has no cursor for type <n>`, `no cursor theme "<theme>" on the XCursor
+  path`, and `the desk names no pointer theme`. Chromium's pointer while the
+  first size loads is a debug line, `the pointer is Chromium's until
+  "<theme>" at <size> px loads`.
 - A cursor larger than the GPU's cursor plane, often 64 or 256 pixels, is
   cut off.
 
@@ -499,7 +531,24 @@ For sites with no dark theme of their own, such as Gmail:
   rejected.
 - Default: `[]`.
 
-## Displays
+## Spelling
+
+```json
+{ "spellcheck": { "enabled": true, "languages": ["en-US", "de-DE"] } }
+```
+
+Text fields in pages, web apps and Electron apps underline misspelled words.
+
+- `enabled`: default `true`.
+- `languages`: language tags, default `["en-US"]`. A tag the engine has no
+  dictionary for is logged and left out. An empty list is rejected; set
+  `enabled` to `false` instead.
+- Dictionaries ship with the engine. None is downloaded, and words are never
+  sent to Google's spelling service.
+- A right click on a misspelled word gives a shell the word and its
+  suggestions on the context menu event. See
+  [SHELL-BROWSER-WINDOWS.md](SHELL-BROWSER-WINDOWS.md#the-keyboard).
+
 
 `output` has two ways to describe displays:
 
@@ -534,7 +583,8 @@ For sites with no dark theme of their own, such as Gmail:
 ```
 
 Each profile entry sets `enabled`, `position`, a fractional `scale`, a
-`transform`, and optionally `mode`, `refresh` and `adaptive_sync`. An entry
+`transform`, and optionally `mode`, `refresh`, `adaptive_sync`, `hdr` and
+`sdr_white`. An entry
 without `position` goes right of the positioned ones, in profile order.
 
 ### Naming a display
@@ -543,6 +593,7 @@ Any of these match:
 
 - the `wl_output` name: on a tty, `drm-<id>`, or the connector (`HDMI-A-1`)
   for a monitor with no EDID make, model or serial
+- the connector, e.g. `DP-1` or `eDP-1`
 - the EDID description `"<MAKE> <MODEL> <SERIAL>"`, e.g.
   `DEL DELL U3219Q 2ZLS413`
 - the description with the maker's full name from hwdata's `pnp.ids`, e.g.
@@ -588,6 +639,30 @@ default.
 - If the driver refuses it, the monitor lights the same way without it.
 - The shell's `displays.list` says whether it took: `adaptiveSync` is `on`,
   `off` or `unsupported`.
+
+### `hdr`
+
+`"hdr": true` drives that monitor in HDR (HDR10), so HDR video and images
+reach its full brightness and color. It is off by default.
+
+- It is used only where the monitor says it takes HDR10 and its connector
+  carries 10 bits a channel. Elsewhere the monitor stays SDR.
+- `sdr_white` is how bright ordinary content's white is in HDR, in cd/m²
+  (nits), from 1 to 10000. Without it, 203. Raise it if windows look dim next
+  to the same monitor in SDR.
+
+```json
+{
+  "output": {
+    "profiles": [
+      {
+        "name": "movies",
+        "displays": [{ "display": "drm-1", "hdr": true, "sdr_white": 250 }]
+      }
+    ]
+  }
+}
+```
 
 ### `transform`
 

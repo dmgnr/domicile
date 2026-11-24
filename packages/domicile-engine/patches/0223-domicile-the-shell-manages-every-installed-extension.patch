@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the shell manages every installed extension
+
+The shell's tray menu lists every installed extension, switched on or
+off, and pins, switches, configures and uninstalls them. Blink builds:
+
+- `DomicileInstalledExtension`, one extension in
+  `domicile.installedExtensions`.
+- `DomicileExtensionSettings`, what `configureExtension()` sets.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ third_party/blink/renderer/bindings/generated_in_modules.gni | 4 ++++
+ third_party/blink/renderer/bindings/idl_in_modules.gni       | 2 ++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
+index 568590e..cd08ae2 100644
+--- a/third_party/blink/renderer/bindings/generated_in_modules.gni
++++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
+@@ -278,6 +278,8 @@ generated_dictionary_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_app_event_init.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension_popup_event_init.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension_popup_event_init.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension_settings.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension_settings.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_gesture_event_init.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_gesture_event_init.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_file_search.cc",
+@@ -2357,6 +2359,8 @@ generated_interface_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension_popup_event.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension_popup_event.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_installed_extension.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_installed_extension.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_gesture_event.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_gesture_event.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_window.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
+index ad367b6..1bc8803 100644
+--- a/third_party/blink/renderer/bindings/idl_in_modules.gni
++++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
+@@ -284,6 +284,8 @@ static_idl_files_in_modules = [
+   "//third_party/blink/renderer/modules/domicile/domicile_extension.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_extension_popup_event.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_extension_popup_event_init.idl",
++  "//third_party/blink/renderer/modules/domicile/domicile_extension_settings.idl",
++  "//third_party/blink/renderer/modules/domicile/domicile_installed_extension.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_gesture_event.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_gesture_event_init.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_file_search.idl",

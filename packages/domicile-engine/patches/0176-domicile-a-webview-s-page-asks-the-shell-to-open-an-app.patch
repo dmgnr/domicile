@@ -95,7 +95,7 @@ index 99921ca..f37d848 100644
    // potentially trustworthy.
    static bool MayRememberAllowDecisionsForThisOrigin(
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 43bf035..615c495 100644
+index 4fff2b5..5d71926 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1226,6 +1226,8 @@ generated_interface_sources_in_core = [
@@ -108,7 +108,7 @@ index 43bf035..615c495 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index bc8f80b..e101259 100644
+index f0b8602..ee86684 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -471,6 +471,7 @@ static_idl_files_in_core = [
@@ -120,7 +120,7 @@ index bc8f80b..e101259 100644
    "//third_party/blink/renderer/core/html/html_head_element.idl",
    "//third_party/blink/renderer/core/html/html_heading_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 50eb956..6d48c6b 100644
+index 470b86a..3ade9c8 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -110,6 +110,8 @@ blink_core_sources_html = [

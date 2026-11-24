@@ -41,9 +41,8 @@ std::optional<double> DeskZoomFactor(double asked,
                                      double minimum,
                                      double maximum);
 
-// Whether a desk tab accepts tabs.setZoomSettings' `mode` and `scope` ("" when
-// omitted). Guests zoom per site through HostZoomMap, so only automatic,
-// per-origin is supported.
+// Whether tabs.setZoomSettings takes `mode` with `scope` ("" when omitted). As
+// in Chrome, only automatic zoom can be per origin.
 bool DeskTakesZoomSettings(std::string_view mode, std::string_view scope);
 
 // Whether a focused guest showing `scheme` becomes the active tab. Extension

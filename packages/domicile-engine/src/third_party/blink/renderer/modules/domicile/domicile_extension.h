@@ -28,7 +28,8 @@ class MODULES_EXPORT DomicileExtension final : public ScriptWrappable {
                     const String& badge_text,
                     const String& badge_color,
                     const String& popup,
-                    bool enabled);
+                    bool enabled,
+                    const String& profile);
   ~DomicileExtension() override;
 
   const String& id() const { return id_; }
@@ -39,6 +40,7 @@ class MODULES_EXPORT DomicileExtension final : public ScriptWrappable {
   const String& badgeColor() const { return badge_color_; }
   const String& popup() const { return popup_; }
   bool enabled() const { return enabled_; }
+  const String& profile() const { return profile_; }
 
   void Trace(Visitor*) const override;
 
@@ -51,6 +53,7 @@ class MODULES_EXPORT DomicileExtension final : public ScriptWrappable {
   String badge_color_;
   String popup_;
   bool enabled_ = false;
+  String profile_;
 };
 
 }  // namespace blink

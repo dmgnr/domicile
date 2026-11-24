@@ -328,6 +328,86 @@ describe("watchPortalRequests", () => {
     ]);
   });
 
+  it("parses an agent's ask and the windows it offers", async () => {
+    const host = new FakeHost();
+    const requests = watched(host);
+    host.push([
+      {
+        app_id: "",
+        body: {
+          agent: "Claude Code",
+          windows: [
+            {
+              app: "org.gnome.TextEditor",
+              id: "t1",
+              kind: "native",
+              title: "Notes",
+            },
+            { id: "t2", kind: "browser", title: "Pull requests" },
+          ],
+        },
+        id: 3,
+        kind: "agent",
+      },
+    ]);
+
+    expect(await requests).toEqual([
+      {
+        appId: "",
+        body: {
+          agent: "Claude Code",
+          current: undefined,
+          remembered: false,
+          windows: [
+            {
+              app: "org.gnome.TextEditor",
+              browser: false,
+              id: "t1",
+              title: "Notes",
+            },
+            { app: undefined, browser: true, id: "t2", title: "Pull requests" },
+          ],
+        },
+        id: 3,
+        kind: PortalKind.Agent,
+        parentAppId: undefined,
+      },
+    ]);
+  });
+
+  it("parses a change to an agent with what it reaches now", async () => {
+    const host = new FakeHost();
+    const requests = watched(host);
+    host.push([
+      {
+        app_id: "",
+        body: {
+          agent: "Claude Code",
+          current: { type: "desk" },
+          remembered: true,
+          windows: [],
+        },
+        id: 3,
+        kind: "agent",
+      },
+    ]);
+
+    expect(await requests).toEqual([
+      {
+        appId: "",
+        body: {
+          agent: "Claude Code",
+          current: { kind: "desk" },
+          remembered: true,
+          windows: [],
+        },
+        id: 3,
+        kind: PortalKind.Agent,
+        parentAppId: undefined,
+      },
+    ]);
+  });
+
   it("parses an input capture request's body", async () => {
     const host = new FakeHost();
     const requests = watched(host);
@@ -853,6 +933,45 @@ describe("watchCapturing", () => {
       watchCapturing(host, resolve);
     });
 
+  it("parses an agent's session and what it did", async () => {
+    const host = new FakeHost();
+    const sessions = capturing(host);
+    host.push(
+      [],
+      [
+        {
+          app_id: "",
+          body: {
+            actions: [{ at_ms: 7, said: "Read Notes" }],
+            agent: "Claude Code",
+            reach: {
+              type: "windows",
+              windows: [{ id: "t1", kind: "native", title: "Notes" }],
+            },
+          },
+          id: 5,
+          kind: "agent",
+        },
+      ],
+    );
+
+    expect(await sessions).toEqual([
+      {
+        actions: [{ atMs: 7, said: "Read Notes" }],
+        agent: "Claude Code",
+        appId: "",
+        id: 5,
+        kind: CapturingKind.Agent,
+        reach: {
+          kind: "windows",
+          windows: [
+            { app: undefined, browser: false, id: "t1", title: "Notes" },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("parses each session", async () => {
     const host = new FakeHost();
     const sessions = capturing(host);
@@ -1149,6 +1268,18 @@ describe("answerPortalRequest", () => {
       13,
       PortalAnswer.ScreenshotBrowserWindow("1", false),
     );
+    answerPortalRequest(host, 15, PortalAnswer.Agent({ kind: "desk" }, true));
+    answerPortalRequest(host, 17, PortalAnswer.Change());
+    answerPortalRequest(
+      host,
+      16,
+      PortalAnswer.Agent({
+        kind: "windows",
+        windows: [
+          { app: undefined, browser: true, id: "t2", title: "Pull requests" },
+        ],
+      }),
+    );
     answerPortalRequest(
       host,
       14,
@@ -1203,6 +1334,18 @@ describe("answerPortalRequest", () => {
       [11, { kind: "pick_color", x: 5, y: 6 }],
       [12, { copy: true, id: "app-3", kind: "screenshot_window" }],
       [13, { copy: false, id: "1", kind: "screenshot_browser_window" }],
+      [15, { kind: "agent", reach: { type: "desk" }, remember: true }],
+      [17, { kind: "change" }],
+      [
+        16,
+        {
+          kind: "agent",
+          reach: {
+            type: "windows",
+            windows: [{ id: "t2", kind: "browser", title: "Pull requests" }],
+          },
+        },
+      ],
       [
         14,
         {

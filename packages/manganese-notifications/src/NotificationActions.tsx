@@ -166,6 +166,8 @@ const stripStyles = cva({
     display: "grid",
     gridColumn: "1 / -1",
     gridTemplateRows: "1fr 0fr",
+    // main-thread animation: swaps the actions for the reply field once, moving
+    // what is below.
     transition: "grid-template-rows {durations.slow} {easings.outQuart}",
   },
   // Cancels the card's padding so the strip spans it edge to edge. Matches

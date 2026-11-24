@@ -8,6 +8,7 @@ import { Direction } from "../direction";
 import type { WindowAction as Action } from "../window-state";
 import { WindowAction } from "../window-state";
 import { MediaKey } from "./media-key";
+import { Query } from "./query";
 import { useKeybindings } from "./useKeybindings";
 
 /** A sample of manganese's bindings. */
@@ -15,12 +16,16 @@ const KEYS: ShellKeybindings = {
   keybindings: {
     "Meta+l": KeyAction.SendShell(["focus", "right"]),
     "Meta+o": KeyAction.SendShell(["overview"]),
-    "Meta+Return": KeyAction.SendShell(["exec", "foot"]),
+    "Meta+Return": KeyAction.SendShell(["terminal"]),
     "Meta+r": KeyAction.Mode("resize"),
     "Meta+Shift+l": KeyAction.SendShell(["move", "right"]),
     "Meta+space": KeyAction.SendShell(["launcher"]),
+    "Meta+t": KeyAction.SendShell(["get-tree"]),
     "Meta+v": KeyAction.SendShell(["clipboard"]),
     "Meta+x": KeyAction.SendShell(["teleport"]),
+    Print: KeyAction.SendShell(["screenshot"]),
+    "swipe:4:down": KeyAction.SendShell(["layer", "down"]),
+    "swipe:4:up": KeyAction.SendShell(["layer", "up"]),
     XF86AudioRaiseVolume: KeyAction.SendShell(["volume", "up"]),
   },
   modes: {
@@ -47,9 +52,14 @@ const bound = (launcherOpen = false, overviewOpen = false) => {
   const acted: Action[] = [];
   const modes: string[] = [];
   const reported: string[] = [];
+  const asked: Query[] = [];
   const { rerender } = renderHook(
     ({ mode }: { mode: string }) => {
       useKeybindings({
+        answer: (query) => {
+          asked.push(query);
+          return "{}";
+        },
         domicile,
         keybindings: KEYS,
         launcherOpen,
@@ -68,7 +78,7 @@ const bound = (launcherOpen = false, overviewOpen = false) => {
     },
     { initialProps: { mode: "default" } },
   );
-  return { acted, modes, presses, reported, rerender };
+  return { acted, asked, modes, presses, reported, rerender };
 };
 
 describe("useKeybindings", () => {
@@ -80,14 +90,19 @@ describe("useKeybindings", () => {
     expect(acted).toStrictEqual([WindowAction.FocusStepped(Direction.Right)]);
   });
 
-  it("answers only the launcher's own key while it is up", () => {
-    // The launcher is modal, so keys must not act on windows behind it.
+  it("answers only the launcher's own key and Print while it is up", () => {
+    // The launcher is modal, so keys must not act on windows behind it. A
+    // screenshot acts on none, and is how the launcher is shot.
     const { acted, presses } = bound(true);
 
     presses("Meta+l");
+    presses("Print");
     presses("Meta+space");
 
-    expect(acted).toStrictEqual([WindowAction.LauncherToggled()]);
+    expect(acted).toStrictEqual([
+      WindowAction.ScreenshotTaken(),
+      WindowAction.LauncherToggled(),
+    ]);
   });
 
   it("answers only the overview's own keys while it is up, and the hardware keys", () => {
@@ -101,6 +116,8 @@ describe("useKeybindings", () => {
     presses("XF86AudioRaiseVolume");
     presses("Meta+v");
     presses("Meta+o");
+    presses("swipe:4:up");
+    presses("swipe:4:down");
 
     expect(acted).toStrictEqual([
       WindowAction.FocusStepped(Direction.Right),
@@ -108,6 +125,8 @@ describe("useKeybindings", () => {
       WindowAction.MediaKeyPressed(MediaKey.VolumeUp),
       WindowAction.ClipboardToggled(),
       WindowAction.OverviewToggled(),
+      WindowAction.LayerRaised(),
+      WindowAction.LayerLowered(),
     ]);
   });
 
@@ -118,6 +137,16 @@ describe("useKeybindings", () => {
 
     expect(acted).toStrictEqual([]);
     expect(reported).toStrictEqual(["manganese: no command `teleport`"]);
+  });
+
+  it("answers a query without acting, even over the launcher", () => {
+    const { acted, asked, presses, reported } = bound(true);
+
+    presses("Meta+t");
+
+    expect(asked).toStrictEqual([Query.Tree]);
+    expect(acted).toStrictEqual([]);
+    expect(reported).toStrictEqual([]);
   });
 
   it("says when a key enters a mode", () => {

@@ -8,11 +8,13 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/values.h"
+#include "chrome/browser/extensions/api/tabs/tabs_api.h"
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/window_controller_list.h"
@@ -221,7 +223,7 @@ class DomicileWindowController::Tab : public content::WebContentsObserver {
   void OnFocused() { window_->Focused(tab_id_, *web_contents()); }
 
   void OnZoomed(double old_factor, double new_factor) {
-    window_->Zoomed(tab_id_, old_factor, new_factor);
+    window_->Zoomed(tab_id_, *web_contents(), old_factor, new_factor);
   }
 
   // Returns `property`, plus `url` if the URL changed since last reported.
@@ -242,10 +244,12 @@ class DomicileWindowController::Tab : public content::WebContentsObserver {
   base::CallbackListSubscription zoomed_;
 };
 
-extensions::api::tabs::ZoomSettings DeskZoomSettings() {
+extensions::api::tabs::ZoomSettings DeskZoomSettings(
+    content::WebContents& tab) {
+  WebViewGuest* guest = WebViewGuest::FromWebContents(&tab);
+  CHECK(guest);
   extensions::api::tabs::ZoomSettings settings;
-  settings.mode = extensions::api::tabs::ZoomSettingsMode::kAutomatic;
-  settings.scope = extensions::api::tabs::ZoomSettingsScope::kPerOrigin;
+  extensions::ZoomModeToZoomSettings(guest->GetZoomMode(), &settings);
   return settings;
 }
 
@@ -348,6 +352,8 @@ void DomicileWindowController::Add(content::WebContents& guest) {
   sessions::SessionTabHelper::FromWebContents(&guest)->SetWindowID(session_id_);
 
   const std::optional<int> before = tabs_.Active();
+  VLOG(1) << "domicile: tab " << tab_id << " joins extension window "
+          << GetWindowId() << (IsPopup() ? " (a popup)" : "");
   tabs_.Add(tab_id);
   by_id_.emplace(tab_id, std::make_unique<Tab>(*this, guest, tab_id));
 
@@ -378,6 +384,8 @@ DomicileWindowController& DomicileWindowController::OpenPopup() {
   std::unique_ptr<DomicileWindowController> made =
       base::WrapUnique(new DomicileWindowController(profile(), *this));
   DomicileWindowController& popup = *made;
+  VLOG(1) << "domicile: extension popup window " << popup.GetWindowId()
+          << " opens over window " << GetWindowId();
   popups_.emplace(popup.GetWindowId(), std::move(made));
   BroadcastWindowEvent(popup, /*created=*/true);
   return popup;
@@ -399,6 +407,7 @@ void DomicileWindowController::ClosePopup(int window_id) {
   CHECK_EQ(found->second->GetTabCount(), 0);
   std::unique_ptr<DomicileWindowController> popup = std::move(found->second);
   popups_.erase(found);
+  VLOG(1) << "domicile: extension popup window " << window_id << " closes";
   if (last_focused_ == window_id) {
     last_focused_ = GetWindowId();
   }
@@ -469,6 +478,8 @@ void DomicileWindowController::TookFocus() {
   CHECK(!IsPopup());
   const bool was_last = focused_at_ == FocusCount();
   focused_at_ = ++FocusCount();
+  VLOG(1) << "domicile: extension window " << GetWindowId()
+          << " took focus, last focused " << last_focused_;
   // From another desk: a profile's desk and its private profile's take turns
   // as the active tab's.
   if (!was_last) {
@@ -674,13 +685,14 @@ void DomicileWindowController::Updated(int tab_id,
 // Fires tabs.onZoomChange as TabsEventRouter::OnZoomChanged does, without a
 // default factor in the settings.
 void DomicileWindowController::Zoomed(int tab_id,
+                                      content::WebContents& tab,
                                       double old_factor,
                                       double new_factor) {
   extensions::api::tabs::OnZoomChange::ZoomChangeInfo info;
   info.tab_id = tab_id;
   info.old_zoom_factor = old_factor;
   info.new_zoom_factor = new_factor;
-  info.zoom_settings = DeskZoomSettings();
+  info.zoom_settings = DeskZoomSettings(tab);
   Broadcast(profile(),
             std::make_unique<extensions::Event>(
                 extensions::events::TABS_ON_ZOOM_CHANGE,

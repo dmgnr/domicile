@@ -17,9 +17,11 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
 #include "base/values.h"
@@ -40,6 +42,8 @@ constexpr char kConfigExtensions[] = "config_extensions";
 constexpr char kExtensions[] = "extensions";
 constexpr char kSetExtensionEnabled[] = "set_extension_enabled";
 constexpr char kConfigureExtension[] = "configure_extension";
+constexpr char kBrowserProfiles[] = "browser_profiles";
+constexpr char kPinBrowserSite[] = "pin_browser_site";
 constexpr char kMediaDevices[] = "media_devices";
 constexpr char kSetMediaDevice[] = "set_media_device";
 constexpr char kHistory[] = "history";
@@ -49,6 +53,8 @@ constexpr char kClearBrowsingData[] = "clear_browsing_data";
 constexpr char kSiteData[] = "site_data";
 constexpr char kClearSiteData[] = "clear_site_data";
 constexpr char kDisableWhileTyping[] = "disable_while_typing";
+constexpr char kSetLogLevels[] = "set_log_levels";
+constexpr char kDevTools[] = "devtools";
 
 std::string Line(base::DictValue reply) {
   std::string line;
@@ -73,6 +79,7 @@ void AnswerRunApp(const base::DictValue& request,
                   CommandReply reply);
 void AnswerOpenUrl(const base::DictValue& request,
                    OpenUrl open_url,
+                   HasBrowserProfile has_browser_profile,
                    CommandReply reply);
 void AnswerOpened(const std::string& refusal, CommandReply reply, bool opened);
 std::string AnswerSitePermissions(ListSitePermissions list_site_permissions);
@@ -90,9 +97,17 @@ std::string AnswerSetExtensionEnabled(const base::DictValue& request,
                                       SetExtensionEnabled set_extension_enabled);
 std::string AnswerConfigureExtension(const base::DictValue& request,
                                      ConfigureExtension configure_extension);
-std::string AnswerMediaDevices(ListMediaDevices list_media_devices);
-std::string AnswerSetMediaDevice(const base::DictValue& request,
-                                 SetMediaDevice set_media_device);
+std::string BrowserProfilesLine(const std::optional<BrowserProfileList>& list);
+void AnswerBrowserProfiles(ListBrowserProfiles list_browser_profiles,
+                           CommandReply reply);
+std::string AnswerPinBrowserSite(const base::DictValue& request,
+                                 PinBrowserSite pin_browser_site);
+CommandDone ReplyWhenDone(std::string_view type, CommandReply reply);
+void AnswerMediaDevices(ListMediaDevices list_media_devices,
+                        CommandReply reply);
+void AnswerSetMediaDevice(const base::DictValue& request,
+                          SetMediaDevice set_media_device,
+                          CommandReply reply);
 void AnswerHistory(const base::DictValue& request,
                    SearchHistory search_history,
                    CommandReply reply);
@@ -111,8 +126,26 @@ void AnswerClearSiteData(const base::DictValue& request,
                          CommandReply reply);
 std::string AnswerDisableWhileTyping(const base::DictValue& request,
                                      DisableWhileTyping disable_while_typing);
+std::string AnswerSetLogLevels(const base::DictValue& request,
+                               SetLogLevels set_log_levels);
+void AnswerDevTools(const base::DictValue& request,
+                    SendDevTools send_devtools,
+                    CommandReply reply);
 
 }  // namespace
+
+ListedBrowserProfile::ListedBrowserProfile() = default;
+ListedBrowserProfile::ListedBrowserProfile(const ListedBrowserProfile&) =
+    default;
+ListedBrowserProfile& ListedBrowserProfile::operator=(
+    const ListedBrowserProfile&) = default;
+ListedBrowserProfile::~ListedBrowserProfile() = default;
+
+BrowserProfileList::BrowserProfileList() = default;
+BrowserProfileList::BrowserProfileList(const BrowserProfileList&) = default;
+BrowserProfileList& BrowserProfileList::operator=(const BrowserProfileList&) =
+    default;
+BrowserProfileList::~BrowserProfileList() = default;
 
 SitePermissionList::SitePermissionList() = default;
 SitePermissionList::SitePermissionList(const SitePermissionList&) = default;
@@ -190,7 +223,8 @@ void AnswerCommand(std::string_view line,
     return;
   }
   if (*type == kOpenUrl) {
-    AnswerOpenUrl(*request, actions.open_url, std::move(reply));
+    AnswerOpenUrl(*request, actions.open_url, actions.has_browser_profile,
+                  std::move(reply));
     return;
   }
   if (*type == kListSitePermissionsCommand) {
@@ -230,13 +264,21 @@ void AnswerCommand(std::string_view line,
         AnswerConfigureExtension(*request, actions.configure_extension));
     return;
   }
+  if (*type == kBrowserProfiles) {
+    AnswerBrowserProfiles(actions.list_browser_profiles, std::move(reply));
+    return;
+  }
+  if (*type == kPinBrowserSite) {
+    std::move(reply).Run(
+        AnswerPinBrowserSite(*request, actions.pin_browser_site));
+    return;
+  }
   if (*type == kMediaDevices) {
-    std::move(reply).Run(AnswerMediaDevices(actions.list_media_devices));
+    AnswerMediaDevices(actions.list_media_devices, std::move(reply));
     return;
   }
   if (*type == kSetMediaDevice) {
-    std::move(reply).Run(
-        AnswerSetMediaDevice(*request, actions.set_media_device));
+    AnswerSetMediaDevice(*request, actions.set_media_device, std::move(reply));
     return;
   }
   if (*type == kHistory) {
@@ -269,6 +311,14 @@ void AnswerCommand(std::string_view line,
         AnswerDisableWhileTyping(*request, actions.disable_while_typing));
     return;
   }
+  if (*type == kDevTools) {
+    AnswerDevTools(*request, actions.send_devtools, std::move(reply));
+    return;
+  }
+  if (*type == kSetLogLevels) {
+    std::move(reply).Run(AnswerSetLogLevels(*request, actions.set_log_levels));
+    return;
+  }
   std::move(reply).Run(RefusedCommand(base::StrCat(
       {"\"", *type, "\" is not a command this engine knows; it takes \"",
        kLoadShell, "\", \"", kRunApp, "\", \"", kOpenUrl, "\", \"",
@@ -279,8 +329,9 @@ void AnswerCommand(std::string_view line,
        kConfigureExtension, "\", \"",
        kMediaDevices, "\", \"", kSetMediaDevice, "\", \"", kHistory, "\", \"",
        kVisits, "\", \"", kDeleteHistory, "\", \"", kClearBrowsingData,
-       "\", \"", kSiteData, "\", \"", kClearSiteData, "\" and \"",
-       kDisableWhileTyping, "\""})));
+       "\", \"", kSiteData, "\", \"", kClearSiteData, "\", \"",
+       kDisableWhileTyping, "\", \"", kDevTools, "\" and \"", kSetLogLevels,
+       "\""})));
 }
 
 namespace {
@@ -315,10 +366,25 @@ void AnswerLoadShell(const base::DictValue& request,
     return;
   }
 
+  // Left out is a directory. Anything but a boolean is refused rather than
+  // read as one, so a sender's mistake does not serve a socket as a
+  // directory.
+  ShellFiles files = ShellFiles::kDirectory;
+  if (const base::Value* dev_server = request.Find("dev_server")) {
+    if (!dev_server->is_bool()) {
+      std::move(reply).Run(RefusedCommand(
+          "load_shell's \"dev_server\" says whether the root is a dev "
+          "server's socket: true or false"));
+      return;
+    }
+    files = dev_server->GetBool() ? ShellFiles::kDevServer
+                                  : ShellFiles::kDirectory;
+  }
+
   // The root and module are not checked here. `domicile load-shell` validates
   // the path first (`shell_path` in domicile-launch), and a module that fails
   // to run is refused once the page says so.
-  load_shell(shell_root, *module,
+  load_shell(shell_root, *module, files,
              base::BindOnce(
                  [](CommandReply reply,
                     base::expected<void, std::string> loaded) {
@@ -401,6 +467,7 @@ base::expected<std::optional<AppLaunch>, std::string> AppLaunchIn(
 
 void AnswerOpenUrl(const base::DictValue& request,
                    OpenUrl open_url,
+                   HasBrowserProfile has_browser_profile,
                    CommandReply reply) {
   const std::string* url = request.FindString("url");
   if (url == nullptr) {
@@ -431,8 +498,23 @@ void AnswerOpenUrl(const base::DictValue& request,
     std::move(reply).Run(RefusedCommand(launch.error()));
     return;
   }
+  // Optional: none is the profile the site opens in.
+  const base::Value* profile = request.Find("profile");
+  if (profile != nullptr &&
+      (!profile->is_string() || profile->GetString().empty())) {
+    std::move(reply).Run(RefusedCommand(
+        "open_url's \"profile\" is the id of a browser profile"));
+    return;
+  }
+  if (profile != nullptr && !has_browser_profile(profile->GetString())) {
+    std::move(reply).Run(RefusedCommand(base::StrCat(
+        {"the desk has no browser profile \"", profile->GetString(),
+         "\"; the config's browser.profiles names them"})));
+    return;
+  }
   open_url(
       parsed, *launch,
+      profile != nullptr ? profile->GetString() : std::string(),
       base::BindOnce(&AnswerOpened,
                      std::string("this engine has no shell page to open it in"),
                      std::move(reply)));
@@ -608,6 +690,9 @@ std::string AnswerExtensions(ListExtensions list_extensions) {
     if (extension.options_url.is_valid()) {
       entry.Set("options_url", extension.options_url.spec());
     }
+    if (!extension.icon_path.empty()) {
+      entry.Set("icon_path", extension.icon_path);
+    }
     listed.Append(std::move(entry));
   }
   base::DictValue reply;
@@ -626,10 +711,81 @@ std::string AnswerSetExtensionEnabled(
         "set_extension_enabled needs an \"id\" and whether it is "
         "\"enabled\"");
   }
-  const base::expected<void, std::string> set =
-      set_extension_enabled(*id, *enabled);
+  const base::Value* profile = request.Find("profile");
+  if (profile != nullptr && !profile->is_string()) {
+    return RefusedCommand(
+        "set_extension_enabled's \"profile\" is a browser profile's id");
+  }
+  const base::expected<void, std::string> set = set_extension_enabled(
+      *id, *enabled, profile == nullptr ? std::string() : profile->GetString());
   if (!set.has_value()) {
     return RefusedCommand(set.error());
+  }
+  return Done("set");
+}
+
+std::string BrowserProfilesLine(const std::optional<BrowserProfileList>& list) {
+  if (!list) {
+    return RefusedCommand(
+        "this engine has no shell, and so no browser profiles to list");
+  }
+  base::ListValue profiles;
+  for (const ListedBrowserProfile& profile : list->profiles) {
+    base::ListValue extensions;
+    for (const ListedProfileExtension& extension : profile.extensions) {
+      base::DictValue entry;
+      entry.Set("id", extension.id);
+      entry.Set("enabled", extension.enabled);
+      entry.Set("locked", extension.locked);
+      extensions.Append(std::move(entry));
+    }
+    base::DictValue entry;
+    entry.Set("id", profile.id);
+    entry.Set("name", profile.name);
+    entry.Set("color", profile.color);
+    entry.Set("private", profile.is_private);
+    entry.Set("extensions", std::move(extensions));
+    profiles.Append(std::move(entry));
+  }
+  base::ListValue sites;
+  for (const ListedBrowserSite& site : list->sites) {
+    base::DictValue entry;
+    entry.Set("site", site.site);
+    entry.Set("profile", site.profile);
+    entry.Set("pinned", site.pinned);
+    sites.Append(std::move(entry));
+  }
+  base::DictValue reply;
+  reply.Set("type", kBrowserProfiles);
+  reply.Set("default_profile", list->default_profile);
+  reply.Set("default_private_profile", list->default_private_profile);
+  reply.Set("profiles", std::move(profiles));
+  reply.Set("sites", std::move(sites));
+  return Line(std::move(reply));
+}
+
+void AnswerBrowserProfiles(ListBrowserProfiles list_browser_profiles,
+                           CommandReply reply) {
+  list_browser_profiles(base::BindOnce(
+      [](CommandReply reply, std::optional<BrowserProfileList> list) {
+        std::move(reply).Run(BrowserProfilesLine(list));
+      },
+      std::move(reply)));
+}
+
+std::string AnswerPinBrowserSite(const base::DictValue& request,
+                                 PinBrowserSite pin_browser_site) {
+  const std::string* site = request.FindString("site");
+  const std::string* profile = request.FindString("profile");
+  if (site == nullptr || profile == nullptr) {
+    return RefusedCommand(
+        "pin_browser_site needs a \"site\" and the \"profile\" to open it "
+        "in");
+  }
+  const base::expected<void, std::string> pinned =
+      pin_browser_site(*site, *profile);
+  if (!pinned.has_value()) {
+    return RefusedCommand(pinned.error());
   }
   return Done("set");
 }
@@ -646,10 +802,16 @@ std::string AnswerConfigureExtension(const base::DictValue& request,
       ParseOneExtensionSettings(*settings);
   if (!read) {
     return RefusedCommand(
-        "configure_extension's \"settings\" takes \"private\", "
-        "\"file_access\" and \"user_scripts\" as booleans, and "
-        "\"site_access\" as \"on_click\", \"all_sites\" or a list of "
-        "hosts");
+        "configure_extension's \"settings\" takes \"file_access\" and "
+        "\"user_scripts\" as booleans, and \"site_access\" as "
+        "\"on_click\", \"all_sites\" or a list of hosts");
+  }
+  // Private windows are a private browser profile's, whose switches say
+  // which extensions run in them.
+  if (read->in_private.has_value()) {
+    return RefusedCommand(
+        "configure_extension has no \"private\": switch the extension in "
+        "a private browser profile instead");
   }
   const base::expected<void, std::string> set =
       configure_extension(*id, *read);
@@ -670,8 +832,7 @@ base::ListValue DeviceEntries(const std::vector<MediaDevice>& devices) {
   return entries;
 }
 
-std::string AnswerMediaDevices(ListMediaDevices list_media_devices) {
-  const std::optional<MediaDeviceList> list = list_media_devices();
+std::string MediaDevicesLine(const std::optional<MediaDeviceList>& list) {
   if (!list) {
     return RefusedCommand(
         "this engine has no shell, and so no profile whose media devices to "
@@ -684,6 +845,15 @@ std::string AnswerMediaDevices(ListMediaDevices list_media_devices) {
   return Line(std::move(reply));
 }
 
+void AnswerMediaDevices(ListMediaDevices list_media_devices,
+                        CommandReply reply) {
+  list_media_devices(base::BindOnce(
+      [](CommandReply reply, std::optional<MediaDeviceList> list) {
+        std::move(reply).Run(MediaDevicesLine(list));
+      },
+      std::move(reply)));
+}
+
 std::optional<MediaDeviceKind> MediaDeviceKindNamed(std::string_view name) {
   if (name == "camera") {
     return MediaDeviceKind::kCamera;
@@ -694,27 +864,26 @@ std::optional<MediaDeviceKind> MediaDeviceKindNamed(std::string_view name) {
   return std::nullopt;
 }
 
-std::string AnswerSetMediaDevice(const base::DictValue& request,
-                                 SetMediaDevice set_media_device) {
+void AnswerSetMediaDevice(const base::DictValue& request,
+                          SetMediaDevice set_media_device,
+                          CommandReply reply) {
   const std::string* kind_name = request.FindString("kind");
   const std::string* id = request.FindString("id");
   if (kind_name == nullptr || id == nullptr) {
-    return RefusedCommand(
+    std::move(reply).Run(RefusedCommand(
         "set_media_device needs a \"kind\" and an \"id\": the device sites "
-        "get when they name none");
+        "get when they name none"));
+    return;
   }
   const std::optional<MediaDeviceKind> kind = MediaDeviceKindNamed(*kind_name);
   if (!kind) {
-    return RefusedCommand(
+    std::move(reply).Run(RefusedCommand(
         base::StrCat({"\"", *kind_name,
                       "\" is not a kind of device; it is \"camera\" or "
-                      "\"microphone\""}));
+                      "\"microphone\""})));
+    return;
   }
-  const base::expected<void, std::string> set = set_media_device(*kind, *id);
-  if (!set.has_value()) {
-    return RefusedCommand(set.error());
-  }
-  return Done("set");
+  set_media_device(*kind, *id, ReplyWhenDone("set", std::move(reply)));
 }
 
 // The time `ms` milliseconds after the Unix epoch, to the nearest microsecond.
@@ -1019,6 +1188,75 @@ std::string AnswerDisableWhileTyping(const base::DictValue& request,
   reply.Set("type", kDisableWhileTyping);
   reply.Set("enabled", rests.value());
   return Line(std::move(reply));
+}
+
+std::string AnswerSetLogLevels(const base::DictValue& request,
+                               SetLogLevels set_log_levels) {
+  const std::optional<int> min_level = request.FindInt("min_level");
+  const std::string* vmodule = request.FindString("vmodule");
+  if (!min_level || *min_level < logging::LOGGING_VERBOSE ||
+      *min_level > logging::LOGGING_FATAL || !vmodule) {
+    return RefusedCommand(
+        "set_log_levels takes a \"min_level\" from -1 (VERBOSE) to 3 (FATAL) "
+        "and a \"vmodule\" string");
+  }
+  set_log_levels(*min_level, *vmodule);
+  return Done("set");
+}
+
+void AnswerDevTools(const base::DictValue& request,
+                    SendDevTools send_devtools,
+                    CommandReply reply) {
+  const std::string* window = request.FindString("window");
+  if (window == nullptr || window->empty()) {
+    std::move(reply).Run(RefusedCommand(
+        "devtools needs a \"window\": the id of the browser window to send "
+        "to"));
+    return;
+  }
+  const std::string* method = request.FindString("method");
+  if (method == nullptr) {
+    std::move(reply).Run(RefusedCommand(
+        "devtools needs a \"method\": the DevTools Protocol method to send"));
+    return;
+  }
+  if (!std::ranges::contains(kDevToolsMethods, *method)) {
+    std::move(reply).Run(RefusedCommand(base::StrCat(
+        {"\"", *method, "\" is not a method agents get; devtools sends ",
+         base::JoinString(kDevToolsMethods, ", ")})));
+    return;
+  }
+  const base::Value* given = request.Find("params");
+  if (given != nullptr && !given->is_dict()) {
+    std::move(reply).Run(
+        RefusedCommand("devtools's \"params\" is an object, or left out"));
+    return;
+  }
+  base::DictValue params =
+      given != nullptr ? given->GetDict().Clone() : base::DictValue();
+  if (*method == "Page.navigate") {
+    const std::string* url = params.FindString("url");
+    if (url == nullptr || !GURL(*url).SchemeIsHTTPOrHTTPS()) {
+      std::move(reply).Run(RefusedCommand(
+          "Page.navigate takes a \"url\" that is an http or https address"));
+      return;
+    }
+  }
+  send_devtools(
+      *window, *method, std::move(params),
+      base::BindOnce(
+          [](CommandReply reply,
+             base::expected<base::DictValue, std::string> answered) {
+            if (!answered.has_value()) {
+              std::move(reply).Run(RefusedCommand(answered.error()));
+              return;
+            }
+            base::DictValue done;
+            done.Set("type", kDevTools);
+            done.Set("result", std::move(answered.value()));
+            std::move(reply).Run(Line(std::move(done)));
+          },
+          std::move(reply)));
 }
 
 }  // namespace

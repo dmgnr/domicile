@@ -90,6 +90,13 @@ dark theme, daylight ones in the light theme, in a random order that
 reshuffles each time through. An app that sets a wallpaper, such as an image viewer's "Set as
 wallpaper", replaces it.
 
+To keep one photograph, turn off **Change the wallpaper every minute** on
+Settings' Shell page, or:
+
+```json
+{ "shell_options": { "wallpaper": { "rotate": false } } }
+```
+
 ### Choose the photos
 
 Set `wallpapers` in a [config module](CONFIGURE.md#a-config-module): a list

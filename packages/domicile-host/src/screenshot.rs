@@ -49,6 +49,48 @@ pub fn crop(shot: &Shot, area: ShotRect) -> Shot {
     }
 }
 
+/// `shot` shrunk so its longer side is at most `longest` pixels, each new
+/// pixel the average of the area it covers. A shot that fits is kept.
+pub fn fit(shot: &Shot, longest: u32) -> Shot {
+    let side = shot.width.max(shot.height);
+    if side <= longest {
+        return shot.clone();
+    }
+    let shrunk =
+        |length: u32| (u64::from(length) * u64::from(longest) / u64::from(side)).max(1) as u32;
+    let (width, height) = (shrunk(shot.width), shrunk(shot.height));
+    // The source pixels `at` of `count` new ones covers along a side `length` long.
+    let span = |at: u32, count: u32, length: u32| {
+        let start = u64::from(at) * u64::from(length) / u64::from(count);
+        let end = (u64::from(at + 1) * u64::from(length) / u64::from(count)).max(start + 1);
+        start as usize..end as usize
+    };
+    let bgra = (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let (columns, rows) = (span(x, width, shot.width), span(y, height, shot.height));
+            let count = (columns.len() * rows.len()) as u32;
+            let sums = rows
+                .flat_map(|row| {
+                    columns
+                        .clone()
+                        .map(move |column| row * shot.width as usize + column)
+                })
+                .fold([0u32; 4], |sums, pixel| {
+                    std::array::from_fn(|channel| {
+                        sums[channel] + u32::from(shot.bgra[pixel * 4 + channel])
+                    })
+                });
+            sums.map(|sum| (sum / count) as u8)
+        })
+        .collect();
+    Shot {
+        width,
+        height,
+        bgra,
+    }
+}
+
 /// The color of pixel (`x`, `y`) as sRGB red, green and blue from 0 to 1.
 /// A transparent pixel, off every monitor, is black.
 pub fn color_at(shot: &Shot, x: u32, y: u32) -> (f64, f64, f64) {
@@ -159,6 +201,39 @@ mod tests {
                 width: 1,
                 height: 2,
                 bgra: [[1, 0, 0, 255], [3, 0, 0, 255]].concat(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_shot_that_fits_is_kept_as_it_is() {
+        assert_eq!(fit(&numbered(), 2), numbered());
+    }
+
+    #[test]
+    fn a_shot_too_big_shrinks_to_fit_its_longer_side_averaging_each_area() {
+        let shot = Shot {
+            width: 4,
+            height: 2,
+            bgra: [
+                [0, 0, 0, 255],
+                [4, 0, 0, 255],
+                [10, 0, 0, 255],
+                [10, 0, 0, 255],
+                [8, 0, 0, 255],
+                [4, 0, 0, 255],
+                [10, 0, 0, 255],
+                [30, 0, 0, 255],
+            ]
+            .concat(),
+        };
+
+        assert_eq!(
+            fit(&shot, 2),
+            Shot {
+                width: 2,
+                height: 1,
+                bgra: [[4, 0, 0, 255], [15, 0, 0, 255]].concat(),
             }
         );
     }

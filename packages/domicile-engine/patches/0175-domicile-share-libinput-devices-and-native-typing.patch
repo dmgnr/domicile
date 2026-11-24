@@ -21,7 +21,7 @@ Subject: [PATCH] domicile: share libinput devices and native typing
  14 files changed, 439 insertions(+), 335 deletions(-)
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index f17af24..0602b58 100644
+index 023f96c..9bbb413 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -216,6 +216,10 @@ component("evdev") {
@@ -53,10 +53,10 @@ index 347de4d..46e2e1e 100644
    // Enable or disable this device. A disabled device still polls for
    // input and can update state but must not dispatch any events to UI.
 diff --git a/ui/events/ozone/evdev/event_converter_evdev_impl.h b/ui/events/ozone/evdev/event_converter_evdev_impl.h
-index c127733..1d81fd7 100644
+index 8ef7952..b5191b9 100644
 --- a/ui/events/ozone/evdev/event_converter_evdev_impl.h
 +++ b/ui/events/ozone/evdev/event_converter_evdev_impl.h
-@@ -69,6 +69,10 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
+@@ -70,6 +70,10 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
  
    std::ostream& DescribeForLog(std::ostream& os) const override;
  
@@ -67,7 +67,7 @@ index c127733..1d81fd7 100644
   private:
    void ConvertKeyEvent(const input_event& input);
    void ConvertMouseMoveEvent(const input_event& input);
-@@ -93,9 +97,6 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
+@@ -94,9 +98,6 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdevImpl
    void SetReceivedValidInputCallback(
        ReceivedValidInputCallback callback) override;
  
@@ -78,7 +78,7 @@ index c127733..1d81fd7 100644
    const base::ScopedFD input_device_fd_;
  
 diff --git a/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc b/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc
-index 5c81ab3..30ffa0b 100644
+index 722176f..834d9fc 100644
 --- a/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc
 +++ b/ui/events/ozone/evdev/event_converter_evdev_impl_unittest.cc
 @@ -25,6 +25,9 @@
@@ -101,7 +101,7 @@ index 5c81ab3..30ffa0b 100644
 +TEST_F(LibInputKeyboardPathTest, NativeMicMuteUsesItsKeycodeWithoutAScanCode) {
 +  const auto key =
 +      ui::LibInputKeyboardKey(KEY_MICMUTE, true, base::TimeTicks());
-+  device()->ProcessEvents(&key, 1);
++  device()->ProcessEvents(base::span_from_ref(key));
 +  ASSERT_EQ(size(), 1u);
 +  EXPECT_EQ(dispatched_event(0)->type(), ui::EventType::kKeyPressed);
 +  EXPECT_EQ(dispatched_event(0)->key_code(), ui::VKEY_MICROPHONE_MUTE_TOGGLE);
@@ -120,7 +120,7 @@ index 5c81ab3..30ffa0b 100644
 +       {ui::LibInputKeyboardKey(KEY_A, true, timestamp),
 +        ui::LibInputKeyboardKey(KEY_BACKSPACE, true, timestamp),
 +        ui::LibInputKeyboardKey(KEY_BACKSPACE, true, timestamp)}) {
-+    device()->ProcessEvents(&input, 1);
++    device()->ProcessEvents(base::span_from_ref(input));
 +  }
 +  ASSERT_EQ(size(), 1u);
 +  EXPECT_EQ(dispatched_event(0)->type(), ui::EventType::kKeyPressed);
@@ -131,7 +131,7 @@ index 5c81ab3..30ffa0b 100644
 +  device()->SetKeyFilter(false, {});
 +  device()->SetBlockModifiers(true);
 +  const auto modifier = ui::LibInputKeyboardKey(KEY_LEFTSHIFT, true, timestamp);
-+  device()->ProcessEvents(&modifier, 1);
++  device()->ProcessEvents(base::span_from_ref(modifier));
 +  EXPECT_EQ(size(), 1u);
 +
 +  device()->SetEnabled(false);
@@ -514,7 +514,7 @@ index ce0052b..7c7be27 100644
    raw_ptr<DeviceEventDispatcherEvdev> dispatcher;
  
 diff --git a/ui/events/ozone/evdev/input_device_opener_evdev.cc b/ui/events/ozone/evdev/input_device_opener_evdev.cc
-index 1102a9e..994e03c 100644
+index a10fd97..dbfcc0f 100644
 --- a/ui/events/ozone/evdev/input_device_opener_evdev.cc
 +++ b/ui/events/ozone/evdev/input_device_opener_evdev.cc
 @@ -31,6 +31,7 @@
@@ -547,7 +547,7 @@ index 1102a9e..994e03c 100644
    }
  #endif
  
-@@ -112,6 +111,16 @@ std::unique_ptr<EventConverterEvdev> CreateConverter(
+@@ -113,6 +112,16 @@ std::unique_ptr<EventConverterEvdev> CreateConverter(
          std::move(fd), params.path, params.id, devinfo, params.dispatcher);
    }
  
@@ -564,7 +564,7 @@ index 1102a9e..994e03c 100644
    // Everything else: use EventConverterEvdevImpl.
    return std::make_unique<EventConverterEvdevImpl>(
        std::move(fd), params.path, params.id, devinfo, params.cursor,
-@@ -149,14 +158,18 @@ void InputDeviceOpenerEvdev::OpenInputDevice(const OpenInputDeviceParams& params
+@@ -150,14 +159,18 @@ void InputDeviceOpenerEvdev::OpenInputDevice(const OpenInputDeviceParams& params
                                               OpenInputDeviceCallback opened) {
    TRACE_EVENT1("evdev", "OpenInputDevice", "path", params.path.value());
  
@@ -1160,7 +1160,7 @@ index 205942d..6c6a772 100644
    double scroll_factor_ = 1;
    bool typing_applies_ = true;
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index af4ddb5..e130c57 100644
+index 77b62be..2db439d 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -39,6 +39,40 @@ source_set("gbm") {
@@ -1266,10 +1266,10 @@ index af4ddb5..e130c57 100644
 +    "domicile/drm_vt_switcher_unittest.cc",
 +    "domicile/edid_name_unittest.cc",
 +    "domicile/gbm_pixmap_scanout_unittest.cc",
+     "gpu/drm_device_unittest.cc",
      "gpu/drm_gpu_display_manager_unittest.cc",
      "gpu/drm_gpu_util_unittest.cc",
-     "gpu/drm_overlay_manager_unittest.cc",
-@@ -276,33 +297,22 @@ source_set("gbm_unittests") {
+@@ -278,33 +299,22 @@ source_set("gbm_unittests") {
      "gpu/mock_drm_modifiers_filter.cc",
      "gpu/mock_drm_modifiers_filter.h",
      "gpu/proxy_helpers_unittest.cc",
@@ -1311,7 +1311,7 @@ index af4ddb5..e130c57 100644
    ]
  
    # `ui/display/manager/test/fake_display_snapshot.h` is the one thing this
-@@ -327,6 +337,7 @@ source_set("gbm_unittests") {
+@@ -329,6 +339,7 @@ source_set("gbm_unittests") {
      "//base/test:test_support",
      "//components/viz/common/resources:shared_image_format",
      "//skia",

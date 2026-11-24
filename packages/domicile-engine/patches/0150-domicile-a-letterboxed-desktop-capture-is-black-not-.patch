@@ -18,7 +18,7 @@ job builds it on crux.
  1 file changed, 15 insertions(+)
 
 diff --git a/content/browser/media/capture/desktop_capture_device.cc b/content/browser/media/capture/desktop_capture_device.cc
-index 33f78f0..f7fbbff 100644
+index 7a88c4f..2984493 100644
 --- a/content/browser/media/capture/desktop_capture_device.cc
 +++ b/content/browser/media/capture/desktop_capture_device.cc
 @@ -57,6 +57,7 @@
@@ -29,7 +29,7 @@ index 33f78f0..f7fbbff 100644
  #include "third_party/libyuv/include/libyuv/scale.h"
  #include "third_party/webrtc/modules/desktop_capture/cropped_desktop_frame.h"
  #include "third_party/webrtc/modules/desktop_capture/cropping_window_capturer.h"
-@@ -931,6 +932,20 @@ void DesktopCaptureDevice::Core::OnCaptureResultLegacy(
+@@ -926,6 +927,20 @@ void DesktopCaptureDevice::Core::OnCaptureResultLegacy(
        if (!output_frame_) {
          output_frame_ = std::make_unique<webrtc::BasicDesktopFrame>(
              output_size, webrtc::FOURCC_I420);

@@ -11,10 +11,14 @@ import { registerSvgDataUrl } from "./svg-data-url";
 // modules evaluate. Static imports are hoisted above this call, so they are
 // deferred to dynamic imports.
 //
-// Frames are not navigated: they point at `domicile://` pages that only the
-// engine serves, and unit tests must not do I/O.
+// Frames load but are not navigated: they point at `domicile://` pages that
+// only the engine serves, and unit tests must not do I/O. happy-dom fails a
+// frame with `error` unless frame loading is on.
 GlobalRegistrator.register({
-  settings: { navigation: { disableChildFrameNavigation: true } },
+  settings: {
+    enableIframePageLoading: true,
+    navigation: { disableChildFrameNavigation: true },
+  },
 });
 
 registerNodeInspection();

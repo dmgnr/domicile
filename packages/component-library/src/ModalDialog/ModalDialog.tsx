@@ -99,7 +99,7 @@ const ModalDialogComponent = ({
   return (
     <BaseDialog.Root {...rootProps}>
       {trigger !== undefined && <BaseDialog.Trigger render={trigger} />}
-      <BaseDialog.Portal>
+      <BaseDialog.Portal className={portalStyles}>
         {/*
         On the dialog's screen only: its blur costs as much in the gaps
         between monitors as on them. base-ui's own clear backdrop covers the
@@ -194,6 +194,14 @@ const useOpenings = (open: boolean | undefined) => {
 export const ModalDialog = Object.assign(ModalDialogComponent, {
   Close: BaseDialog.Close,
   CloseButton,
+});
+
+// One layer per dialog, so a dialog opened over another, such as the
+// screenshot dialog over the launcher, dims all of it rather than drawing its
+// backdrop between the other's backdrop and popup.
+const portalStyles = css({
+  position: "relative",
+  zIndex: "modal",
 });
 
 // Values are literals so Panda's static extractor can see them.

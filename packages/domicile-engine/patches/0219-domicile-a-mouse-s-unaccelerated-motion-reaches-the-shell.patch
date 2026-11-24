@@ -1,0 +1,285 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a mouse's unaccelerated motion reaches the shell
+
+zwp_relative_pointer_v1 carries a device's motion twice: accelerated,
+as the cursor moved, and unaccelerated, which games and VM viewers read
+for aiming. On a console the engine reads mice through libinput, which
+reports both. LibInputEventConverter passes the unaccelerated deltas as
+the move's ordinal_delta, EventFactoryEvdev keeps them on the MouseEvent
+as an event property (ui/events/domicile/unaccelerated_motion.h), and
+MakeWebMouseEvent copies them into WebPointerProperties. They cross to
+the renderer in PointerData, add up when moves coalesce, and reach the
+<app> element on the PointerEvent, which hands them to the shell's
+DomicileHost. A move no device made carries none.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../web_coalesced_input_event_mojom_traits.cc    |  7 +++++--
+ .../blink/common/input/web_mouse_event.cc        |  8 ++++++++
+ .../blink/common/input/web_pointer_event.cc      |  8 ++++++++
+ .../public/common/input/web_pointer_properties.h |  8 ++++++++
+ .../blink/public/mojom/input/input_handler.mojom |  2 ++
+ .../blink/renderer/core/events/pointer_event.h   | 16 ++++++++++++++++
+ .../core/events/pointer_event_factory.cc         |  6 +++++-
+ ui/events/BUILD.gn                               |  1 +
+ ui/events/blink/web_input_event.cc               |  3 +++
+ ui/events/ozone/evdev/event_factory_evdev.cc     |  6 ++++++
+ .../ozone/evdev/libinput_event_converter.cc      |  8 +++++++-
+ 11 files changed, 69 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc b/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc
+index 70feec3..a6080f7 100644
+--- a/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc
++++ b/third_party/blink/common/input/web_coalesced_input_event_mojom_traits.cc
+@@ -60,8 +60,9 @@ blink::mojom::PointerDataPtr PointerDataFromPointerProperties(
+       pointer.id, pointer.force, pointer.tilt_x, pointer.tilt_y,
+       pointer.tangential_pressure, pointer.twist, pointer.button,
+       pointer.pointer_type, pointer.movement_x, pointer.movement_y,
+-      pointer.is_raw_movement_event, pointer.PositionInWidget(),
+-      pointer.PositionInScreen(), std::move(mouse_data), pointer.device_id);
++      pointer.is_raw_movement_event, pointer.unaccelerated_movement,
++      pointer.PositionInWidget(), pointer.PositionInScreen(),
++      std::move(mouse_data), pointer.device_id);
+ }
+ 
+ void PointerPropertiesFromPointerData(
+@@ -79,6 +80,8 @@ void PointerPropertiesFromPointerData(
+   pointer_properties->movement_y = pointer_data->movement_y;
+   pointer_properties->is_raw_movement_event =
+       pointer_data->is_raw_movement_event;
++  pointer_properties->unaccelerated_movement =
++      pointer_data->unaccelerated_movement;
+   pointer_properties->device_id = pointer_data->device_id;
+   pointer_properties->SetPositionInWidget(pointer_data->widget_position);
+   pointer_properties->SetPositionInScreen(pointer_data->screen_position);
+diff --git a/third_party/blink/common/input/web_mouse_event.cc b/third_party/blink/common/input/web_mouse_event.cc
+index 36b74df..24b38ad 100644
+--- a/third_party/blink/common/input/web_mouse_event.cc
++++ b/third_party/blink/common/input/web_mouse_event.cc
+@@ -59,9 +59,17 @@ void WebMouseEvent::Coalesce(const WebInputEvent& event) {
+   // Accumulate movement deltas.
+   int x = movement_x;
+   int y = movement_y;
++  // DOMICILE: and the unaccelerated ones. Dropped when either move has none,
++  // since half a sum is no motion at all.
++  const std::optional<gfx::Vector2dF> unaccelerated = unaccelerated_movement;
+   *this = mouse_event;
+   movement_x += x;
+   movement_y += y;
++  if (unaccelerated && unaccelerated_movement) {
++    *unaccelerated_movement += *unaccelerated;
++  } else {
++    unaccelerated_movement.reset();
++  }
+ }
+ 
+ WebMouseEvent WebMouseEvent::FlattenTransform() const {
+diff --git a/third_party/blink/common/input/web_pointer_event.cc b/third_party/blink/common/input/web_pointer_event.cc
+index ed4ac08..0b62289 100644
+--- a/third_party/blink/common/input/web_pointer_event.cc
++++ b/third_party/blink/common/input/web_pointer_event.cc
+@@ -102,9 +102,17 @@ void WebPointerEvent::Coalesce(const WebInputEvent& event) {
+   // Accumulate movement deltas.
+   int x = movement_x;
+   int y = movement_y;
++  // DOMICILE: and the unaccelerated ones. Dropped when either move has none,
++  // since half a sum is no motion at all.
++  const std::optional<gfx::Vector2dF> unaccelerated = unaccelerated_movement;
+   *this = pointer_event;
+   movement_x += x;
+   movement_y += y;
++  if (unaccelerated && unaccelerated_movement) {
++    *unaccelerated_movement += *unaccelerated;
++  } else {
++    unaccelerated_movement.reset();
++  }
+ }
+ 
+ WebPointerEvent WebPointerEvent::CreatePointerCausesUaActionEvent(
+diff --git a/third_party/blink/public/common/input/web_pointer_properties.h b/third_party/blink/public/common/input/web_pointer_properties.h
+index 292b51e..e257343 100644
+--- a/third_party/blink/public/common/input/web_pointer_properties.h
++++ b/third_party/blink/public/common/input/web_pointer_properties.h
+@@ -10,8 +10,10 @@
+ #include "third_party/blink/public/mojom/input/input_event.mojom-shared.h"
+ #include "ui/events/event_constants.h"
+ #include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/vector2d_f.h"
+ 
+ #include <limits>
++#include <optional>
+ 
+ namespace blink {
+ 
+@@ -109,6 +111,12 @@ class WebPointerProperties {
+   // TODO(crbug.com/982379): Figure out how to avoid using this boolean.
+   bool is_raw_movement_event = false;
+ 
++  // DOMICILE: how far the device moved before pointer acceleration, in
++  // physical pixels, when it said: a game's unaccelerated relative motion.
++  // `movement_x/y` stays the accelerated motion the page sees. Summed when
++  // moves coalesce. See ui/events/domicile/unaccelerated_motion.h.
++  std::optional<gfx::Vector2dF> unaccelerated_movement;
++
+   // Contains unique device id for pen on supported devices.
+   int32_t device_id = -1;
+ 
+diff --git a/third_party/blink/public/mojom/input/input_handler.mojom b/third_party/blink/public/mojom/input/input_handler.mojom
+index 8c8d550..0d4e067 100644
+--- a/third_party/blink/public/mojom/input/input_handler.mojom
++++ b/third_party/blink/public/mojom/input/input_handler.mojom
+@@ -67,6 +67,8 @@ struct PointerData {
+   int32 movement_x;
+   int32 movement_y;
+   bool is_raw_movement_event;
++  // DOMICILE: WebPointerProperties::unaccelerated_movement.
++  gfx.mojom.Vector2dF? unaccelerated_movement;
+   gfx.mojom.PointF widget_position;
+   gfx.mojom.PointF screen_position;
+   MouseData? mouse_data;
+diff --git a/third_party/blink/renderer/core/events/pointer_event.h b/third_party/blink/renderer/core/events/pointer_event.h
+index 297a054..5e834e9 100644
+--- a/third_party/blink/renderer/core/events/pointer_event.h
++++ b/third_party/blink/renderer/core/events/pointer_event.h
+@@ -5,10 +5,13 @@
+ #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EVENTS_POINTER_EVENT_H_
+ #define THIRD_PARTY_BLINK_RENDERER_CORE_EVENTS_POINTER_EVENT_H_
+ 
++#include <optional>
++
+ #include "third_party/blink/public/common/input/pointer_id.h"
+ #include "third_party/blink/renderer/core/core_export.h"
+ #include "third_party/blink/renderer/core/events/mouse_event.h"
+ #include "third_party/blink/renderer/platform/wtf/casting.h"
++#include "ui/gfx/geometry/vector2d_f.h"
+ 
+ namespace blink {
+ 
+@@ -134,6 +137,17 @@ class CORE_EXPORT PointerEvent : public MouseEvent {
+     return prevent_counting_as_interaction_;
+   }
+ 
++  // DOMICILE: the device's motion before pointer acceleration, in physical
++  // pixels, for a move whose device said. Not exposed to script: an <app>
++  // forwards it to its client's relative pointer. See
++  // WebPointerProperties::unaccelerated_movement.
++  const std::optional<gfx::Vector2dF>& UnacceleratedMovement() const {
++    return unaccelerated_movement_;
++  }
++  void SetUnacceleratedMovement(const std::optional<gfx::Vector2dF>& movement) {
++    unaccelerated_movement_ = movement;
++  }
++
+   void Trace(Visitor*) const override;
+ 
+  private:
+@@ -160,6 +174,8 @@ class CORE_EXPORT PointerEvent : public MouseEvent {
+ 
+   // See equivalent member in web_input_event.h.
+   bool prevent_counting_as_interaction_ = false;
++
++  std::optional<gfx::Vector2dF> unaccelerated_movement_;
+ };
+ 
+ template <>
+diff --git a/third_party/blink/renderer/core/events/pointer_event_factory.cc b/third_party/blink/renderer/core/events/pointer_event_factory.cc
+index 31ebb95..930777f 100644
+--- a/third_party/blink/renderer/core/events/pointer_event_factory.cc
++++ b/third_party/blink/renderer/core/events/pointer_event_factory.cc
+@@ -377,11 +377,15 @@ PointerEvent* PointerEventFactory::Create(
+   pointer_event_init->setPersistentDeviceId(
+       GetBlinkDeviceId(web_pointer_event));
+ 
+-  return PointerEvent::Create(
++  PointerEvent* pointer_event = PointerEvent::Create(
+       type, pointer_event_init, web_pointer_event.TimeStamp(),
+       MouseEvent::kRealOrIndistinguishable,
+       ui::mojom::blink::MenuSourceType::kNone,
+       web_pointer_event.GetPreventCountingAsInteraction());
++  // DOMICILE: see WebPointerProperties::unaccelerated_movement.
++  pointer_event->SetUnacceleratedMovement(
++      web_pointer_event.unaccelerated_movement);
++  return pointer_event;
+ }
+ 
+ void PointerEventFactory::SetLastPosition(int pointer_id,
+diff --git a/ui/events/BUILD.gn b/ui/events/BUILD.gn
+index 88edc77..e57416b 100644
+--- a/ui/events/BUILD.gn
++++ b/ui/events/BUILD.gn
+@@ -274,6 +274,7 @@ component("events") {
+     "domicile/native_gesture_sink.cc",
+     "domicile/native_gesture_sink.h",
+     "domicile/scroll_metadata.h",
++    "domicile/unaccelerated_motion.h",
+     "event.cc",
+     "event_dispatcher.cc",
+     "event_handler.cc",
+diff --git a/ui/events/blink/web_input_event.cc b/ui/events/blink/web_input_event.cc
+index d11fe06..5cab996 100644
+--- a/ui/events/blink/web_input_event.cc
++++ b/ui/events/blink/web_input_event.cc
+@@ -15,6 +15,7 @@
+ #include "ui/events/blink/blink_features.h"
+ #include "ui/events/domicile/pinch_metadata.h"
+ #include "ui/events/domicile/scroll_metadata.h"
++#include "ui/events/domicile/unaccelerated_motion.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_target.h"
+ #include "ui/events/event_utils.h"
+@@ -253,6 +254,8 @@ blink::WebMouseEvent MakeWebMouseEvent(const MouseEvent& event) {
+     webkit_event.movement_y = event.movement().y();
+     webkit_event.is_raw_movement_event = true;
+   }
++  // DOMICILE: see ui/events/domicile/unaccelerated_motion.h.
++  webkit_event.unaccelerated_movement = GetUnacceleratedMotion(event);
+ 
+ #if BUILDFLAG(IS_WIN)
+   if (event.native_event().message && event.type() != EventType::kMouseExited) {
+diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
+index baccb52..4248d21 100644
+--- a/ui/events/ozone/evdev/event_factory_evdev.cc
++++ b/ui/events/ozone/evdev/event_factory_evdev.cc
+@@ -21,6 +21,7 @@
+ #include "ui/events/devices/touchpad_device.h"
+ #include "ui/events/domicile/pinch_metadata.h"
+ #include "ui/events/domicile/scroll_metadata.h"
++#include "ui/events/domicile/unaccelerated_motion.h"
+ #include "ui/events/event_utils.h"
+ #include "ui/events/ozone/device/device_event.h"
+ #include "ui/events/ozone/device/device_manager.h"
+@@ -314,6 +315,11 @@ void EventFactoryEvdev::DispatchMouseMoveEvent(
+   event.set_location_f(location);
+   event.set_root_location_f(location);
+   event.set_source_device_id(params.device_id);
++  // DOMICILE: the ordinal delta is the device's motion before acceleration,
++  // which a game's relative pointer reads. Off ChromeOS nothing else sets it.
++  if (params.ordinal_delta) {
++    SetUnacceleratedMotion(event, *params.ordinal_delta);
++  }
+   DispatchUiEvent(&event);
+ }
+ 
+diff --git a/ui/events/ozone/evdev/libinput_event_converter.cc b/ui/events/ozone/evdev/libinput_event_converter.cc
+index 7393016..e5aaff3 100644
+--- a/ui/events/ozone/evdev/libinput_event_converter.cc
++++ b/ui/events/ozone/evdev/libinput_event_converter.cc
+@@ -469,8 +469,14 @@ void LibInputEventConverter::HandlePointerMotion(const LibInputEvent& evt) {
+ 
+   DVLOG(3) << "Pointer motion: dx=" << dx << ", dy=" << dy;
+ 
++  // DOMICILE: the device's own motion, before libinput accelerated it, rides
++  // along as the ordinal delta: a game reads it as zwp_relative_pointer_v1's
++  // unaccelerated deltas. See ui/events/domicile/unaccelerated_motion.h.
++  gfx::Vector2dF unaccelerated(
++      libinput_event_pointer_get_dx_unaccelerated(event),
++      libinput_event_pointer_get_dy_unaccelerated(event));
+   dispatcher_->DispatchMouseMoveEvent(
+-      {input_device_.id, flags, cursor_->GetLocation(), nullptr /*delta*/,
++      {input_device_.id, flags, cursor_->GetLocation(), &unaccelerated,
+        PointerDetails(EventPointerType::kMouse), Timestamp(evt)});
+ }
+ 

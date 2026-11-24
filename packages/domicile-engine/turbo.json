@@ -16,7 +16,8 @@
         "$TURBO_ROOT$/packages/domicile-config/src/**",
         "$TURBO_ROOT$/packages/domicile-launch/src/**",
         "$TURBO_ROOT$/packages/domicile-protocol/**"
-      ]
+      ],
+      "passThroughEnv": ["DOMICILE_CHECK_LOG_DIR", "GITHUB_TOKEN"]
     }
   }
 }

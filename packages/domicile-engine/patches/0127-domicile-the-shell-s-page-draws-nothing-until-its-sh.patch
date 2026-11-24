@@ -17,14 +17,14 @@ job builds it on `crux`, and guard-shell-handover.sh checks the page
 draws nothing while a slow module loads.
 ---
  .../loader/render_blocking_resource_manager.cc    | 15 +++++++++++++++
- .../loader/render_blocking_resource_manager.h     | 12 +++++++++++-
- 2 files changed, 26 insertions(+), 1 deletion(-)
+ .../loader/render_blocking_resource_manager.h     | 11 ++++++++++-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
 
 diff --git a/third_party/blink/renderer/core/loader/render_blocking_resource_manager.cc b/third_party/blink/renderer/core/loader/render_blocking_resource_manager.cc
-index 0406bae..18824fd 100644
+index f451cbd..011a690 100644
 --- a/third_party/blink/renderer/core/loader/render_blocking_resource_manager.cc
 +++ b/third_party/blink/renderer/core/loader/render_blocking_resource_manager.cc
-@@ -251,6 +251,21 @@ void RenderBlockingResourceManager::RemovePendingScript(
+@@ -265,6 +265,21 @@ void RenderBlockingResourceManager::RemovePendingScript(
    RenderBlockingResourceUnblocked();
  }
  
@@ -47,20 +47,19 @@ index 0406bae..18824fd 100644
    if (!HasNonFontRenderBlockingResources() && HasRenderBlockingFonts()) {
      EnsureStartFontPreloadMaxFCPDelayTimer();
 diff --git a/third_party/blink/renderer/core/loader/render_blocking_resource_manager.h b/third_party/blink/renderer/core/loader/render_blocking_resource_manager.h
-index 53a983c..4ade3c7 100644
+index 39f464f..3a9e7ca 100644
 --- a/third_party/blink/renderer/core/loader/render_blocking_resource_manager.h
 +++ b/third_party/blink/renderer/core/loader/render_blocking_resource_manager.h
-@@ -41,7 +41,8 @@ class CORE_EXPORT RenderBlockingResourceManager final
+@@ -39,7 +39,7 @@ class CORE_EXPORT RenderBlockingResourceManager final
+   }
    bool HasNonFontRenderBlockingResources() const {
      return pending_stylesheet_owner_nodes_.size() || pending_scripts_.size() ||
-            element_render_blocking_links_->HasElement(
--               RenderBlockingLevel::kBlock);
-+               RenderBlockingLevel::kBlock) ||
-+           pending_domicile_shell_;
+-           !pending_expect_links_.empty();
++           !pending_expect_links_.empty() || pending_domicile_shell_;
    }
    bool HasRenderBlockingFonts() const {
      return pending_font_preloads_.size() || imperative_font_loading_count_;
-@@ -75,6 +76,12 @@ class CORE_EXPORT RenderBlockingResourceManager final
+@@ -73,6 +73,12 @@ class CORE_EXPORT RenderBlockingResourceManager final
    void EnsureStartFontPreloadMaxFCPDelayTimer();
    void FontPreloadingTimerFired(TimerBase*);
  
@@ -71,9 +70,9 @@ index 53a983c..4ade3c7 100644
 +  void RemovePendingDomicileShell();
 +
    void AddPendingParsingElementLink(const AtomicString& id,
-                                     const HTMLLinkElement* element,
-                                     RenderBlockingLevel blocking_level);
-@@ -117,6 +124,9 @@ class CORE_EXPORT RenderBlockingResourceManager final
+                                     const HTMLLinkElement* element);
+   void RemovePendingParsingElement(const AtomicString& id, Element* element);
+@@ -114,6 +120,9 @@ class CORE_EXPORT RenderBlockingResourceManager final
  
    unsigned imperative_font_loading_count_ = 0;
  

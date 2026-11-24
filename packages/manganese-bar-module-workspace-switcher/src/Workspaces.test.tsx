@@ -119,6 +119,40 @@ describe("Workspaces", () => {
       );
     });
 
+    // A layout read while React commits restyles and lays out the whole
+    // desk at once, at the start of the workspace slide this switch begins.
+    it("reads no layout while switching", () => {
+      const props = {
+        focused: true,
+        onSelect: () => undefined,
+        workspaces: ["1", "2"],
+      };
+      const { rerender } = render(<Workspaces current="1" {...props} />);
+      const offsetLeft = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        "offsetLeft",
+      );
+      if (offsetLeft?.get === undefined) {
+        throw new Error("test: HTMLElement has no offsetLeft getter");
+      }
+      const get = offsetLeft.get;
+      const reads: string[] = [];
+      Object.defineProperty(HTMLElement.prototype, "offsetLeft", {
+        ...offsetLeft,
+        get(this: HTMLElement) {
+          reads.push(this.tagName);
+          return get.call(this);
+        },
+      });
+      try {
+        rerender(<Workspaces current="2" {...props} />);
+      } finally {
+        Object.defineProperty(HTMLElement.prototype, "offsetLeft", offsetLeft);
+      }
+
+      expect(reads).toEqual([]);
+    });
+
     it("fades out on a screen the keyboard is not on", () => {
       const { highlight } = switcher({ focused: false });
 

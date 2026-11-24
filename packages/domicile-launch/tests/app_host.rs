@@ -4,7 +4,10 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use domicile_launch::app_host::{answer, read_message, watched, write_message, Host};
+use domicile_launch::app_host::{answer, downloads, read_message, watched, write_message, Host};
+use domicile_launch::browser_profiles::{
+    BrowserProfileList, ListedBrowserProfile, ListedBrowserSite, ProfileExtension,
+};
 use domicile_launch::control::{Request, Response, SettingsFiles};
 use domicile_launch::extensions::{
     ExtensionSettings, InstalledExtension, SiteAccess, SiteAccessMode,
@@ -13,6 +16,7 @@ use domicile_launch::history::{BrowsingData, HistoryItem, HistoryQuery};
 use domicile_launch::media_devices::{MediaDevice, MediaDevices, MediaKind};
 use domicile_launch::site_data::SiteData;
 use domicile_launch::site_permissions::{Permission, Setting, SitePermission, SiteSettings};
+use domicile_protocol::{DisplayHdr, LogLevel, LogLevels, MonitorInfo};
 use serde_json::{json, Value};
 
 #[test]
@@ -232,6 +236,101 @@ fn media_devices_are_the_desktops() {
 }
 
 #[test]
+fn the_monitors_are_the_desktops() {
+    let host = a_host(FILES.clone());
+    assert_eq!(
+        host.answer(&json!({"id": 19, "type": "monitors"})),
+        json!({
+            "id": 19,
+            "type": "monitors",
+            "monitors": [{"names": ["drm-1", "DEL DELL U3219Q 2ZLS413"], "hdr": "unsupported"}],
+        })
+    );
+}
+
+#[test]
+fn agents_are_listed_stopped_and_forgotten_on_the_desktop() {
+    let host = a_host(FILES.clone());
+    assert_eq!(
+        host.answer(&json!({"id": 20, "type": "agents"})),
+        json!({
+            "id": 20,
+            "type": "agents",
+            "agents": {"connected": [], "remembered": [{"agent": "Codex", "last_used_ms": 9}]},
+        })
+    );
+    assert_eq!(
+        host.answer(&json!({"id": 21, "type": "stop_agent", "session": 4})),
+        json!({"id": 21, "type": "done"})
+    );
+    assert_eq!(
+        host.answer(&json!({"id": 22, "type": "forget_agent", "agent": "Codex"})),
+        json!({"id": 22, "type": "done"})
+    );
+    assert_eq!(
+        host.asked.take()[1..],
+        [
+            Request::StopAgent { session: 4 },
+            Request::ForgetAgent {
+                agent: "Codex".to_string()
+            }
+        ]
+    );
+}
+
+#[test]
+fn try_again_touches_the_retry_file_beside_the_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = a_host(FILES.clone());
+    host.web_status = Some(dir.path().join("domicile/web-agents.json"));
+    assert_eq!(
+        host.answer(&json!({"id": 24, "type": "retry_web_agents"})),
+        json!({"id": 24, "type": "done"})
+    );
+    assert!(dir.path().join("domicile/web-agents.retry").exists());
+}
+
+#[test]
+fn agents_on_the_web_are_read_and_signed_out_from_mcps_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = a_host(FILES.clone());
+    host.web_status = Some(dir.path().join("web-agents.json"));
+    host.signed_in = Some(dir.path().join("signed-in-agents.json"));
+    assert_eq!(
+        host.answer(&json!({"id": 23, "type": "web_agents"})),
+        json!({"id": 23, "type": "web_agents", "status": null, "signed_in": []})
+    );
+
+    std::fs::write(
+        dir.path().join("web-agents.json"),
+        r#"{"address":"https://desk.relay.example/mcp","ready":true,"problem":null}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("signed-in-agents.json"),
+        r#"{"clients":[{"id":"c1","name":"claude.ai","redirect_uris":[]}],"refresh":[{"hash":"h","client":"c1","used_ms":5}]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        host.answer(&json!({"id": 23, "type": "web_agents"})),
+        json!({
+            "id": 23,
+            "type": "web_agents",
+            "status": {"address": "https://desk.relay.example/mcp", "ready": true, "problem": null},
+            "signed_in": [{"client": "c1", "name": "claude.ai", "last_used_ms": 5}],
+        })
+    );
+    assert_eq!(
+        host.answer(&json!({"id": 24, "type": "sign_out_web_agent", "client": "c1"})),
+        json!({"id": 24, "type": "done"})
+    );
+    assert_eq!(
+        host.answer(&json!({"id": 25, "type": "web_agents"}))["signed_in"],
+        json!([])
+    );
+}
+
+#[test]
 fn a_media_device_is_preferred_on_the_desktop() {
     let host = a_host(FILES.clone());
     assert_eq!(
@@ -308,7 +407,8 @@ fn every_installed_extension_is_the_desktop_s() {
                 "version": "1.0",
                 "enabled": true,
                 "options_url": null,
-                "settings": {"private": false},
+                "settings": {"file_access": false},
+                "icon": "data:image/png;base64,iVBORw==",
             }],
         })
     );
@@ -328,6 +428,73 @@ fn an_extension_is_disabled_on_the_desktop() {
         Some(&Request::SetExtensionEnabled {
             id: ID.to_string(),
             enabled: false,
+            profile: None,
+        })
+    );
+}
+
+#[test]
+fn an_extension_is_switched_in_the_browser_profile_the_app_names() {
+    let host = a_host(FILES.clone());
+    assert_eq!(
+        host.answer(&json!({
+            "id": 31,
+            "type": "set_extension_enabled",
+            "extension": ID,
+            "enabled": true,
+            "profile": "work",
+        })),
+        json!({"id": 31, "type": "stored"})
+    );
+    assert_eq!(
+        host.asked.take().last(),
+        Some(&Request::SetExtensionEnabled {
+            id: ID.to_string(),
+            enabled: true,
+            profile: Some("work".to_string()),
+        })
+    );
+}
+
+#[test]
+fn the_desks_browser_profiles_are_the_desktop_s() {
+    let host = a_host(FILES.clone());
+    assert_eq!(
+        host.answer(&json!({"id": 32, "type": "browser_profiles"})),
+        json!({
+            "id": 32,
+            "type": "browser_profiles",
+            "default_profile": "personal",
+            "default_private_profile": "private",
+            "profiles": [{
+                "id": "work",
+                "name": "Work",
+                "color": "#3b82f6",
+                "private": false,
+                "extensions": [{"id": ID, "enabled": false, "locked": false}],
+            }],
+            "sites": [{"site": "github.com/acme", "profile": "work", "pinned": false}],
+        })
+    );
+}
+
+#[test]
+fn a_site_is_pinned_to_a_browser_profile_on_the_desktop() {
+    let host = a_host(FILES.clone());
+    assert_eq!(
+        host.answer(&json!({
+            "id": 33,
+            "type": "pin_browser_site",
+            "site": "github.com/acme",
+            "profile": "work",
+        })),
+        json!({"id": 33, "type": "stored"})
+    );
+    assert_eq!(
+        host.asked.take().last(),
+        Some(&Request::PinBrowserSite {
+            site: "github.com/acme".to_string(),
+            profile: "work".to_string(),
         })
     );
 }
@@ -340,7 +507,7 @@ fn an_extension_is_configured_on_the_desktop() {
             "id": 19,
             "type": "configure_extension",
             "extension": ID,
-            "settings": {"private": true, "site_access": "on_click"},
+            "settings": {"file_access": true, "site_access": "on_click"},
         })),
         json!({"id": 19, "type": "stored"})
     );
@@ -349,7 +516,7 @@ fn an_extension_is_configured_on_the_desktop() {
         Some(&Request::ConfigureExtension {
             id: ID.to_string(),
             settings: ExtensionSettings {
-                in_private: Some(true),
+                file_access: Some(true),
                 site_access: Some(SiteAccess::Mode(SiteAccessMode::OnClick)),
                 ..ExtensionSettings::default()
             },
@@ -368,7 +535,10 @@ fn an_address_is_opened_in_a_browser_window_on_the_desktop() {
     );
     assert_eq!(
         host.asked.take().last(),
-        Some(&Request::OpenUrl { url: options })
+        Some(&Request::OpenUrl {
+            url: options,
+            profile: None
+        })
     );
 }
 
@@ -529,6 +699,7 @@ fn the_host_watches_the_directory_of_each_file_once() {
 
 /// An extension id.
 const ID: &str = "abcdefghijklmnopabcdefghijklmnop";
+const ICON: &str = "/home/me/.config/domicile/Extensions/tabs/icon128.png";
 
 static FILES: std::sync::LazyLock<SettingsFiles> = std::sync::LazyLock::new(|| SettingsFiles {
     config: Some(PathBuf::from("/home/me/.config/domicile/domicile.json")),
@@ -551,6 +722,10 @@ struct Fake {
     refuse: bool,
     asked: RefCell<Vec<Request>>,
     written: RefCell<Vec<(PathBuf, String)>>,
+    web_status: Option<PathBuf>,
+    signed_in: Option<PathBuf>,
+    downloads: Option<PathBuf>,
+    opened: RefCell<Vec<PathBuf>>,
 }
 
 fn a_host(files: SettingsFiles) -> Fake {
@@ -565,6 +740,10 @@ impl Fake {
             refuse: false,
             asked: RefCell::new(Vec::new()),
             written: RefCell::new(Vec::new()),
+            web_status: None,
+            signed_in: None,
+            downloads: None,
+            opened: RefCell::new(Vec::new()),
         }
     }
 
@@ -593,6 +772,19 @@ impl Fake {
                             }],
                         }),
                         Request::SetSitePermission { .. } => Response::Stored,
+                        Request::LogLevels | Request::ResetLogLevels => Response::LogLevels {
+                            levels: LogLevels::default(),
+                        },
+                        Request::SetLogLevel { level, .. } => Response::LogLevels {
+                            levels: LogLevels {
+                                all: Some(*level),
+                                ..LogLevels::default()
+                            },
+                        },
+                        Request::ExportLogs { file, .. } => Response::ExportedLogs {
+                            file: file.clone(),
+                            unhidden: None,
+                        },
                         Request::MediaDevices => Response::MediaDevices(MediaDevices {
                             cameras: vec![MediaDevice {
                                 id: "/dev/video2".to_string(),
@@ -617,12 +809,34 @@ impl Fake {
                                 enabled: true,
                                 options_url: None,
                                 settings: ExtensionSettings {
-                                    in_private: Some(false),
+                                    file_access: Some(false),
                                     ..ExtensionSettings::default()
                                 },
+                                icon_path: Some(ICON.to_string()),
                             }],
                         },
                         Request::SetExtensionEnabled { .. } => Response::Stored,
+                        Request::BrowserProfiles => Response::BrowserProfiles(BrowserProfileList {
+                            default_profile: "personal".to_string(),
+                            default_private_profile: "private".to_string(),
+                            profiles: vec![ListedBrowserProfile {
+                                id: "work".to_string(),
+                                name: "Work".to_string(),
+                                color: "#3b82f6".to_string(),
+                                private: false,
+                                extensions: vec![ProfileExtension {
+                                    id: ID.to_string(),
+                                    enabled: false,
+                                    locked: false,
+                                }],
+                            }],
+                            sites: vec![ListedBrowserSite {
+                                site: "github.com/acme".to_string(),
+                                profile: "work".to_string(),
+                                pinned: false,
+                            }],
+                        }),
+                        Request::PinBrowserSite { .. } => Response::Stored,
                         Request::ConfigureExtension { .. } => Response::Stored,
                         Request::OpenUrl { .. } => Response::Opened,
                         Request::History(_) => Response::History {
@@ -645,6 +859,25 @@ impl Fake {
                             }],
                         },
                         Request::ClearSiteData { .. } => Response::Cleared,
+                        Request::Monitors => Response::Monitors {
+                            monitors: vec![MonitorInfo {
+                                names: vec![
+                                    "drm-1".to_string(),
+                                    "DEL DELL U3219Q 2ZLS413".to_string(),
+                                ],
+                                hdr: DisplayHdr::Unsupported,
+                            }],
+                        },
+                        Request::Agents => Response::Agents {
+                            agents: domicile_protocol::KnownAgents {
+                                connected: vec![],
+                                remembered: vec![domicile_protocol::RememberedAgent {
+                                    agent: "Codex".to_string(),
+                                    last_used_ms: 9,
+                                }],
+                            },
+                        },
+                        Request::StopAgent { .. } | Request::ForgetAgent { .. } => Response::Done,
                         other => panic!("the host never asks {other:?}"),
                     })
                 },
@@ -663,6 +896,10 @@ impl Fake {
                     }
                     _ => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
                 },
+                read_bytes: &|path| match path.to_str() {
+                    Some(ICON) => Ok(vec![0x89, b'P', b'N', b'G']),
+                    _ => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+                },
                 home: Some(Path::new("/home/me")),
                 choose_folder: &|| Ok(self.chosen.clone()),
                 writable: &|path: &Path| !path.starts_with("/nix/store"),
@@ -672,7 +909,92 @@ impl Fake {
                         .push((path.to_path_buf(), text.to_string()));
                     Ok(())
                 },
+                web_status: self.web_status.as_deref(),
+                signed_in: self.signed_in.as_deref(),
+                downloads: self.downloads.as_deref(),
+                open: &|folder| {
+                    self.opened.borrow_mut().push(folder.to_path_buf());
+                    Ok(())
+                },
             },
         )
     }
+}
+
+#[test]
+fn detailed_logging_is_everything_at_debug_until_turned_off() {
+    let host = a_host(FILES.clone());
+    assert_eq!(
+        host.answer(&json!({"id": 25, "type": "detailed_logging"})),
+        json!({"id": 25, "type": "detailed_logging", "on": false})
+    );
+    assert_eq!(
+        host.answer(&json!({"id": 26, "type": "set_detailed_logging", "on": true})),
+        json!({"id": 26, "type": "detailed_logging", "on": true})
+    );
+    assert_eq!(
+        host.answer(&json!({"id": 27, "type": "set_detailed_logging", "on": false})),
+        json!({"id": 27, "type": "detailed_logging", "on": false})
+    );
+    assert_eq!(
+        host.asked.take(),
+        [
+            Request::LogLevels,
+            Request::SetLogLevel {
+                level: LogLevel::Debug,
+                subsystems: Vec::new()
+            },
+            Request::ResetLogLevels,
+        ]
+    );
+}
+
+#[test]
+fn save_logs_exports_them_to_downloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("Downloads");
+    let mut host = a_host(FILES.clone());
+    host.downloads = Some(downloads.clone());
+    let reply = host.answer(&json!({"id": 28, "type": "export_logs", "redact": true}));
+    assert_eq!(reply["type"], "exported_logs", "{reply}");
+    assert!(downloads.is_dir(), "Downloads is made if missing");
+    let [Request::ExportLogs { file, redact: true }] = &host.asked.take()[..] else {
+        panic!("the export is the desktop's");
+    };
+    assert_eq!(file.parent(), Some(downloads.as_path()));
+    let name = file.file_name().unwrap().to_str().unwrap();
+    assert!(
+        name.starts_with("domicile-logs-") && name.ends_with(".txt"),
+        "{name}"
+    );
+    assert_eq!(reply["path"], json!(file));
+    assert_eq!(
+        host.answer(&json!({"id": 29, "type": "open_downloads"})),
+        json!({"id": 29, "type": "opened"})
+    );
+    assert_eq!(host.opened.take(), [downloads]);
+}
+
+#[test]
+fn the_downloads_folder_is_the_one_xdg_names() {
+    let home = Path::new("/home/me");
+    let none = |_: &str| None;
+    assert_eq!(
+        downloads(&none, None, Some(home)),
+        Some(PathBuf::from("/home/me/Downloads"))
+    );
+    assert_eq!(
+        downloads(
+            &none,
+            Some("# comment\nXDG_DOWNLOAD_DIR=\"$HOME/Hämtningar\"\n"),
+            Some(home)
+        ),
+        Some(PathBuf::from("/home/me/Hämtningar"))
+    );
+    let set = |name: &str| (name == "XDG_DOWNLOAD_DIR").then(|| "/data/dl".to_string());
+    assert_eq!(
+        downloads(&set, None, Some(home)),
+        Some(PathBuf::from("/data/dl"))
+    );
+    assert_eq!(downloads(&none, None, None), None);
 }

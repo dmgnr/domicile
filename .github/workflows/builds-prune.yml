@@ -1,0 +1,44 @@
+name: Prune builds
+
+# Delete engine and package builds older than a week from
+# cprussin/domicile-builds, and every build still published here from before
+# they moved there. Keeps whatever main, stable, a cut release or an open pull
+# request pins. See .github/scripts/builds-prune.sh.
+on:
+  # 10:43 UTC, after engine-release.yml's nightly has usually started, and off
+  # the hour, where scheduled runs are delayed most.
+  schedule:
+    - cron: "43 10 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: builds-prune
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: .github/scripts/builds-prune.sh cprussin/domicile-builds 7
+        env:
+          GH_TOKEN: ${{ secrets.DOMICILE_BUILDS_TOKEN }}
+
+  # Builds published here before they moved. Once none are left, this finds
+  # nothing.
+  here:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      # Two days, so a run started before builds moved can still write back
+      # the engine it published here.
+      - run: .github/scripts/builds-prune.sh "$GITHUB_REPOSITORY" 2
+        env:
+          GH_TOKEN: ${{ github.token }}

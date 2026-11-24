@@ -147,7 +147,7 @@ Claude-Session: https://claude.ai/code/session_0121wHJhHTqCKfhKTwP4R2t1
  create mode 100644 ui/events/ozone/evdev/input_device_opener.cc
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index f338774..535a9a3 100644
+index 7480180..2e1e117 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -73,6 +73,7 @@ component("evdev") {
@@ -159,10 +159,10 @@ index f338774..535a9a3 100644
      "input_device_opener_evdev.cc",
      "input_device_opener_evdev.h",
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
-index 8ab5e34..ac47ef3 100644
+index 91bed31..fb52c08 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.cc
 +++ b/ui/events/ozone/evdev/event_factory_evdev.cc
-@@ -220,9 +220,11 @@ PointerDetails GetTransformedEventPointerDetails(const T& params) {
+@@ -222,9 +222,11 @@ PointerDetails GetTransformedEventPointerDetails(const T& params) {
  
  }  // namespace
  
@@ -177,15 +177,15 @@ index 8ab5e34..ac47ef3 100644
      : device_manager_(device_manager),
        gamepad_provider_(GamepadProviderOzone::GetInstance()),
        keyboard_(
-@@ -236,6 +238,7 @@ EventFactoryEvdev::EventFactoryEvdev(CursorDelegateEvdev* cursor,
-       input_controller_(&keyboard_,
-                         &mouse_button_map_,
+@@ -240,6 +242,7 @@ EventFactoryEvdev::EventFactoryEvdev(CursorDelegateEvdev* cursor,
                          &pointing_stick_button_map_),
+       exclude_dispatch_from_safety_checks_(
+           base::FeatureList::IsEnabled(kExcludeEvdevDispatchFromSafetyChecks)),
 +      opener_factory_(std::move(opener_factory)),
        touch_id_generator_(0) {
    CHECK(device_manager_, base::NotFatalUntil::M163);
  }
-@@ -598,7 +601,7 @@ void EventFactoryEvdev::StartThread() {
+@@ -637,7 +640,7 @@ void EventFactoryEvdev::StartThread() {
    thread_.Start(std::move(proxy_dispatcher), cursor_,
                  base::BindOnce(&EventFactoryEvdev::OnThreadStarted,
                                 weak_ptr_factory_.GetWeakPtr()),
@@ -195,7 +195,7 @@ index 8ab5e34..ac47ef3 100644
  
  void EventFactoryEvdev::OnThreadStarted(
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.h b/ui/events/ozone/evdev/event_factory_evdev.h
-index c252511..b374fc8 100644
+index afedc60..7dd8822 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.h
 +++ b/ui/events/ozone/evdev/event_factory_evdev.h
 @@ -17,6 +17,8 @@
@@ -225,9 +225,9 @@ index c252511..b374fc8 100644
  
    EventFactoryEvdev(const EventFactoryEvdev&) = delete;
    EventFactoryEvdev& operator=(const EventFactoryEvdev&) = delete;
-@@ -175,6 +182,9 @@ class COMPONENT_EXPORT(EVDEV) EventFactoryEvdev : public DeviceEventObserver,
-   // Whether we've set up the device factory.
-   bool initialized_ = false;
+@@ -177,6 +184,9 @@ class COMPONENT_EXPORT(EVDEV) EventFactoryEvdev : public DeviceEventObserver,
+ 
+   bool exclude_dispatch_from_safety_checks_ = false;
  
 +  // Handed to the evdev thread when it starts, and run there.
 +  InputDeviceOpenerFactory opener_factory_;
@@ -453,7 +453,7 @@ index fda925b..7d6ca2a 100644
  
  #endif  // UI_EVENTS_OZONE_EVDEV_INPUT_DEVICE_OPENER_H_
 diff --git a/ui/events/ozone/evdev/input_device_opener_evdev.cc b/ui/events/ozone/evdev/input_device_opener_evdev.cc
-index 1a7e671..e9b64c7 100644
+index b1416ee..18f9ea4 100644
 --- a/ui/events/ozone/evdev/input_device_opener_evdev.cc
 +++ b/ui/events/ozone/evdev/input_device_opener_evdev.cc
 @@ -7,10 +7,12 @@
@@ -469,7 +469,7 @@ index 1a7e671..e9b64c7 100644
  #include "base/logging.h"
  #include "base/memory/ptr_util.h"
  #include "base/trace_event/trace_event.h"
-@@ -110,7 +112,7 @@ std::unique_ptr<EventConverterEvdev> InputDeviceOpenerEvdev::OpenInputDevice(
+@@ -111,7 +113,7 @@ std::unique_ptr<EventConverterEvdev> InputDeviceOpenerEvdev::OpenInputDevice(
    const base::FilePath& path = params.path;
    TRACE_EVENT1("evdev", "OpenInputDevice", "path", path.value());
  
@@ -478,7 +478,7 @@ index 1a7e671..e9b64c7 100644
    if (fd.get() < 0) {
      PLOG(ERROR) << "Cannot open " << path.value();
      return nullptr;
-@@ -132,4 +134,16 @@ std::unique_ptr<EventConverterEvdev> InputDeviceOpenerEvdev::OpenInputDevice(
+@@ -133,4 +135,16 @@ std::unique_ptr<EventConverterEvdev> InputDeviceOpenerEvdev::OpenInputDevice(
    return CreateConverter(params, std::move(fd), devinfo);
  }
  
@@ -527,7 +527,7 @@ index 7a89eae..4afe766 100644
  
  #endif  // UI_EVENTS_OZONE_EVDEV_INPUT_DEVICE_OPENER_EVDEV_H_
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 5f2b41b..11693e1 100644
+index 06f771e..778cb26 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -122,6 +122,10 @@ source_set("gbm") {
@@ -554,7 +554,7 @@ index 5f2b41b..11693e1 100644
      "//gpu/vulkan:buildflags",
      "//ipc",
      "//media:media_buildflags",
-@@ -239,6 +249,7 @@ source_set("gbm_unittests") {
+@@ -241,6 +251,7 @@ source_set("gbm_unittests") {
      "gpu/mock_drm_modifiers_filter.h",
      "gpu/proxy_helpers_unittest.cc",
      "domicile/drm_fullscreen_unittest.cc",

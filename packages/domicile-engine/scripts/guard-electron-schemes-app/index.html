@@ -1,0 +1,29 @@
+<!doctype html>
+<title>served</title>
+<!-- Served by the guard's app for guard://app/. The title says everything at
+     once, as the desk may report only its last: this page's origin, whether
+     it is a secure context, what fetch() of its own data.txt read, whether
+     a picture from this machine loaded without a Local Network Access
+     prompt, and the origin of a scheme nobody registered. -->
+<script>
+  const done = ([fetched, picture]) => {
+    document.title = [
+      "done",
+      location.origin,
+      String(window.isSecureContext),
+      fetched,
+      picture,
+      new URL("plain://app/x").origin,
+    ].join("|");
+  };
+  const fetched = fetch("data.txt")
+    .then((response) => response.text())
+    .catch((error) => "failed " + error);
+  const picture = new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve("loaded");
+    image.onerror = () => resolve("blocked");
+    image.src = new URLSearchParams(location.search).get("picture");
+  });
+  Promise.all([fetched, picture]).then(done);
+</script>

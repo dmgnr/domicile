@@ -10,9 +10,9 @@ use std::thread;
 use domicile_host::ipc::{apply_chrome_message, parse_chrome, to_line};
 use domicile_host::{Appearances, Host};
 use domicile_protocol::{
-    AccessDialog, Appearance, BoundShortcut, Capturing, CapturingKind, ChromeMessage, Devices,
-    ExtensionSettings, HostMessage, Notification, Owner, PortalKind, PortalRequest,
-    PortalWallpaper, Theme, TrayItem, Urgency, PROTOCOL_VERSION,
+    AccessDialog, Appearance, BoundShortcut, BrowserProfile, Capturing, CapturingKind,
+    ChromeMessage, Devices, ExtensionSettings, HostMessage, Notification, Owner, PortalKind,
+    PortalRequest, PortalWallpaper, Theme, TrayItem, Urgency, PROTOCOL_VERSION,
 };
 
 /// A window's owner, for tests about anything else.
@@ -274,7 +274,7 @@ fn the_extensions_the_config_names_ride_with_the_handshake() {
     let mut session = Session::new();
     session.host_mut().set_keymap(KEYMAP.into());
     let private = ExtensionSettings {
-        in_private: Some(true),
+        file_access: Some(true),
         ..ExtensionSettings::default()
     };
     session.host_mut().set_extensions(
@@ -300,6 +300,57 @@ fn the_extensions_the_config_names_ride_with_the_handshake() {
 }
 
 #[test]
+fn the_browser_profiles_ride_with_the_handshake() {
+    // The browser process reads these, like the extensions.
+    let mut session = Session::new();
+    let profiles = vec![BrowserProfile {
+        id: "work".into(),
+        name: "Work".into(),
+        color: "#d97706".into(),
+        private: false,
+        extensions: None,
+    }];
+    let sites: std::collections::BTreeMap<String, String> =
+        [("github.com/acme".into(), "work".into())].into();
+    session.host_mut().set_browser_profiles(
+        profiles.clone(),
+        "work".into(),
+        "private".into(),
+        sites.clone(),
+    );
+
+    let out = session.ingest(&to_line(&ChromeMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        checked: false,
+    }));
+
+    assert!(
+        out.contains(&HostMessage::BrowserProfiles {
+            profiles,
+            default_profile: "work".into(),
+            default_private_profile: "private".into(),
+            sites,
+        }),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn a_host_given_no_browser_profiles_sends_none() {
+    // The browser keeps its one profile and its private one.
+    let out = Session::new().ingest(&to_line(&ChromeMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        checked: false,
+    }));
+
+    assert!(
+        !out.iter()
+            .any(|message| matches!(message, HostMessage::BrowserProfiles { .. })),
+        "{out:?}"
+    );
+}
+
+#[test]
 fn the_sites_to_force_dark_ride_with_the_handshake() {
     // The browser process reads these, so a reloaded page's new channel needs
     // them again.
@@ -316,6 +367,37 @@ fn the_sites_to_force_dark_ride_with_the_handshake() {
     assert!(
         out.contains(&HostMessage::ForceDark {
             sites: vec!["mail.google.com".into()],
+        }),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn spell_checking_rides_with_the_handshake_once_configured() {
+    // The browser process reads it, so a reloaded page's new channel needs it
+    // again. A host without a config sends none, and the browser keeps its
+    // own default.
+    let hello = to_line(&ChromeMessage::Hello {
+        protocol_version: PROTOCOL_VERSION,
+        checked: false,
+    });
+    let unset = Session::new().ingest(&hello);
+    assert!(
+        !unset
+            .iter()
+            .any(|message| matches!(message, HostMessage::Spellcheck { .. })),
+        "{unset:?}"
+    );
+
+    let mut session = Session::new();
+    session
+        .host_mut()
+        .set_spellcheck(false, vec!["de-DE".into()]);
+    let out = session.ingest(&hello);
+    assert!(
+        out.contains(&HostMessage::Spellcheck {
+            enabled: false,
+            languages: vec!["de-DE".into()],
         }),
         "{out:?}"
     );

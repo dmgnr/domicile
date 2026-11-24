@@ -22,10 +22,10 @@ panels, What's New and the WebUI gallery are pages nothing can reach.
  2 files changed, 1 insertion(+), 27 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-index 4503ab6..3d32e29 100644
+index 264349e..49667d7 100644
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-@@ -337,8 +337,6 @@ void RegisterChromeWebUIConfigs() {
+@@ -334,8 +334,6 @@ void RegisterChromeWebUIConfigs() {
    map.AddWebUIConfig(std::make_unique<WebRtcLogsUIConfig>());
    map.AddWebUIConfig(std::make_unique<RegionalCapabilitiesInternalsUIConfig>());
  #if BUILDFLAG(ENABLE_WEBUI_NTP)
@@ -34,7 +34,7 @@ index 4503ab6..3d32e29 100644
    map.AddWebUIConfig(std::make_unique<CustomizeChromeUIConfig>());
  #endif  // BUILDFLAG(ENABLE_WEBUI_NTP)
  
-@@ -404,11 +402,9 @@ void RegisterChromeWebUIConfigs() {
+@@ -402,11 +400,9 @@ void RegisterChromeWebUIConfigs() {
    map.AddWebUIConfig(
        std::make_unique<on_device_internals::OnDeviceInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<PageActionInternalsUIConfig>());
@@ -46,7 +46,7 @@ index 4503ab6..3d32e29 100644
    map.AddWebUIConfig(std::make_unique<ShoppingInsightsSidePanelUIConfig>());
    map.AddWebUIConfig(std::make_unique<SupportToolUIConfig>());
    map.AddWebUIConfig(std::make_unique<SystemInfoUIConfig>());
-@@ -421,7 +417,6 @@ void RegisterChromeWebUIConfigs() {
+@@ -419,7 +415,6 @@ void RegisterChromeWebUIConfigs() {
    map.AddWebUIConfig(std::make_unique<WebNNInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<IndigoInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<WebUIBrowserUIConfig>());
@@ -54,7 +54,7 @@ index 4503ab6..3d32e29 100644
    map.AddWebUIConfig(std::make_unique<WebUIJsErrorUIConfig>());
    map.AddWebUIConfig(std::make_unique<WebUIToolbarConfig>());
  #endif  // BUILDFLAG(IS_ANDROID)
-@@ -466,7 +461,6 @@ void RegisterChromeWebUIConfigs() {
+@@ -460,7 +455,6 @@ void RegisterChromeWebUIConfigs() {
    map.AddWebUIConfig(std::make_unique<HistorySyncOptinUIConfig>());
    map.AddWebUIConfig(std::make_unique<OnDeviceTranslationInternalsUIConfig>());
    map.AddWebUIConfig(std::make_unique<WebAppSettingsUIConfig>());
@@ -63,7 +63,7 @@ index 4503ab6..3d32e29 100644
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
 diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
-index a92fe88..82e7dd5 100644
+index 445d42d..ed2a054 100644
 --- a/chrome/chrome_paks.gni
 +++ b/chrome/chrome_paks.gni
 @@ -170,14 +170,7 @@ template("chrome_extra_paks") {

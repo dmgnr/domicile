@@ -13,16 +13,19 @@
 #
 # On a pull request that changes the fork, a mismatch is expected until
 # `engine.yml` publishes the engine and writes `engine-release.nix` back to the
-# branch. `turbo-test.yml` sets `DOMICILE_PR_HEAD_SHA` and
-# `DOMICILE_PR_BASE_SHA`, and a mismatch is a skip only when both hold:
+# branch. It still fails: until the write-back lands, the branch describes an
+# engine nobody built, and merging it then leaves main pinned to the old series
+# (#2425 merged that way and stranded the next stable release). Red until the
+# write-back is what keeps such a pull request from looking mergeable.
+#
+# `turbo-test.yml` sets `DOMICILE_PR_HEAD_SHA` and `DOMICILE_PR_BASE_SHA`, and
+# with them the failure says whether a write-back is still coming:
 #
 #   - the pin is still the base's, so the write-back will move it; and
 #   - `engine.yml` has an unfinished run for that head.
 #
-# Everything else fails: main, a pin no write-back explains, and an engine run
-# that finished or never started. The write-back push triggers the turbo-test
-# run that passes. Without these variables (`engine-release-needed.sh`,
-# `engine-proof.sh`), the check is strict.
+# When both hold, it says to wait; otherwise it says why nothing will fix the
+# pin. The write-back push triggers the turbo-test run that passes.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -85,13 +88,24 @@ api() { # accept, path under the repository
 }
 
 why=""
+pending=""
 if [ "$got" != "$want" ] && [ -n "${DOMICILE_PR_HEAD_SHA:-}" ]; then
   why="$(not_pending "$got")"
-  if [ -z "$why" ]; then
-    echo "SKIP: the pinned engine is not this series yet; engine.yml's run for" \
-      "$DOMICILE_PR_HEAD_SHA has not finished, and its write-back is what decides"
-    exit 77
-  fi
+  [ -n "$why" ] || pending=1
+fi
+
+if [ -n "$pending" ]; then
+  {
+    echo "  FAIL  not mergeable yet: the pinned engine is not this series"
+    echo "        this checkout: $want"
+    echo "        the pin:       $got"
+    echo
+    echo "        engine.yml's run for $DOMICILE_PR_HEAD_SHA has not finished."
+    echo "        It publishes this series and writes engine-release.nix back"
+    echo "        to the branch; that push reruns this check, and it passes."
+    echo "        Merging before then leaves main pinned to the old engine."
+  } >&2
+  exit 1
 fi
 
 if [ "$got" != "$want" ]; then

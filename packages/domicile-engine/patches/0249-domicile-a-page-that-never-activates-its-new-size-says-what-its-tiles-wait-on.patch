@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page that never activates its new size says what
+ its tiles wait on
+
+0248 fired on lyra for a frozen page: its compositor thread kept drawing
+the old surface while a pending tree at the new one never activated
+(not produced: waiting on main, a pending surface, can draw yes). A
+pending tree activates once every tile required for activation is ready
+to draw, so the wait is in TileManager.
+
+0248's line now ends, when there is a pending tree, with all of it at
+once, so one freeze is enough: whether the pending tree is fully painted
+(paint worklets); whether TileManager is ready to activate or has
+rastered tiles waiting on the GPU; required tiles still to raster and
+where they are (a monitor's tiling from 0072/0079, counting an active
+tiling whose pending twin is one, or the active tree), how many are
+being rastered and how many the raster queue never offers at all;
+out-of-memory placeholders, whether the last memory pass ran out,
+whether everything wanted is scheduled, tile memory against its limit
+or that there is no resource pool; the first 12 tiles still to raster
+in full (tree, scale, monitor ratio and its twin's, rect, priority bin,
+resolution, distance, occluded, rastering, offered, required for draw);
+and TileManager's own state (global state, memory policy, tree
+priority) as JSON. Log only.
+---
+ cc/tiles/tile_manager.cc         | 99 ++++++++++++++++++++++++++++++++
+ cc/tiles/tile_manager.h          |  4 ++
+ cc/trees/layer_tree_host_impl.cc |  5 ++
+ 3 files changed, 108 insertions(+)
+
+diff --git a/cc/tiles/tile_manager.cc b/cc/tiles/tile_manager.cc
+index ab15690..6b8eed0 100644
+--- a/cc/tiles/tile_manager.cc
++++ b/cc/tiles/tile_manager.cc
+@@ -1754,6 +1754,105 @@ bool TileManager::IsReadyToActivate() const {
+              RasterTilePriorityQueue::Type::REQUIRED_FOR_ACTIVATION);
+ }
+ 
++std::string TileManager::DomicileWhyNotReadyToActivate() const {
++  // Tiles the raster queue offers; a required tile it never offers is never
++  // rastered, and so never lets the pending tree activate.
++  absl::flat_hash_set<const Tile*> offered;
++  for (std::unique_ptr<RasterTilePriorityQueue> queue =
++           client_->BuildRasterQueue(global_state_.tree_priority,
++                                     RasterTilePriorityQueue::Type::ALL);
++       !queue->IsEmpty(); queue->Pop()) {
++    offered.insert(queue->Top().tile());
++  }
++  // The required queue holds only required tiles that still need raster; an
++  // out-of-memory placeholder is among them but counts as ready to draw.
++  int to_raster = 0;
++  int out_of_memory = 0;
++  int on_monitor = 0;
++  int on_active = 0;
++  int rastering = 0;
++  int never_offered = 0;
++  int never_offered_on_monitor = 0;
++  std::string tiles;
++  for (std::unique_ptr<RasterTilePriorityQueue> queue =
++           client_->BuildRasterQueue(
++               global_state_.tree_priority,
++               RasterTilePriorityQueue::Type::REQUIRED_FOR_ACTIVATION);
++       !queue->IsEmpty(); queue->Pop()) {
++    const PrioritizedTile& prioritized_tile = queue->Top();
++    const Tile* tile = prioritized_tile.tile();
++    if (tile->IsOOM()) {
++      ++out_of_memory;
++      continue;
++    }
++    ++to_raster;
++    // An active tiling is required for activation when its pending twin is a
++    // monitor's (0079), before it takes the twin's monitor at activation.
++    const PictureLayerTiling* tiling = prioritized_tile.source_tiling();
++    const PictureLayerTiling* twin =
++        tiling->tree() == ACTIVE_TREE
++            ? tiling->client()->GetPendingOrActiveTwinTiling(tiling)
++            : nullptr;
++    const bool monitor = tiling->domicile_display_ratio() != 0.f ||
++                         (twin && twin->domicile_display_ratio() != 0.f);
++    on_monitor += monitor;
++    on_active += tiling->tree() == ACTIVE_TREE;
++    const bool is_offered = offered.contains(tile);
++    if (tile->HasRasterTask()) {
++      ++rastering;
++    } else if (!is_offered) {
++      ++never_offered;
++      never_offered_on_monitor += monitor;
++    }
++    // The first few in full, so one freeze says which tiles and why.
++    if (to_raster <= 12) {
++      const TilePriority& priority = prioritized_tile.priority();
++      base::StringAppendF(
++          &tiles,
++          "%s{tile %llu, %s tree, scale %g, monitor ratio %g%s, rect %s, "
++          "bin %s, %s, distance %g, occluded %s, rastering %s, offered %s, "
++          "required for draw %s}",
++          to_raster > 1 ? ", " : "",
++          static_cast<unsigned long long>(tile->id()),
++          tiling->tree() == ACTIVE_TREE ? "active" : "pending",
++          tile->contents_scale_key(), tiling->domicile_display_ratio(),
++          twin ? base::StringPrintf(" (twin %g)",
++                                    twin->domicile_display_ratio())
++                     .c_str()
++               : "",
++          tile->content_rect().ToString().c_str(),
++          TilePriorityBinToString(priority.priority_bin).c_str(),
++          TileResolutionToString(priority.resolution).c_str(),
++          priority.distance_to_visible,
++          prioritized_tile.is_occluded() ? "yes" : "no",
++          tile->HasRasterTask() ? "yes" : "no", is_offered ? "yes" : "no",
++          tile->required_for_draw() ? "yes" : "no");
++    }
++  }
++  base::trace_event::TracedValueJSON state;
++  BasicStateAsValueInto(&state);
++  const std::string memory =
++      resource_pool_
++          ? base::StringPrintf("%zu of %zu KB",
++                               resource_pool_->memory_usage_bytes() / 1024,
++                               global_state_.hard_memory_limit_in_bytes / 1024)
++          : std::string("none (no resource pool)");
++  return base::StringPrintf(
++      "ready to activate %s (rastered tiles waiting on the GPU %s): required "
++      "tiles still to raster %d (on a monitor's tiling %d, on the active tree "
++      "%d, being rastered %d, never offered for raster %d, %d of them on a "
++      "monitor's tiling), out-of-memory placeholders %d, out of memory last "
++      "pass %s, all scheduled %s, tile memory %s; first tiles to raster [%s]; "
++      "tile manager %s",
++      IsReadyToActivate() ? "yes" : "no",
++      pending_required_for_activation_callback_id_ ? "yes" : "no", to_raster,
++      on_monitor, on_active, rastering, never_offered,
++      never_offered_on_monitor, out_of_memory,
++      did_oom_on_last_assign_ ? "yes" : "no",
++      all_tiles_that_need_to_be_rasterized_are_scheduled_ ? "yes" : "no",
++      memory.c_str(), tiles.c_str(), state.ToJSON().c_str());
++}
++
+ bool TileManager::IsReadyToDraw() const {
+   TRACE_EVENT0("cc,benchmark", "TileManager::IsReadyToDraw");
+   return pending_required_for_draw_callback_id_ == 0 &&
+diff --git a/cc/tiles/tile_manager.h b/cc/tiles/tile_manager.h
+index 81674cb..1abeb82 100644
+--- a/cc/tiles/tile_manager.h
++++ b/cc/tiles/tile_manager.h
+@@ -10,6 +10,7 @@
+ 
+ #include <memory>
+ #include <set>
++#include <string>
+ #include <utility>
+ #include <vector>
+ 
+@@ -142,6 +143,9 @@ class CC_EXPORT TileManager : CheckerImageTrackerClient,
+                                    int flags);
+ 
+   bool IsReadyToActivate() const;
++  // DOMICILE: what activation waits on, for a page that has not drawn at its
++  // new size. See LayerTreeHostImpl::DomicileReportTargetWait.
++  std::string DomicileWhyNotReadyToActivate() const;
+   bool IsReadyToDraw() const;
+ 
+   const PaintImageIdFlatSet& TakeImagesToInvalidateOnSyncTree();
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index 47605f7..1f7f1e4 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -2093,6 +2093,11 @@ void LayerTreeHostImpl::DomicileReportTargetWait() {
+              << ", evicted "
+              << (evicted_local_surface_id_.is_valid() ? "yes" : "no")
+              << ", frame sink " << (layer_tree_frame_sink_ ? "bound" : "none")
++             << (pending_tree()
++                     ? std::string(", pending tree fully painted ") +
++                           (pending_tree_fully_painted_ ? "yes" : "no") +
++                           ", " + tile_manager_.DomicileWhyNotReadyToActivate()
++                     : std::string())
+              << ".";
+ }
+ 

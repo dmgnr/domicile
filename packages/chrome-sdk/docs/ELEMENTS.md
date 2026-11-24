@@ -31,6 +31,13 @@ Event names and full types are in `src/app-element.ts` and
   the element's box in page pixels whenever it moves or resizes. The client
   draws at the scale of the monitor holding most of the box. An unreported
   window draws for the densest monitor.
+- **Zoom:** CSS `zoom` on an `<app>` (or an ancestor) zooms the window's
+  content and keeps it sharp. The client is configured `zoom` times smaller
+  than the box and draws `zoom` times denser, so its buffer still fills the box.
+  The box itself is laid out as usual: `width: 100%` keeps the tile's size.
+  A client without `wp_fractional_scale_v1` draws at its display's
+  whole-number scale and is resampled, so a small zoom costs it a large
+  buffer. A `transform: scale()` is not zoom: it resamples the window.
 - **Hidden:** call `domicile.windows.setBounds(appId, { x: 0, y: 0, width: 0, height: 0 })`
   for an `<app>`
   the page does not draw. The client gets a frame callback once a second and
@@ -58,6 +65,10 @@ Event names and full types are in `src/app-element.ts` and
 - **Keyboard:** the engine sends the keystrokes `document` hears to the window
   that has the keyboard. `domicile.windows.focus(appId)` and `domicile.windows.focusShell()`
   move it in code, both in the compositor's seat and for the page's keys.
+  Each press sent (not a modifier, a repeat or a grabbed chord) fires
+  `domicile-key-delivered` on the `<app>`: a plain `Event` that names no key.
+  While the desk is locked, the page keeps every key, so the lock screen
+  gets the passphrase.
 - **Focus events** (both cancelable; call `preventDefault()` to decide focus
   yourself):
   - `domicile-focus-requested`: a click on a window, before it is focused. A
@@ -85,7 +96,8 @@ once, when the view connects. The SDK provides types only.
   edge: each box then shows at once, with the page's latest frame at its own
   size in the top left corner until the page draws at the new box.
 - **Properties:** `src`, `goBack()`, `goForward()`, `goBackInNewWindow()`,
-  `goForwardInNewWindow()`, `stop()`, `reload()`,
+  `goForwardInNewWindow()`, `history()`, `goToHistoryEntry()`,
+  `goToHistoryEntryInNewWindow()`, `stop()`, `reload()`,
   `canGoBack`, `canGoForward`, `loading`, `focus()`, `inspect()` (opens
   DevTools as a new window), `print()` (the desktop's print dialog).
 - **Events** (selected; see `src/webview-element.ts` for all):

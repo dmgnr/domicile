@@ -3,7 +3,8 @@ name: Distro packages
 # Build the Debian, RPM and Arch packages (`packages/distro/build.sh`) and their signed
 # repositories (`packages/distro/repo.sh`), install each from its repository in its
 # distribution's container (`distro`' `test:distro`), and publish them
-# as a release when stable.yml calls this for a commit it promoted.
+# as `packages-latest` in cprussin/domicile-builds when stable.yml calls this
+# for a commit it promoted.
 #
 # On pull requests, only those that touch the packaging or the pins it reads.
 # The other workflows build the code itself.
@@ -25,7 +26,7 @@ on:
         type: string
         required: true
       publish:
-        description: Publish the packages as a release
+        description: Publish the packages as packages-latest
         type: boolean
         default: false
       release:
@@ -45,7 +46,7 @@ on:
         type: string
         required: true
       publish:
-        description: Publish the packages as a release
+        description: Publish the packages as packages-latest
         type: boolean
         default: false
       release:
@@ -158,8 +159,6 @@ jobs:
     needs: installs
     if: inputs.publish
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -168,6 +167,8 @@ jobs:
         with:
           name: packages
           path: distro-out/
+      # Into cprussin/domicile-builds, so watchers of this repository are not
+      # notified of each promotion.
       - run: .github/scripts/distro-packages-publish.sh distro-out
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DOMICILE_BUILDS_TOKEN }}

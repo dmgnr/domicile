@@ -1,0 +1,178 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 20 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: set-log-level reaches every engine process
+
+`domicile set-log-level` changes the engine's minimum severity and
+`--vmodule` while it runs. A level is per process, so each child process
+gets it over `mojom::ChildProcess::SetLogLevels`, and one started later
+gets the last levels as it starts. `logging::SetVmodule` replaces the
+VLOG patterns, leaking the old ones as `--vmodule` does in tests.
+---
+ base/logging.cc                                          | 9 +++++++++
+ base/logging.h                                           | 4 ++++
+ content/browser/BUILD.gn                                 | 2 ++
+ content/browser/child_process_host_impl.cc               | 2 ++
+ .../browser/renderer_host/render_process_host_impl.cc    | 7 +++++++
+ content/browser/renderer_host/render_process_host_impl.h | 2 ++
+ content/child/child_thread_impl.cc                       | 7 +++++++
+ content/common/child_process.mojom                       | 4 ++++
+ content/public/browser/BUILD.gn                          | 1 +
+ 9 files changed, 38 insertions(+)
+
+diff --git a/base/logging.cc b/base/logging.cc
+index e2506e2..a4c2d2b 100644
+--- a/base/logging.cc
++++ b/base/logging.cc
+@@ -556,6 +556,15 @@ int GetMinLogLevel() {
+   return g_min_log_level;
+ }
+ 
++void SetVmodule(std::string_view vmodule_switch) {
++#if defined(LEAK_SANITIZER)
++  // See comments on |g_vlog_info|: the replaced one may still be read.
++  ScopedLeakSanitizerDisabler lsan_disabler;
++#endif  // defined(LEAK_SANITIZER)
++  ExchangeVlogInfo(new VlogInfo(/*v_switch=*/"", vmodule_switch,
++                                g_min_log_level));
++}
++
+ uint32_t GetLoggingDestination() {
+   return g_logging_destination;
+ }
+diff --git a/base/logging.h b/base/logging.h
+index 26bed11..829fdd3 100644
+--- a/base/logging.h
++++ b/base/logging.h
+@@ -231,6 +231,10 @@ BASE_EXPORT void SetMinLogLevel(int level);
+ // Gets the current log level.
+ BASE_EXPORT int GetMinLogLevel();
+ 
++// Domicile: replaces this process's `--vmodule` patterns, for `domicile
++// set-log-level`. The default VLOG level stays the one SetMinLogLevel sets.
++BASE_EXPORT void SetVmodule(std::string_view vmodule_switch);
++
+ // Used by LOG_IS_ON to lazy-evaluate stream arguments.
+ BASE_EXPORT bool ShouldCreateLogMessage(int severity);
+ 
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index ba0b58f..3c7e8f4 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -970,6 +970,8 @@ source_set("browser") {
+     "domicile/domicile_desk.h",
+     "domicile/domicile_frame_sink_broker.cc",
+     "domicile/domicile_frame_sink_broker.h",
++    "domicile/domicile_log_levels.cc",
++    "domicile/domicile_log_levels.h",
+     "domicile/domicile_spike_probe.cc",
+     "domicile/domicile_spike_probe.h",
+     "download/download_item_utils.cc",
+diff --git a/content/browser/child_process_host_impl.cc b/content/browser/child_process_host_impl.cc
+index dd5da3d..3290ff2 100644
+--- a/content/browser/child_process_host_impl.cc
++++ b/content/browser/child_process_host_impl.cc
+@@ -22,6 +22,7 @@
+ #include "base/synchronization/lock.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
++#include "content/browser/domicile/domicile_log_levels.h"
+ #include "content/common/content_constants_internal.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/child_process_host.h"
+@@ -120,6 +121,7 @@ ChildProcessHostImpl::ChildProcessHostImpl(ChildProcessHostDelegate* delegate)
+   child_process_.Bind(mojo::PendingRemote<mojom::ChildProcess>(
+       mojo_invitation_->AttachMessagePipe(kChildProcessReceiverAttachmentName),
+       /*version=*/0));
++  SendDomicileLogLevels(*child_process_);
+   receiver_.Bind(mojo::PendingReceiver<mojom::ChildProcessHost>(
+       mojo_invitation_->AttachMessagePipe(
+           kChildProcessHostRemoteAttachmentName)));
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index ea2c83a..f3a2b83 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -102,6 +102,7 @@
+ #include "content/browser/code_cache/generated_code_cache_context.h"
+ #include "content/browser/compositor/surface_utils.h"
+ #include "content/browser/cpu_performance/cpu_performance.h"
++#include "content/browser/domicile/domicile_log_levels.h"
+ #include "content/browser/field_trial_recorder.h"
+ #include "content/browser/field_trial_synchronizer.h"
+ #include "content/browser/file_system/file_system_manager_impl.h"
+@@ -2284,6 +2285,7 @@ void RenderProcessHostImpl::InitializeChannelProxy() {
+       mojo_invitation_.AttachMessagePipe(kChildProcessReceiverAttachmentName),
+       /*version=*/0);
+   child_process_.Bind(std::move(child_pending_remote));
++  SendDomicileLogLevels(*child_process_);
+ 
+   // We'll bind this receiver to |io_thread_host_impl_| when it is created.
+   child_host_pending_receiver_ = mojo::PendingReceiver<mojom::ChildProcessHost>(
+@@ -2633,6 +2635,11 @@ void RenderProcessHostImpl::SetBatterySaverMode(
+   child_process_->SetBatterySaverMode(battery_saver_mode_enabled);
+ }
+ 
++void RenderProcessHostImpl::DomicileSetLogLevels(int min_level,
++                                                 const std::string& vmodule) {
++  child_process_->SetLogLevels(min_level, vmodule);
++}
++
+ #if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+ void RenderProcessHostImpl::CreateOOPVideoDecoder(
+     mojo::PendingReceiver<media::mojom::VideoDecoder> receiver) {
+diff --git a/content/browser/renderer_host/render_process_host_impl.h b/content/browser/renderer_host/render_process_host_impl.h
+index abe5c13..02225cd 100644
+--- a/content/browser/renderer_host/render_process_host_impl.h
++++ b/content/browser/renderer_host/render_process_host_impl.h
+@@ -382,6 +382,8 @@ class CONTENT_EXPORT RenderProcessHostImpl
+                            base::ScopedFD log_file_descriptor) override;
+ #endif
+   void SetBatterySaverMode(bool battery_saver_mode_enabled) override;
++  // Domicile: see content/browser/domicile/domicile_log_levels.h.
++  void DomicileSetLogLevels(int min_level, const std::string& vmodule);
+   uint64_t GetPrivateMemoryFootprint() override;
+   bool IsOnlyHostingPrerenderedFramesOrEmpty() override;
+   bool HasLoadingFrames() const override;
+diff --git a/content/child/child_thread_impl.cc b/content/child/child_thread_impl.cc
+index 9e10d8c..2c08e28 100644
+--- a/content/child/child_thread_impl.cc
++++ b/content/child/child_thread_impl.cc
+@@ -479,6 +479,13 @@ class ChildThreadImpl::IOThreadState
+                        battery_saver_mode_enabled));
+   }
+ 
++  // Domicile: `domicile set-log-level`. The levels are process-wide, so any
++  // thread may set them.
++  void SetLogLevels(int32_t min_level, const std::string& vmodule) override {
++    logging::SetMinLogLevel(min_level);
++    logging::SetVmodule(vmodule);
++  }
++
+   const scoped_refptr<base::SequencedTaskRunner> main_thread_task_runner_;
+   const base::WeakPtr<ChildThreadImpl> weak_main_thread_;
+   const base::RepeatingClosure quit_closure_;
+diff --git a/content/common/child_process.mojom b/content/common/child_process.mojom
+index 049049b..cf7a623 100644
+--- a/content/common/child_process.mojom
++++ b/content/common/child_process.mojom
+@@ -119,4 +119,8 @@ interface ChildProcess {
+   // energy efficiency because the embedder is in battery saver mode. The
+   // default is `false`.
+   SetBatterySaverMode(bool battery_saver_mode_enabled);
++
++  // Domicile: logs at `min_level` (0 INFO to 3 FATAL) and VLOGs at `vmodule`,
++  // for `domicile set-log-level`.
++  SetLogLevels(int32 min_level, string vmodule);
+ };
+diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+index 81e0d08..453d180 100644
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -169,6 +169,7 @@ source_set("browser_sources") {
+     "document_user_data.h",
+     "dom_storage_context.h",
+     "domicile_desk.h",
++    "domicile_log_levels.h",
+     "download_item_utils.h",
+     "download_manager.cc",
+     "download_manager.h",

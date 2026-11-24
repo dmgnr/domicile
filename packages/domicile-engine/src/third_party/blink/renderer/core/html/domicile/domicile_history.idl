@@ -1,0 +1,9 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// A <webview>'s history either side of its current page, each side nearest
+// first, as Chrome's back and forward menus list it.
+dictionary DomicileHistory {
+  required sequence<DomicileHistoryEntry> back;
+  required sequence<DomicileHistoryEntry> forward;
+};

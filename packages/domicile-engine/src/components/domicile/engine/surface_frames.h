@@ -24,6 +24,8 @@ class SurfaceFrames {
   // The most frames kept waiting for presentation feedback. Viz reports every
   // frame it is sent, so this only bounds one it never reports.
   static constexpr size_t kMostUnpresented = 64;
+  // What Acked returns for a frame sent by Redrawn, which answers nothing.
+  static constexpr uint64_t kRedrawn = 0;
 
   SurfaceFrames();
   SurfaceFrames(const SurfaceFrames&) = delete;
@@ -33,11 +35,16 @@ class SurfaceFrames {
   // A frame sent to viz as `frame_token`. Returns its number.
   uint64_t Sent(uint32_t frame_token);
 
+  // A frame sent again to show its subsurfaces anew. The compositor did not
+  // submit it, so it takes no number and is never reported presented.
+  void Redrawn();
+
   // A frame that never reached viz. Returns its number.
   uint64_t Dropped();
 
   // Viz acked a frame. Acks name no frame and come in the order frames were
-  // sent, so this is the oldest unacked one. `nullopt` if none is unacked.
+  // sent, so this is the oldest unacked one: kRedrawn for one sent by
+  // Redrawn. `nullopt` if none is unacked.
   std::optional<uint64_t> Acked();
 
   // Viz reported presenting `frame_token`. Returns its number once;

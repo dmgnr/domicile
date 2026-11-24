@@ -349,6 +349,21 @@ impl DomicileCompositor {
         broadcast_focus_decision(&self.hub, ChromeMessage::FocusChrome);
     }
 
+    /// Take the keyboard from any window for the lock screen.
+    ///
+    /// The chrome's toplevel, or nothing when there is none. Every chrome is
+    /// told, so the engine stops sending keys to the window that had it.
+    pub fn hand_the_keyboard_to_the_lock_screen(&mut self) {
+        let chrome = self
+            .chrome_toplevel
+            .as_ref()
+            .map(|toplevel| toplevel.wl_surface().clone());
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.set_focus(self, chrome, serial);
+        broadcast_focus_decision(&self.hub, ChromeMessage::FocusChrome);
+    }
+
     /// Send one key through the seat to the focused client.
     ///
     /// Shared by chrome keys and the latency run, so the measurement uses the

@@ -15,6 +15,8 @@
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_domicile_history.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_domicile_history_entry.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_domicile_media_device.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_domicile_media_devices.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_keyboard_event_init.h"
@@ -30,6 +32,7 @@
 #include "third_party/blink/renderer/core/html/domicile/domicile_dialog_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_external_app_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_file_chooser_event.h"
+#include "third_party/blink/renderer/core/html/domicile/domicile_identity_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_permission_request_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_picker_event.h"
 #include "third_party/blink/renderer/core/html/domicile/domicile_prompt_event.h"
@@ -69,6 +72,9 @@ constexpr char kPageChangeEvent[] = "domicile-page-change";
 // listeners do not mistake it for a key in the shell's document. The zoom
 // requests encode direction in the name, so they stay plain Events.
 constexpr char kGuestKeydownEvent[] = "domicile-guest-keydown";
+constexpr char kGuestKeyupEvent[] = "domicile-guest-keyup";
+// A key press reached the guest, which `<app>` also dispatches for its client.
+constexpr char kKeyDeliveredEvent[] = "domicile-key-delivered";
 constexpr char kZoomChangeEvent[] = "domicile-zoom-change";
 constexpr char kZoomInRequestEvent[] = "domicile-zoom-in-request";
 constexpr char kZoomOutRequestEvent[] = "domicile-zoom-out-request";
@@ -146,6 +152,11 @@ constexpr char kPickerEvent[] = "domicile-picker";
 constexpr char kPickerWithdrawnEvent[] = "domicile-picker-withdrawn";
 constexpr char kPromptWithdrawnEvent[] = "domicile-prompt-withdrawn";
 
+// A step of a site's "Sign in with" request, which the shell answers on the
+// event, and its withdrawal. See domicile_identity_event.h.
+constexpr char kIdentityEvent[] = "domicile-identity";
+constexpr char kIdentityWithdrawnEvent[] = "domicile-identity-withdrawn";
+
 // The values of a site permission's setting. Strings, as for `security`.
 constexpr char kSettingAsk[] = "ask";
 constexpr char kSettingAllow[] = "allow";
@@ -164,9 +175,13 @@ constexpr char kFocusRequestEvent[] = "domicile-focus-request";
 // matters.
 constexpr char kExtensionPopupAttr[] = "extensionpopup";
 
-// Makes the guest's page private: in the off-the-record profile. Read once,
-// on requesting the guest; only presence matters.
+// Makes the guest's page private: in the default private profile, off the
+// record. Read once, on requesting the guest; only presence matters.
 constexpr char kPrivateAttr[] = "private";
+
+// Puts the guest's page in the browser profile it names, by id. Read once, on
+// requesting the guest. See docs/architecture/BROWSER-PROFILES.md.
+constexpr char kProfileAttr[] = "profile";
 
 // Gives the guest's page storage of its own: "persist:<name>" on disk, any
 // other name in memory. Read once, on requesting the guest. See
@@ -230,7 +245,9 @@ bool IsEdit(domicile::mojom::blink::WebViewContextMenuAction action) {
     case domicile::mojom::blink::WebViewContextMenuAction::kCopyImage:
     case domicile::mojom::blink::WebViewContextMenuAction::kCopyMediaAddress:
     case domicile::mojom::blink::WebViewContextMenuAction::kSaveMediaAs:
+    case domicile::mojom::blink::WebViewContextMenuAction::kPictureInPicture:
     case domicile::mojom::blink::WebViewContextMenuAction::kInspect:
+    case domicile::mojom::blink::WebViewContextMenuAction::kAddToDictionary:
       return false;
   }
 }
@@ -312,6 +329,7 @@ void HTMLWebViewElement::Trace(Visitor* visitor) const {
   visitor->Trace(external_app_);
   visitor->Trace(sign_in_);
   visitor->Trace(prompt_);
+  visitor->Trace(identity_);
   visitor->Trace(picker_);
   visitor->Trace(pointer_listener_);
   HTMLFrameElementBase::Trace(visitor);
@@ -378,11 +396,18 @@ void HTMLWebViewElement::RequestGuest() {
                      client_receiver_.BindNewPipeAndPassRemote(task_runner),
                      BrowserWindow(),
                      hasAttribute(AtomicString(kExtensionPopupAttr)),
-                     hasAttribute(AtomicString(kPrivateAttr)), Partition());
+                     hasAttribute(AtomicString(kPrivateAttr)), Profile(),
+                     Partition());
 }
 
 String HTMLWebViewElement::BrowserWindow() const {
   return getAttribute(AtomicString(kWindowAttr));
+}
+
+String HTMLWebViewElement::Profile() const {
+  const AtomicString& profile = getAttribute(AtomicString(kProfileAttr));
+  // Empty, not null, when absent, as Partition.
+  return profile.IsNull() ? g_empty_string : profile.GetString();
 }
 
 String HTMLWebViewElement::Partition() const {
@@ -498,6 +523,60 @@ void HTMLWebViewElement::goForwardInNewWindow() {
   }
 }
 
+namespace {
+
+HeapVector<Member<DomicileHistoryEntry>> HistoryListed(
+    const Vector<domicile::mojom::blink::WebViewHistoryEntryPtr>& entries) {
+  HeapVector<Member<DomicileHistoryEntry>> listed;
+  listed.reserve(entries.size());
+  for (const auto& entry : entries) {
+    auto* page = DomicileHistoryEntry::Create();
+    page->setId(entry->id);
+    page->setUrl(entry->url.GetString());
+    page->setTitle(entry->title);
+    page->setFavicon(entry->favicon);
+    listed.push_back(page);
+  }
+  return listed;
+}
+
+void ResolveHistory(ScriptPromiseResolver<DomicileHistory>* resolver,
+                    domicile::mojom::blink::WebViewHistoryPtr history) {
+  auto* answer = DomicileHistory::Create();
+  answer->setBack(HistoryListed(history->back));
+  answer->setForward(HistoryListed(history->forward));
+  resolver->Resolve(answer);
+}
+
+}  // namespace
+
+ScriptPromise<DomicileHistory> HTMLWebViewElement::history(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
+  if (!guest_.is_bound()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "This <webview> has no page yet.");
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<DomicileHistory>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  guest_->ListHistory(BindOnce(&ResolveHistory, WrapPersistent(resolver)));
+  return promise;
+}
+
+void HTMLWebViewElement::goToHistoryEntry(int32_t id) {
+  if (guest_.is_bound()) {
+    guest_->GoToHistoryEntry(id);
+  }
+}
+
+void HTMLWebViewElement::goToHistoryEntryInNewWindow(int32_t id) {
+  if (guest_.is_bound()) {
+    guest_->GoToHistoryEntryInNewWindow(id);
+  }
+}
+
 void HTMLWebViewElement::stop() {
   if (guest_.is_bound()) {
     guest_->Stop();
@@ -593,6 +672,22 @@ void HTMLWebViewElement::RunContextMenuAction(
   guest_->RunContextMenuAction(menu.id(), action);
 }
 
+void HTMLWebViewElement::ReplaceMisspelling(
+    const DomicileContextMenuEvent& menu,
+    const String& word,
+    ExceptionState& exception_state) {
+  if (menu.id() != context_menu_id_) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "A newer context menu has replaced this one.");
+    return;
+  }
+  CHECK(guest_.is_bound());
+  // An edit, so the page takes the focus back first, as RunContextMenuAction.
+  Element::Focus();
+  guest_->ReplaceMisspelling(menu.id(), word);
+}
+
 // Does not change `site_permissions_`: the browser reports the stored result
 // in SitePermissionsChanged.
 void HTMLWebViewElement::setSitePermission(const String& permission,
@@ -664,6 +759,16 @@ void SettleCount(ScriptPromiseResolver<IDLLong>* resolver,
   } else {
     resolver->RejectWithDOMException(DOMExceptionCode::kInvalidStateError,
                                      "The page gave no count.");
+  }
+}
+
+void SettleClick(ScriptPromiseResolver<IDLBoolean>* resolver,
+                 std::optional<bool> clicked) {
+  if (clicked.has_value()) {
+    resolver->Resolve(*clicked);
+  } else {
+    resolver->RejectWithDOMException(DOMExceptionCode::kInvalidStateError,
+                                     "The page gave no answer.");
   }
 }
 
@@ -747,6 +852,28 @@ ScriptPromise<IDLLong> HTMLWebViewElement::countMatches(
   return promise;
 }
 
+// The selector is parsed here first, as countMatches() parses it.
+ScriptPromise<IDLBoolean> HTMLWebViewElement::clickMatch(
+    ScriptState* script_state,
+    const String& selector,
+    ExceptionState& exception_state) {
+  GetDocument().QuerySelector(AtomicString(selector), exception_state);
+  if (exception_state.HadException()) {
+    return EmptyPromise();
+  }
+  if (!guest_.is_bound()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "This <webview> has no page yet.");
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  guest_->ClickMatch(selector,
+                     BindOnce(&SettleClick, WrapPersistent(resolver)));
+  return promise;
+}
+
 // State updates store the new value before dispatching, so handlers read it.
 void HTMLWebViewElement::HistoryChanged(bool can_go_back, bool can_go_forward) {
   can_go_back_ = can_go_back;
@@ -797,6 +924,40 @@ void HTMLWebViewElement::UnhandledKeyDown(const String& key,
   init->setRepeat(repeat);
   DispatchEvent(*MakeGarbageCollected<KeyboardEvent>(
       AtomicString(kGuestKeydownEvent), init));
+}
+
+void HTMLWebViewElement::UnhandledModifierUp(const String& key,
+                                             const String& code) {
+  KeyboardEventInit* init = KeyboardEventInit::Create();
+  init->setBubbles(true);
+  init->setKey(key);
+  init->setCode(code);
+  DispatchEvent(*MakeGarbageCollected<KeyboardEvent>(
+      AtomicString(kGuestKeyupEvent), init));
+}
+
+void HTMLWebViewElement::Replaced() {
+  // The old page's asks go with it, as when it withdraws them.
+  PermissionRequestWithdrawn();
+  DeviceRequestWithdrawn();
+  DialogWithdrawn();
+  SignInWithdrawn();
+  PromptWithdrawn();
+  IdentityWithdrawn();
+  PickerWithdrawn();
+  if (external_app_) {
+    external_app_->DismissIfUnanswered();
+  }
+  host_.reset();
+  guest_.reset();
+  client_receiver_.reset();
+  // The old page is attached to the placeholder frame, and stays there until
+  // the frame goes, so the new page needs a new one. Removing the frame
+  // detaches the old page, which the browser destroys. Inserting this element
+  // makes a placeholder and asks for the window the same way, and the window
+  // id now names the new page.
+  DisconnectContentFrame();
+  DidNotifySubtreeInsertionsToDocument();
 }
 
 void HTMLWebViewElement::ZoomChanged(double factor) {
@@ -916,6 +1077,10 @@ void HTMLWebViewElement::PageFailureChanged(
   }
 
   DispatchEvent(*Event::CreateBubble(AtomicString(kPageFailureChangeEvent)));
+}
+
+void HTMLWebViewElement::KeyDelivered() {
+  DispatchEvent(*Event::CreateBubble(AtomicString(kKeyDeliveredEvent)));
 }
 
 void HTMLWebViewElement::ZoomRequested(bool zoom_in) {
@@ -1162,6 +1327,39 @@ void HTMLWebViewElement::PromptWithdrawn() {
 void HTMLWebViewElement::PromptAnswered(DomicilePromptEvent& event) {
   if (prompt_ == &event) {
     prompt_ = nullptr;
+  }
+}
+
+// Held in `identity_` until answered. The next step replaces the one shown,
+// which is answered as unanswered and withdrawn from the shell first.
+void HTMLWebViewElement::IdentityRequested(
+    domicile::mojom::blink::WebViewIdentityRequestPtr request,
+    IdentityRequestedCallback callback) {
+  if (identity_) {
+    identity_->NoneIfUnanswered();
+    DispatchEvent(*Event::CreateBubble(AtomicString(kIdentityWithdrawnEvent)));
+  }
+  auto* event = MakeGarbageCollected<DomicileIdentityEvent>(
+      AtomicString(kIdentityEvent), std::move(request), std::move(callback),
+      *this);
+  identity_ = event;
+  DispatchEvent(*event);
+  if (!event->defaultPrevented()) {
+    event->NoneIfUnanswered();
+  }
+}
+
+// Only for a step still held: one the shell answered is already gone.
+void HTMLWebViewElement::IdentityWithdrawn() {
+  if (identity_) {
+    identity_->NoneIfUnanswered();
+    DispatchEvent(*Event::CreateBubble(AtomicString(kIdentityWithdrawnEvent)));
+  }
+}
+
+void HTMLWebViewElement::IdentityAnswered(DomicileIdentityEvent& event) {
+  if (identity_ == &event) {
+    identity_ = nullptr;
   }
 }
 

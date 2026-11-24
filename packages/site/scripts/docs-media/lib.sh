@@ -125,6 +125,9 @@ FOOT_EOF
   STARTED+=($!)
   # `domicile <verb>` finds the desktop by this, as an app inside it would.
   export DOMICILE_SOCK="$XDG_RUNTIME_DIR/domicile-ipc.$!.sock"
+  # `domicile open --electron` runs the app's host here, which reaches the
+  # engine by this, as one the desktop started would.
+  export DOMICILE_ELECTRON_SOCK="$XDG_RUNTIME_DIR/domicile-$!/electron.sock"
 
   for _ in $(seq 1 240); do
     # `|| true`: no match yet is not an error, and `set -e` would end the

@@ -21,6 +21,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/task/bind_post_task.h"
 #include "base/values.h"
@@ -38,6 +39,18 @@
 
 namespace domicile {
 namespace {
+
+// Storage for SetBrowserProfilesSink's callback.
+BrowserProfilesSink& BrowserProfilesSlot() {
+  static base::NoDestructor<BrowserProfilesSink> sink;
+  return *sink;
+}
+
+// Storage for SetSpellcheckSink's callback.
+SpellcheckSink& SpellcheckSlot() {
+  static base::NoDestructor<SpellcheckSink> sink;
+  return *sink;
+}
 
 // The read buffer. One message is a line of JSON; this is sized for a batch of
 // them rather than for the largest one, because the remainder is carried across
@@ -187,6 +200,7 @@ ControlChannel::ControlChannel(
     mojo::PendingReceiver<mojom::ControlChannel> receiver,
     KeymapSink keymap_sink,
     PointerWarpSink warp_sink,
+    PointerConfineSink confine_sink,
     ThemeSink theme_sink,
     ExtensionsSink extensions_sink,
     CursorThemeSink cursor_theme_sink,
@@ -195,13 +209,15 @@ ControlChannel::ControlChannel(
     : socket_path_(socket_path),
       keymap_sink_(std::move(keymap_sink)),
       warp_sink_(std::move(warp_sink)),
+      confine_sink_(std::move(confine_sink)),
       theme_sink_(std::move(theme_sink)),
       extensions_sink_(std::move(extensions_sink)),
       cursor_theme_sink_(std::move(cursor_theme_sink)),
       force_dark_sink_(std::move(force_dark_sink)),
+      page_(page),
       receiver_(this, std::move(receiver)),
-      read_buffer_(base::MakeRefCounted<net::IOBufferWithSize>(
-          kReadBufferSize)) {
+      read_buffer_(
+          base::MakeRefCounted<net::IOBufferWithSize>(kReadBufferSize)) {
   // The page going away takes this with it; nothing else owns it.
   receiver_.set_disconnect_handler(
       base::BindOnce([](ControlChannel* self) { delete self; },
@@ -221,6 +237,9 @@ ControlChannel::ControlChannel(
   activity_ = DeskActivity::Get().AddListener(
       base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &ControlChannel::SomebodyIsHere, weak_factory_.GetWeakPtr())));
+  faults_ = DeskFaults::Get().AddListener(
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
+          &ControlChannel::FaultFound, weak_factory_.GetWeakPtr())));
   gestures_ = DeskGestures::Get().AddChannel(
       base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &ControlChannel::DeliverGesture, weak_factory_.GetWeakPtr())),
@@ -253,6 +272,7 @@ ControlChannel::~ControlChannel() {
   DeskPointer::Get().RemoveListener(pointer_);
   DeskModifierTaps::Get().RemoveChannel(taps_);
   DeskGestures::Get().RemoveChannel(gestures_);
+  DeskFaults::Get().RemoveListener(faults_);
   DeskActivity::Get().RemoveListener(activity_);
   ShortcutRegistry::Get().RemoveChannel(channel_);
 }
@@ -550,9 +570,9 @@ mojom::DisplayTransform TransformNamed(const std::string* named) {
       mojom::DisplayTransform::kNormal);
 }
 
-// The wire's adaptive sync state, or `unsupported` for one this browser has
-// no name for, which asks nothing of a shell.
-std::string AdaptiveSyncNamed(const std::string* named) {
+// The wire's adaptive sync or HDR state, or `unsupported` for one this
+// browser has no name for, which asks nothing of a shell.
+std::string SupportNamed(const std::string* named) {
   if (named && (*named == "off" || *named == "on")) {
     return *named;
   }
@@ -630,6 +650,14 @@ void ControlChannel::CopyClipboardEntry(uint32_t entry) {
   SendMessage(std::move(message));
 }
 
+// An id, as CopyClipboardEntry's is: a page can forget a copy but not name one
+// that was never made.
+void ControlChannel::RemoveClipboardEntry(uint32_t entry) {
+  base::DictValue message = Typed("remove_clipboard_entry");
+  message.Set("entry", static_cast<int>(entry));
+  SendMessage(std::move(message));
+}
+
 // An icon and a button, and nothing about what the click does: that is the
 // application's. The wire names are `domicile_protocol::TrayAction`'s.
 void ControlChannel::ActivateTrayItem(const std::string& id,
@@ -696,6 +724,14 @@ void ControlChannel::WarpPointer(double x,
                                  double y,
                                  const std::optional<gfx::RectF>& unless_over) {
   warp_sink_.Run(x, y, unless_over);
+}
+
+// Nothing is sent, for WarpPointer's reason. The answer comes back from the UI
+// thread, and the page's callback must run on this one.
+void ControlChannel::ConfinePointer(const std::vector<gfx::RectF>& boxes,
+                                    ConfinePointerCallback confined) {
+  confine_sink_.Run(boxes,
+                    base::BindPostTaskToCurrentDefault(std::move(confined)));
 }
 
 // Nothing is sent, for WarpPointer's reason: the compositor does not swap
@@ -808,11 +844,12 @@ void ControlChannel::UngrabGesture(mojom::GestureGrabPtr grab) {
 }
 
 void ControlChannel::GrabModifierTap(mojom::TapModifier modifier,
-                                     bool while_inhibited) {
+                                     bool while_inhibited,
+                                     base::TimeDelta longest) {
   // Recorded here, for GrabGesture's reason: aura sees every key in this
   // process, and a modifier alone means nothing to the compositor.
   DeskModifierTaps::Get().Grab(taps_, TapModifierFromMojo(modifier),
-                               while_inhibited);
+                               while_inhibited, longest);
 }
 
 void ControlChannel::UngrabModifierTap(mojom::TapModifier modifier) {
@@ -847,10 +884,14 @@ void ControlChannel::PointerMotion(const std::string& app_id,
 
 void ControlChannel::PointerRelative(const std::string& app_id,
                                      double dx,
-                                     double dy) {
+                                     double dy,
+                                     double dx_unaccel,
+                                     double dy_unaccel) {
   base::DictValue message = ForApp("pointer_relative", app_id);
   message.Set("dx", dx);
   message.Set("dy", dy);
+  message.Set("dx_unaccel", dx_unaccel);
+  message.Set("dy_unaccel", dy_unaccel);
   SendMessage(std::move(message));
 }
 
@@ -1041,9 +1082,10 @@ void ControlChannel::DeliverGesture(const ui::NativeGesture& gesture) {
   }
 }
 
-void ControlChannel::DeliverModifierTap(TapModifier modifier) {
+void ControlChannel::DeliverModifierTap(TapModifier modifier,
+                                        base::TimeDelta held) {
   if (client_) {
-    client_->ModifierTapped(TapModifierToMojo(modifier));
+    client_->ModifierTapped(TapModifierToMojo(modifier), held);
   }
 }
 
@@ -1096,6 +1138,12 @@ void ControlChannel::SomebodyIsHere(const std::string& input) {
     message.Set("input", input);
     SendMessage(std::move(message));
   }
+}
+
+void ControlChannel::FaultFound(const std::string& what) {
+  base::DictValue message = Typed("engine_fault");
+  message.Set("what", what);
+  SendMessage(std::move(message));
 }
 
 void ControlChannel::DeskPointerMoved(const DeskPointerAt& at) {
@@ -1248,6 +1296,13 @@ void ControlChannel::DispatchLine(const std::string& line,
         settings_value == nullptr
             ? std::nullopt
             : ParseExtensionSettings(*settings_value);
+    // `private` is a private browser profile's switch, not the config's
+    // (ExtensionsFor), so a compositor that sends it is out of date.
+    if (settings && std::ranges::any_of(*settings, [](const auto& entry) {
+          return entry.second.in_private.has_value();
+        })) {
+      settings.reset();
+    }
     if (web_store && unpacked && settings) {
       extensions_sink_.Run(ExtensionList{.web_store = std::move(*web_store),
                                          .unpacked = std::move(*unpacked),
@@ -1255,8 +1310,34 @@ void ControlChannel::DispatchLine(const std::string& line,
     } else {
       LOG(ERROR) << "domicile: the compositor sent an `extensions` message "
                     "whose `web_store` or `unpacked` is not a list of strings, "
-                    "or whose `settings` are not extensions' settings. The "
-                    "profile keeps the extensions it had.";
+                    "or whose `settings` are not extensions' settings (a "
+                    "`private` one is a private browser profile's switch "
+                    "now). The profile keeps the extensions it had.";
+    }
+    return;
+  }
+
+  // For this process too, like `extensions`: the desk's browser profiles,
+  // which the profile this page is in makes into Chrome profiles. See
+  // chrome/browser/domicile/domicile_browser_profiles.h. Logged when
+  // malformed, for `extensions`' reason: dropped quietly, every page would
+  // open in the profiles it had and nothing would say why.
+  if (*type == "browser_profiles") {
+    std::optional<BrowserProfiles> profiles = ParseBrowserProfiles(message);
+    if (!profiles) {
+      LOG(ERROR) << "domicile: the compositor sent a `browser_profiles` "
+                    "message that does not describe browser profiles, or "
+                    "names a default, a private default or a site's profile "
+                    "it does not list. Pages keep the profiles they had.";
+    } else if (BrowserProfilesSlot().is_null()) {
+      // //chrome sets the sink before the shell can bind a channel, so this
+      // is an engine built without it, and every page would open in the
+      // shell's profile with nothing saying why.
+      LOG(ERROR) << "domicile: the compositor sent `browser_profiles` and "
+                    "this engine has nowhere to put them. Every page opens in "
+                    "the default profile.";
+    } else {
+      BrowserProfilesSlot().Run(page_, *profiles);
     }
     return;
   }
@@ -1271,6 +1352,30 @@ void ControlChannel::DispatchLine(const std::string& line,
       LOG(ERROR) << "domicile: the compositor sent a `force_dark` message "
                     "whose `sites` is not a list of strings. Pages keep the "
                     "sites they had.";
+    }
+    return;
+  }
+
+  // For this process too, like `force_dark`: how the browser's profiles check
+  // spelling. See chrome/browser/domicile/domicile_spellcheck.h.
+  if (*type == "spellcheck") {
+    const std::optional<bool> enabled = message.FindBool("enabled");
+    std::optional<std::vector<std::string>> languages =
+        Strings(message, "languages");
+    if (!enabled || !languages) {
+      LOG(ERROR) << "domicile: the compositor sent a `spellcheck` message "
+                    "whose `enabled` is not true or false, or whose "
+                    "`languages` is not a list of strings. Spelling is "
+                    "checked as it was.";
+    } else if (SpellcheckSlot().is_null()) {
+      // //chrome sets the sink before the shell can bind a channel, as
+      // `browser_profiles`'.
+      LOG(ERROR) << "domicile: the compositor sent `spellcheck` and this "
+                    "engine has nowhere to put it. Spelling is checked as it "
+                    "was.";
+    } else {
+      SpellcheckSlot().Run(SpellcheckSettings{
+          .enabled = *enabled, .languages = std::move(*languages)});
     }
     return;
   }
@@ -1528,7 +1633,28 @@ void ControlChannel::DispatchLine(const std::string& line,
     } else if (named && !named->is_none()) {
       return;
     }
-    client_->AppPointerConstraint(*app_id, constraint);
+    // `null` for the whole window. A box that is not one is a compositor bug,
+    // so the message is dropped rather than read as some other region.
+    std::optional<std::vector<gfx::RectF>> region;
+    if (const base::ListValue* boxes = message.FindList("region")) {
+      region.emplace();
+      for (const base::Value& box : *boxes) {
+        const base::DictValue* sides = box.GetIfDict();
+        const std::optional<int> x = sides ? sides->FindInt("x") : std::nullopt;
+        const std::optional<int> y = sides ? sides->FindInt("y") : std::nullopt;
+        const std::optional<int> width =
+            sides ? sides->FindInt("width") : std::nullopt;
+        const std::optional<int> height =
+            sides ? sides->FindInt("height") : std::nullopt;
+        if (!x || !y || !width || !height || *width < 0 || *height < 0) {
+          LOG(ERROR) << "domicile: the compositor sent a pointer region box "
+                        "that is not one; dropped.";
+          return;
+        }
+        region->emplace_back(*x, *y, *width, *height);
+      }
+    }
+    client_->AppPointerConstraint(*app_id, constraint, std::move(region));
     return;
   }
 
@@ -1588,6 +1714,12 @@ void ControlChannel::DispatchLine(const std::string& line,
       const std::optional<double> refresh = display->FindDouble("refresh_mhz");
       // Optional too: a host that predates it has no adaptive sync.
       const std::string* adaptive_sync = display->FindString("adaptive_sync");
+      // As is HDR, and a luminance it leaves out is unreported.
+      const std::string* hdr = display->FindString("hdr");
+      const auto luminance = [display](std::string_view key) {
+        const std::optional<double> nits = display->FindDouble(key);
+        return nits && *nits > 0 ? static_cast<uint32_t>(*nits) : 0u;
+      };
       displays.push_back(mojom::DisplayInfo::New(
           *name, static_cast<int32_t>(Number((*position)[0])),
           static_cast<int32_t>(Number((*position)[1])),
@@ -1597,7 +1729,9 @@ void ControlChannel::DispatchLine(const std::string& line,
           moded ? static_cast<uint32_t>(Number((*mode)[0])) : 0u,
           moded ? static_cast<uint32_t>(Number((*mode)[1])) : 0u,
           refresh && *refresh > 0 ? static_cast<uint32_t>(*refresh) : 0u,
-          AdaptiveSyncNamed(adaptive_sync), TransformNamed(transform)));
+          SupportNamed(adaptive_sync), SupportNamed(hdr),
+          luminance("peak_luminance"), luminance("sdr_white"),
+          TransformNamed(transform)));
     }
     // Sent even when every entry was malformed, because an empty desktop is an
     // answer: a page told nothing and a page told there are no screens are
@@ -1739,14 +1873,15 @@ void ControlChannel::DispatchLine(const std::string& line,
       std::optional<int> id = entry->FindInt("id");
       std::optional<bool> image = entry->FindBool("image");
       const std::string* preview = entry->FindString("preview");
-      if (!id || !image || !preview) {
+      std::optional<bool> current = entry->FindBool("current");
+      if (!id || !image || !preview || !current) {
         continue;
       }
       // Absent for a row with no picture, as a tray item's `icon` is.
       const std::string* thumbnail = entry->FindString("thumbnail");
       entries.push_back(mojom::ClipboardEntry::New(
           static_cast<uint32_t>(*id), *image, *preview,
-          thumbnail ? *thumbnail : std::string()));
+          thumbnail ? *thumbnail : std::string(), *current));
     }
     // Sent even when it is empty, for the reason `displays` and `files` are: a
     // desktop nothing has been copied on is an answer, and a panel that never
@@ -1929,9 +2064,20 @@ void ControlChannel::DispatchLine(const std::string& line,
   // cost an engine release to remove.
 }
 
+void SetBrowserProfilesSink(BrowserProfilesSink sink) {
+  CHECK(BrowserProfilesSlot().is_null() || sink.is_null());
+  BrowserProfilesSlot() = std::move(sink);
+}
+
+void SetSpellcheckSink(SpellcheckSink sink) {
+  CHECK(SpellcheckSlot().is_null() || sink.is_null());
+  SpellcheckSlot() = std::move(sink);
+}
+
 void BindControlChannel(mojo::PendingReceiver<mojom::ControlChannel> receiver,
                         KeymapSink keymap_sink,
                         PointerWarpSink warp_sink,
+                        PointerConfineSink confine_sink,
                         ThemeSink theme_sink,
                         ExtensionsSink extensions_sink,
                         CursorThemeSink cursor_theme_sink,
@@ -1952,9 +2098,10 @@ void BindControlChannel(mojo::PendingReceiver<mojom::ControlChannel> receiver,
   // Owns itself: it lives until the page drops the pipe or the compositor is
   // declared unreachable.
   new ControlChannel(socket_path, std::move(receiver), std::move(keymap_sink),
-                     std::move(warp_sink), std::move(theme_sink),
-                     std::move(extensions_sink), std::move(cursor_theme_sink),
-                     std::move(force_dark_sink), page);
+                     std::move(warp_sink), std::move(confine_sink),
+                     std::move(theme_sink), std::move(extensions_sink),
+                     std::move(cursor_theme_sink), std::move(force_dark_sink),
+                     page);
 }
 
 }  // namespace domicile

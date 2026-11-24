@@ -118,10 +118,8 @@ jobs:
     needs: [release-check, reuse]
     # `reuse` is skipped for a dry run or a prerelease, which then build.
     if: ${{ !cancelled() && needs.release-check.outputs.commit != '' && needs.reuse.result != 'failure' && needs.reuse.outputs.run == '' }}
-    # The called workflow's `publish` job asks for this, and a called workflow
-    # gets no more than its caller grants, or the run fails to start.
     permissions:
-      contents: write
+      contents: read
     uses: ./.github/workflows/distro-packages.yml
     with:
       ref: ${{ needs.release-check.outputs.commit }}

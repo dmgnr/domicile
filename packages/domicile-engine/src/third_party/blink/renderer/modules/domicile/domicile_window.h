@@ -6,10 +6,14 @@
 
 #include <optional>
 
+#include "third_party/blink/renderer/bindings/core/v8/frozen_array.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_domicile_cursor_shape.h"
+#include "third_party/blink/renderer/core/geometry/dom_rect_read_only.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -61,6 +65,9 @@ struct DomicileWindowState {
   bool grab = false;
   // "lock", "confine" or null. See domicile_window.idl.
   String pointer_constraint;
+  // The boxes of the window the constraint holds to, in its surface's
+  // coordinates; null for all of it.
+  std::optional<Vector<gfx::RectF>> pointer_region;
 };
 
 class MODULES_EXPORT DomicileWindow final : public ScriptWrappable {
@@ -104,11 +111,17 @@ class MODULES_EXPORT DomicileWindow final : public ScriptWrappable {
   std::optional<double> y() const { return state_.y; }
   bool grab() const { return state_.grab; }
   const String& pointerConstraint() const { return state_.pointer_constraint; }
+  const FrozenArray<DOMRectReadOnly>* pointerRegion() const {
+    return pointer_region_.Get();
+  }
 
   void Trace(Visitor*) const override;
 
  private:
   const DomicileWindowState state_;
+  // `state_.pointer_region` as the page reads it, made once so that each read
+  // is the same array.
+  const Member<FrozenArray<DOMRectReadOnly>> pointer_region_;
 };
 
 }  // namespace blink

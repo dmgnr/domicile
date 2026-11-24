@@ -278,6 +278,14 @@ echo "edited" >>"$FAKE/packages/domicile-engine/src/components/domicile/thing.cc
 expect "editing a laid-down file is a different series" ok \
   "$([ "$(stamp identity)" != "$out" ] && echo ok || echo "it did not move")"
 
+# Electron's Node and its patches go in after the apply, and the build reads
+# them like the series.
+mkdir -p "$FAKE/packages/domicile-engine/node/patches/node"
+echo "a node patch" >"$FAKE/packages/domicile-engine/node/patches/node/a.patch"
+expect "changing Electron's Node patches is a different series" ok \
+  "$([ "$(stamp identity)" != "$out" ] && echo ok || echo "it did not move")"
+rm -rf "$FAKE/packages/domicile-engine/node"
+
 if [ "$FAILED" -gt 0 ]; then
   echo "$FAILED failed"
   exit 1

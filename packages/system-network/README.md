@@ -56,7 +56,8 @@ await connectWifi(domicile, device, network, "passphrase");
 - `watchWifi` watches the first Wi-Fi device of NetworkManager, else iwd, by
   `NameHasOwner`. `None` is no device, or neither service. wpa_supplicant is
   not controlled.
-- Requests: `setWifiEnabled`, `scanWifi`, `connectWifi`, `disconnectWifi`.
+- Requests: `setWifiEnabled`, `scanWifi`, `connectWifi`, `disconnectWifi`,
+  and for a saved network, `setWifiAutoJoin` and `forgetWifi`.
   Each resolves `Ok` once the service accepts it; the watch reports the
   outcome.
 - `connectWifi` uses a network's saved profile when it has one. A new secured
@@ -65,8 +66,14 @@ await connectWifi(domicile, device, network, "passphrase");
   - iwd: `iwctl --passphrase … station <interface> connect <ssid>`, since iwd
     asks an agent for it and a page cannot serve one. `iwctl` must be on the
     compositor's `PATH`.
+- `saved` is every saved network, in range or not: NetworkManager's Wi-Fi
+  profiles (hotspots left out) or iwd's known networks. Each has its
+  security, whether it joins by itself, and when it was last joined.
+- `setWifiAutoJoin` on NetworkManager reads the profile and writes it back
+  with `connection.autoconnect` changed. NetworkManager keeps its secrets.
 - NetworkManager reads re-run on each property change of an object read, an
-  access point coming or going, or a device coming or going. It does not say
+  access point coming or going, a device coming or going, or a profile
+  added, removed or updated. It does not say
   when a scan runs, so `scanning` is always `false`.
 - iwd does not report addresses, so `connection.ip` is `undefined`.
 

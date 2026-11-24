@@ -98,10 +98,13 @@ another mode ([DISPLAYS.md](../DISPLAYS.md#which-connectors-light),
 
 Two guards:
 
-- **No repeat modesets.** Each `Configure` makes the kernel emit a udev CHANGE,
-  which triggers another read and another modeset. `ModesetWouldChangeAnything`
-  skips the modeset when the hardware reports what it last confirmed. A real
-  hotplug changes the report.
+- **Only what changed.** `ModesetParamsThatChange` asks for the displays whose
+  request differs from the last confirmed modeset, or that read dark. A
+  display asked for again gets a new modeset buffer, which is black on a driver
+  that tiles its framebuffers (i915), so sleeping one monitor must not ask for
+  the others. It also stops a loop: each `Configure` makes the kernel emit a
+  udev CHANGE, which triggers another read. A reading that matches asks for
+  nothing. A real hotplug changes the report.
 - **Ignore answers from inside the browser.** `DrmModeset::Start()` runs before
   the GPU process exists, so `DrmDisplayHostManager` answers from its dummy
   snapshots, synchronously. An answer that arrives before `Configure` returns
@@ -178,6 +181,23 @@ with, stay in the browser.
 
 The primary selection works too (`zwp_primary_selection_device_manager_v1`).
 A nested run still uses the host's clipboard; [KNOWN-GAPS.md](/docs/KNOWN-GAPS.md#clipboard) tracks it.
+
+## Drag and drop
+
+The desk runs its own drags, as ash does. Ozone DRM has no `WmDragHandler`,
+and upstream answers a drag without one with `kNone` before it starts.
+
+- `DeskDragHandler` (patch `0247`,
+  `ui/views/widget/desktop_aura/domicile/desk_drag_handler.h`) is the handler
+  of any desk window whose platform has none: DRM and headless.
+- While a drag runs, an `aura::Env` pre-target handler takes every pointer,
+  touch and key event. Moves and the release go to the window's drop handler
+  (`DesktopDragDropClientOzone`) through `DeskDrag`.
+- Escape or a touch cancel cancels.
+- The drag image is a layer at the top of the root window.
+- A drop on another monitor finds the desk page with `aura::DeskWindowAt`.
+
+Drags between pages and native windows are a [known gap](/docs/KNOWN-GAPS.md#drag-and-drop).
 
 ## The window has to be the size of the CRTC
 

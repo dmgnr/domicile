@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::cli::MonitorMode;
-use crate::control::{parse_response, to_line, Lent, Request, Response};
+use crate::control::{parse_response, to_line, Admission, Lent, Request, Response, Subscription};
 
 /// How long either end waits for the other.
 ///
@@ -133,58 +133,106 @@ pub fn answer_one(
     serve(stream, patience, answer, None)
 }
 
-/// [`answer_one`], lending the connection of a [`Request::VirtualMonitor`]
-/// to `lend`, which holds it as long as the client keeps it open.
-///
-/// `lend` is [`crate::monitor_lending::lend`] in a desktop.
+/// [`answer_one`], lending the connection of a [`Request::VirtualMonitor`],
+/// a [`Request::Subscribe`] or a [`Request::Agent`] to `lenders`, which hold
+/// it as long as the client keeps it open.
 pub fn serve_one(
     stream: UnixStream,
     patience: Duration,
     answer: &dyn Fn(&str) -> String,
-    lend: &dyn Fn(Lent),
+    lenders: Lenders,
 ) -> std::io::Result<()> {
-    serve(stream, patience, answer, Some(lend))
+    serve(stream, patience, answer, Some(lenders))
 }
 
-/// [`serve_one`]; with no `lend`, `answer` refuses a monitor.
+/// What [`serve_one`] lends held connections to. In a desktop, `monitor` is
+/// [`crate::monitor_lending::lend`], `subscribe`
+/// [`crate::subscription::follow`] and `agent`
+/// [`crate::agent_lending::admit`].
+#[derive(Clone, Copy)]
+pub struct Lenders<'a> {
+    pub monitor: &'a dyn Fn(Lent),
+    pub subscribe: &'a dyn Fn(Subscription),
+    pub agent: &'a dyn Fn(Admission),
+}
+
+/// [`serve_one`]; with no lenders, `answer` refuses a monitor, a
+/// subscription and an agent.
 fn serve(
     stream: UnixStream,
     patience: Duration,
     answer: &dyn Fn(&str) -> String,
-    lend: Option<&dyn Fn(Lent)>,
+    lenders: Option<Lenders>,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(patience))?;
     stream.set_write_timeout(Some(patience))?;
     let mut asking = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     asking.read_line(&mut line)?;
-    if let (
-        Some(lend),
+    crate::launcher_log::debug(&format!("a command: {}", command_type(&line)));
+    let Some(lenders) = lenders else {
+        let mut answering = stream;
+        return answering.write_all(answer(&line).as_bytes());
+    };
+    match serde_json::from_str(line.trim()) {
+        Ok(Request::Subscribe { topics }) => {
+            // The client listens for as long as it likes.
+            stream.set_read_timeout(None)?;
+            stream.set_write_timeout(None)?;
+            (lenders.subscribe)(Subscription {
+                topics,
+                client: stream,
+            });
+            Ok(())
+        }
         Ok(Request::VirtualMonitor {
             name,
             width,
             height,
             refresh_mhz,
             scale,
-        }),
-    ) = (lend, serde_json::from_str(line.trim()))
-    {
-        // The client resizes it whenever it likes.
-        stream.set_read_timeout(None)?;
-        lend(Lent {
-            name,
-            mode: MonitorMode {
-                size: (width, height),
-                refresh_mhz,
-                scale,
-            },
-            lines: asking,
-            client: stream,
-        });
-        return Ok(());
+        }) => {
+            // The client resizes it whenever it likes.
+            stream.set_read_timeout(None)?;
+            (lenders.monitor)(Lent {
+                name,
+                mode: MonitorMode {
+                    size: (width, height),
+                    refresh_mhz,
+                    scale,
+                },
+                lines: asking,
+                client: stream,
+            });
+            Ok(())
+        }
+        Ok(Request::Agent { agent }) => {
+            // The client says what the agent did whenever it likes.
+            stream.set_read_timeout(None)?;
+            (lenders.agent)(Admission {
+                agent,
+                lines: asking,
+                client: stream,
+            });
+            Ok(())
+        }
+        _ => {
+            let mut answering = stream;
+            answering.write_all(answer(&line).as_bytes())
+        }
     }
-    let mut answering = stream;
-    answering.write_all(answer(&line).as_bytes())
+}
+
+/// The type of the request on `line`, without what it carries: an `exec`'s
+/// command line or a file path stays out of the log.
+fn command_type(line: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(line.trim()) {
+        Ok(serde_json::Value::Object(request)) => match request.get("type") {
+            Some(serde_json::Value::String(kind)) => kind.clone(),
+            _ => "one with no type".to_string(),
+        },
+        _ => "one that is not JSON".to_string(),
+    }
 }
 
 /// Why a request to a desktop failed.
@@ -235,15 +283,34 @@ pub fn hold(
     exchanged(path, request, patience, false)
 }
 
-/// Sends `request` and reads the response. `finished` half-closes the
-/// connection after the request, so the desktop sees its end.
-fn exchanged(
+/// Sends `request`, as for a [`Request::Subscribe`], and hands `heard` each
+/// response until it returns false or the desktop hangs up. Waits as long as
+/// the desktop says nothing.
+pub fn listen(
     path: &Path,
     request: &Request,
-    patience: Option<Duration>,
-    finished: bool,
-) -> Result<(Response, UnixStream), AskError> {
-    let mut stream = UnixStream::connect(path).map_err(|why| match why.kind() {
+    mut heard: impl FnMut(Response) -> bool,
+) -> Result<(), AskError> {
+    let mut stream = connected(path)?;
+    stream
+        .write_all(to_line(request).as_bytes())
+        .map_err(|why| unreachable_desktop(path, &why))?;
+    for line in BufReader::new(&stream).lines() {
+        let line = line.map_err(|why| unreachable_desktop(path, &why))?;
+        let response = parse_response(line.trim()).map_err(|_| AskError::Unreadable {
+            path: path.display().to_string(),
+            said: line.clone(),
+        })?;
+        if !heard(response) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// A connection to the desktop at `path`.
+fn connected(path: &Path) -> Result<UnixStream, AskError> {
+    UnixStream::connect(path).map_err(|why| match why.kind() {
         // A missing socket, or a stale one left by a dead desktop.
         std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
             AskError::NoDesktop {
@@ -254,7 +321,18 @@ fn exchanged(
             kind,
             path: path.display().to_string(),
         },
-    })?;
+    })
+}
+
+/// Sends `request` and reads the response. `finished` half-closes the
+/// connection after the request, so the desktop sees its end.
+fn exchanged(
+    path: &Path,
+    request: &Request,
+    patience: Option<Duration>,
+    finished: bool,
+) -> Result<(Response, UnixStream), AskError> {
+    let mut stream = connected(path)?;
     stream
         .set_read_timeout(patience)
         .map_err(|why| unreachable_desktop(path, &why))?;
@@ -340,5 +418,23 @@ fn unreachable_desktop(path: &Path, why: &std::io::Error) -> AskError {
             kind,
             path: path.display().to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_command_is_logged_by_its_type_alone() {
+        assert_eq!(
+            command_type(r#"{"type":"exec","command":"rm -rf ~/secret"}"#),
+            "exec"
+        );
+    }
+
+    #[test]
+    fn a_line_that_is_not_a_command_says_so() {
+        assert_eq!(command_type("hello"), "one that is not JSON");
     }
 }

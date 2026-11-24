@@ -38,25 +38,69 @@ The page and the compositor share only a `viz::SurfaceId`.
   requests to it. Messages from the page about a frame are not synchronized
   with that frame's commit.
 - **Control-channel messages reach the page later than frames reach viz.** A
-  bubble's move is a message, so a page shows it a frame or more after the
+  popup's move is a message, so a page shows it a frame or more after the
   content it moved with, unless the page renders synced frames
-  ([Synced frames](#synced-frames)).
+  ([Synced frames](#synced-frames)). A subsurface's move is not a message:
+  its window's frame draws it ([Subsurfaces](#subsurfaces)).
+
+## Subsurfaces
+
+A window's subsurfaces (`wl_subsurface`) are drawn inside the window's own
+frame, as any other compositor draws them. They move, scale, clip and fade
+with their window, whatever CSS the page gives its `<app>`, and the page never
+hears of them. Firefox draws its whole window into one; Chromium draws its
+extension popups and other bubbles as them.
+
+```
+ commit of a window (or of a desync subsurface, which redraws its parent)
+   ├─ domicile_surface_set_children(window, [{sub, x, y, w, h, above}, …])
+   └─ submit(window) ──▶ CompositorFrame: [subs above] [window's texture] [subs below]
+                           each sub a SurfaceDrawQuad of its own sink's newest frame
+```
+
+- **Each subsurface is an engine surface** under an id the compositor gives
+  it (`subsurface-N`), which the host never sees. Its commits submit to it at
+  the newest box, as a popup's do.
+- **The parent embeds it.** `domicile_surface_set_children` lists a surface's
+  subsurfaces, bottom to top, in logical pixels from the top left of its crop.
+  The parent's next frame registers each one as its child sink with the
+  browser (`FrameSinkBroker::EmbedFrameSink`), allocates its `LocalSurfaceId`,
+  and draws it with a `viz::SurfaceDrawQuad`. The engine then reports the
+  subsurface's `configure`, after which it takes frames.
+- **A change without a parent buffer** (a desync subsurface resized, hidden or
+  destroyed) sends the parent's last frame again (`domicile_surface_redraw`).
+  That frame answers no `frame_done` or `presented`.
+- **Sync subsurfaces** show with their parent's commit: Smithay applies the
+  transaction's commits children first, and the parent's frame embeds them.
+- **Nesting:** a subsurface's own subsurfaces are its children in turn.
+- **Input:** the chrome sends input for the window. The compositor finds the
+  topmost subsurface whose input region holds the point (`subsurfaces.rs`),
+  for the pointer and for a touch's down, as Smithay's
+  `under_from_surface_tree` would. A subsurface that takes no input passes the
+  point down.
+- **Hidden:** Chromium hides a subsurface by destroying its `wl_subsurface`
+  and keeping the surface. The compositor notices at the next commit of it or
+  its parent.
+- **Check:** `guard-scrolling-bubble.sh` scrolls a window under a sync
+  subsurface on `crux` and reads a monitor cast: each frame shows the
+  subsurface at the window's content. Its control moves the subsurface a
+  frame late (`domicile-test-client --late-bubble`) and shows it off.
 
 ## Synced frames
 
-A commit that moves a bubble shows in the same display frame as the window
+A commit that moves a popup shows in the same display frame as the window
 content it moved with. The commit goes to viz under a `LocalSurfaceId` the
 compositor names, and the page embeds that id in the same render as the move.
 
 ```
- one commit transaction (parent + its bubble)
+ one commit transaction (parent + its popup)
    ├─ domicile_surface_sync(parent, n); submit ──▶ viz: parent at (p, 1+n)
-   ├─ domicile_surface_sync(bubble, m); submit ──▶ viz: bubble at (q, 1+m)
+   ├─ domicile_surface_sync(popup, m); submit  ──▶ viz: popup at (q, 1+m)
    │                                               (page still shows n-1, m-1)
-   └─ PopupPlaced { position, frames: {parent: n, bubble: m} } ──▶ page
+   └─ PopupPlaced { position, frames: {parent: n, popup: m} } ──▶ page
                                                                    │
         one render:  <app app-id=parent frame=n>                 ◀─┤
-                     <app app-id=bubble frame=m style="left: …"> ◀─┘
+                     <app app-id=popup frame=m style="left: …">  ◀─┘
 ```
 
 - **Synced frame:** a number per surface, from 1. Frame `n` is the
@@ -75,8 +119,7 @@ compositor names, and the page embeds that id in the same render as the move.
   message that beats its frame to viz.
 - **A commit transaction is the unit.** For a sync subsurface, Smithay calls
   `CompositorHandler::commit` for each surface of the parent's transaction,
-  children first. A parent's commit places its bubbles, and a move is held
-  (`synced_moves.rs`). Each app submit after it in the transaction is synced,
+  children first. A popup's reposition is held (`synced_moves.rs`). Each app submit after it in the transaction is synced,
   and the transaction's last commit broadcasts the move with `frames`.
 - **The compositor names a frame only after submitting it,** so a stuck client
   never holds the page. A dropped submit keeps its frame for the next one, so
@@ -102,11 +145,9 @@ compositor names, and the page embeds that id in the same render as the move.
   client commits the configure it acked, synced with that commit's frame and
   its sync subsurfaces'. The parent's content is not in the popup's
   transaction, so a popup and the window under it can show a frame apart.
-- **Check:** `guard-scrolling-bubble.sh` scrolls a window under a sync bubble
-  on `crux` and reads a monitor cast: each frame shows the bubble at the
-  window's content. Its control places each move a step late and shows the
-  bubble off it. A page that ignores frames is no control: it embeds the
-  frames each move names, so it does not lag either.
+- **Unchecked:** no guard reads a synced popup move off a screen since
+  subsurfaces moved into their windows' frames, which is what
+  `guard-scrolling-bubble.sh` checked.
 
 ## Anchored windows
 
@@ -207,7 +248,7 @@ about once a second, unless a cast shows it.
 - **Suspension reaches the page:** each change sends `app_suspended`, and the
   engine fires `domicile-suspended` or `domicile-resumed` on the `<app>`.
 - **The compositor:** holds the `wl_surface.frame` callbacks of the window,
-  its popups and its bubbles (`held_frames.rs`), and sets `xdg_toplevel`'s
+  its popups and its subsurfaces (`held_frames.rs`), and sets `xdg_toplevel`'s
   `suspended` state. A box with an area clears `suspended` and sends the held
   callbacks.
 - **Not stopped:** held callbacks still go out once a second, and before a
@@ -263,7 +304,7 @@ A client may draw its buffer turned to match a rotated monitor and say so with
 
 ### A sibling submitted before a move
 
-A sibling surface submitted before a bubble's move in the same commit
+A sibling surface submitted before a popup's move in the same commit
 transaction goes up unsynced, so it shows a frame early.
 
 ### `backdrop-filter` over a window
@@ -353,10 +394,15 @@ a memfd of the window's (`memory_frames.rs`) and imports it with
 The submit takes a damage rectangle in box pixels, where empty means the whole
 box. `engine_damage.rs` maps the client's damage onto the box when the engine
 shows the window's previous commit at the same box, from the same crop of a
-buffer of the same size, and nothing turns or scales either commit's buffer. Where the crop
-is stretched to another size, the damage grows a texel each way for the
-engine's filtering. Every other commit damages the whole box, as do popups and
-bubbles, whose box size the compositor does not know.
+buffer of the same size, and nothing turns either commit's buffer. Where the crop
+is stretched to another size, as a `wp_viewport` at a fractional scale does,
+the damage grows a texel each way for the engine's filtering.
+
+- **Buffer damage** (`damage_buffer`, Chromium's) is already in buffer pixels.
+- **Surface damage** is scaled, or mapped through the viewport's source
+  (`client_damage.rs`). Under a destination with no source it is the whole
+  buffer. Every other commit damages the whole box, as do popups and
+subsurfaces, whose box size the compositor does not know.
 
 Unverified on a screen: a wrong rectangle leaves stale pixels, and no check
 reads a lit CRTC ([ENGINE-FORK.md](ENGINE-FORK.md#plan)).

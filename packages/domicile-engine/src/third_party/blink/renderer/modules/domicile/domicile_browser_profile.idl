@@ -1,0 +1,52 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// One of the desk's browser profiles, in DomicileHost.browserProfiles: a set
+// of sign-ins, site data and extensions, as the config's `browser.profiles`
+// names it. A page is in one profile, and its new windows are in it too. See
+// docs/architecture/BROWSER-PROFILES.md in the Domicile repository.
+[
+    Exposed=Window,
+    RuntimeEnabled=DomicileControlChannel
+] interface DomicileBrowserProfile {
+  // Lowercase letters, digits and `-`. What DomicileBrowserWindow.profile
+  // and openBrowserWindow() name it by.
+  readonly attribute DOMString id;
+
+  // The name the user gave it.
+  readonly attribute DOMString name;
+
+  // Its color, `#rrggbb`.
+  readonly attribute DOMString color;
+
+  // Whether it keeps nothing past its last page, as private browsing does.
+  readonly attribute boolean isPrivate;
+
+  // Whether a site no profile lists opens here. Exactly one profile is.
+  readonly attribute boolean isDefault;
+
+  // Whether a private window that names no profile opens here. Exactly one
+  // profile is, and it is private.
+  readonly attribute boolean isDefaultPrivate;
+
+  // The sites that open here because the user pinned them
+  // (DomicileHost.pinBrowserSite). Each is a host, `*.host`, or a host and
+  // path, as the config's `browser.sites` keys are.
+  readonly attribute FrozenArray<DOMString> pinnedSites;
+
+  // The sites that open here because the config's `browser.sites` names
+  // them. Only the config changes these.
+  readonly attribute FrozenArray<DOMString> configSites;
+
+  // The ids of the extensions in it, each switched on or off there; empty
+  // until it loads. Every profile has every extension the config names.
+  readonly attribute FrozenArray<DOMString> extensions;
+
+  // Those of `extensions` switched on here.
+  readonly attribute FrozenArray<DOMString> enabledExtensions;
+
+  // Those of `extensions` the config switches here, because it names the
+  // profile's extensions. Only the config changes these
+  // (DomicileHost.setBrowserProfileExtensionEnabled refuses them).
+  readonly attribute FrozenArray<DOMString> lockedExtensions;
+};

@@ -113,6 +113,9 @@ engine or Smithay:
   shell's `Cast` bar item. Its RTSP session and format negotiation are pure
   and tested; NetworkManager, Avahi, the portal and GStreamer are reached at
   run time. See [CASTING-TO-TVS.md](../CASTING-TO-TVS.md).
+- `domicile-relay`: a server, not part of a desk, that passes web agents'
+  connections to desks without decrypting them. See
+  [AGENTS.md](../AGENTS.md#the-relay).
 - `domicile-test-chrome`, `domicile-test-client`: a chrome and a Wayland client
   for integration tests.
 

@@ -31,6 +31,7 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/gpu_fence_handle.h"
@@ -107,13 +108,16 @@ class BrokeredFrameSink : public viz::HostFrameSinkClient,
   //
   // `scale` is the page's device pixels per CSS pixel. The producer uses it to
   // convert `size` to the client's logical pixels; each monitor has its own.
+  // `zoom` is the element's CSS `zoom`, passed on to the producer. Frames stay
+  // at `scale`: the client's denser buffer still fills `size`.
   //
   // Ignores a `local_surface_id` older than the current one, since viz closes
   // a sink that submits to an older id.
   void Embed(const viz::FrameSinkId& parent_frame_sink_id,
              const viz::LocalSurfaceId& local_surface_id,
              const gfx::Size& size,
-             double scale);
+             double scale,
+             double zoom);
 
   // Imports a dmabuf as a SharedImage and returns its buffer id, or 0 on
   // failure. Follows components/exo/buffer.cc.
@@ -122,12 +126,20 @@ class BrokeredFrameSink : public viz::HostFrameSinkClient,
   // memory, for a browser that composites in software. The producer leaves
   // the memory alone until the buffer is released.
   //
+  // The SharedImage is in `color_space`, how the client's pixels encode color.
+  //
   // Fills `exported` so a producer holding its own sink can reference the same
   // SharedImage. See docs/architecture/ENGINE-FORK.md#buffer-import.
   uint64_t ImportBuffer(gfx::GpuMemoryBufferHandle handle,
                         const gfx::Size& size,
                         uint32_t fourcc,
+                        const gfx::ColorSpace& color_space,
                         std::optional<gpu::ExportedSharedImage>* exported);
+
+  // The token that passes once the GPU has made `buffer_id`'s SharedImage.
+  // Nullopt for an image in shared memory, which the GPU does not make, or
+  // for no such buffer.
+  std::optional<gpu::SyncToken> GpuCreationToken(uint64_t buffer_id) const;
 
   // Submits a frame showing `buffer_id`. False if there is no such buffer, or
   // no surface to submit to yet.
@@ -141,8 +153,10 @@ class BrokeredFrameSink : public viz::HostFrameSinkClient,
 
   // Drops an imported buffer and its SharedImage, which this holds the only
   // reference to. Viz draws a fallback image over any frame still showing it,
-  // so call this only once viz has returned it. No release is sent for it.
-  void DestroyBuffer(uint64_t buffer_id);
+  // so call this only once viz has returned it. The image goes once
+  // `read_done`, the token viz returned it with, passes: viz's GPU may still
+  // be reading it. No release is sent for it.
+  void DestroyBuffer(uint64_t buffer_id, const gpu::SyncToken& read_done);
 
   // viz::HostFrameSinkClient implementation.
   void OnFirstSurfaceActivation(const viz::SurfaceInfo& surface_info) override;
@@ -173,6 +187,8 @@ class BrokeredFrameSink : public viz::HostFrameSinkClient,
     scoped_refptr<gpu::ClientSharedImage> shared_image;
     viz::TransferableResource resource;
     gfx::Size size;
+    // Made by the GPU from a dmabuf, rather than over shared memory.
+    bool on_gpu = false;
   };
 
   // Turns viz's returned resources into wl_buffer.release, by way of the

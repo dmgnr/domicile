@@ -66,10 +66,10 @@ index 330859d..4200f9a 100644
    void ChildFrameGone(float device_scale_factor);
  
 diff --git a/third_party/blink/renderer/core/frame/remote_frame.cc b/third_party/blink/renderer/core/frame/remote_frame.cc
-index 5fd6b70..bc0c1c6 100644
+index c2fec2d..cd32b0d 100644
 --- a/third_party/blink/renderer/core/frame/remote_frame.cc
 +++ b/third_party/blink/renderer/core/frame/remote_frame.cc
-@@ -46,6 +46,7 @@
+@@ -50,6 +50,7 @@
  #include "third_party/blink/renderer/core/html/domicile/html_web_view_element.h"
  #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
  #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
@@ -77,7 +77,7 @@ index 5fd6b70..bc0c1c6 100644
  #include "third_party/blink/renderer/core/inspector/console_message.h"
  #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
  #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
-@@ -1031,7 +1032,15 @@ bool RemoteFrame::SynchronizeVisualProperties(
+@@ -1075,7 +1076,15 @@ bool RemoteFrame::SynchronizeVisualProperties(
    DCHECK(surface_id.is_valid());
    DCHECK(!remote_process_gone_);
  

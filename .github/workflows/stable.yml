@@ -6,7 +6,7 @@ name: Stable
 # pin lands on main as its own merge, which runs this too.
 #
 # Each commit stable moves to is packaged for other distributions and
-# released (distro-packages.yml).
+# released (distro-packages.yml), and added to the Nix cache (nix-cache.yml).
 on:
   push:
     branches: [main]
@@ -41,3 +41,13 @@ jobs:
     with:
       ref: ${{ needs.promote.outputs.promoted }}
       publish: true
+    # DOMICILE_BUILDS_TOKEN, to publish into cprussin/domicile-builds.
+    secrets: inherit
+
+  nix-cache:
+    needs: promote
+    if: needs.promote.outputs.promoted != ''
+    uses: ./.github/workflows/nix-cache.yml
+    with:
+      ref: ${{ needs.promote.outputs.promoted }}
+    secrets: inherit

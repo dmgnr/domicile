@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests `release-repos.sh`, which brings the published repositories down from
 # R2, adds a release with `packages/distro/repo.sh` and puts them back: the packages
-# before the indexes that name them, and deletions last.
+# before the indexes that name them, and deletions last. The Nix cache under
+# `nix/` is neither downloaded nor deleted.
 #
 # Stand-ins for `aws` and `packages/distro/repo.sh` record what they are asked to do.
 set -u
@@ -50,10 +51,10 @@ CREDENTIALS="id=id region=auto"
 echo "== a release =="
 if out="$(run)"; then
   expect "downloads, adds, uploads the packages, then the rest" \
-    "aws s3 sync s3://bucket $WORK/repo $ENDPOINT --only-show-errors $CREDENTIALS
+    "aws s3 sync s3://bucket $WORK/repo $ENDPOINT --exclude nix/* --only-show-errors $CREDENTIALS
 repo.sh $WORK/packages $WORK/repo key=real
-aws s3 sync $WORK/repo s3://bucket $ENDPOINT --only-show-errors --exclude * --include *.deb --include *.rpm --include *.pkg.tar.zst --include *.pkg.tar.zst.sig $CREDENTIALS
-aws s3 sync $WORK/repo s3://bucket $ENDPOINT --only-show-errors --delete $CREDENTIALS" \
+aws s3 sync $WORK/repo s3://bucket $ENDPOINT --exclude nix/* --only-show-errors --exclude * --include *.deb --include *.rpm --include *.pkg.tar.zst --include *.pkg.tar.zst.sig $CREDENTIALS
+aws s3 sync $WORK/repo s3://bucket $ENDPOINT --exclude nix/* --only-show-errors --delete $CREDENTIALS" \
     "$(cat "$WORK/log")"
 else
   printf '  FAIL  the release succeeds\n    %s\n' "$out"
@@ -63,9 +64,9 @@ fi
 echo "== a dry run =="
 if out="$(run DOMICILE_RELEASE_DRY_RUN=1)"; then
   expect "downloads and adds, and only shows the upload" \
-    "aws s3 sync s3://bucket $WORK/repo $ENDPOINT --only-show-errors $CREDENTIALS
+    "aws s3 sync s3://bucket $WORK/repo $ENDPOINT --exclude nix/* --only-show-errors $CREDENTIALS
 repo.sh $WORK/packages $WORK/repo key=real
-aws s3 sync $WORK/repo s3://bucket $ENDPOINT --delete --dryrun $CREDENTIALS" \
+aws s3 sync $WORK/repo s3://bucket $ENDPOINT --exclude nix/* --delete --dryrun $CREDENTIALS" \
     "$(cat "$WORK/log")"
 else
   printf '  FAIL  the dry run succeeds\n    %s\n' "$out"
@@ -83,7 +84,7 @@ fi
 echo "== a release with neither account nor bucket set =="
 if out="$(run R2_ACCOUNT_ID= DOMICILE_R2_BUCKET=)"; then
   expect "uses Domicile's account and bucket" \
-    "aws s3 sync s3://domicile-packages $WORK/repo --endpoint-url https://9e3478be0713138076f5a66696ba7817.r2.cloudflarestorage.com --only-show-errors $CREDENTIALS" \
+    "aws s3 sync s3://domicile-packages $WORK/repo --endpoint-url https://9e3478be0713138076f5a66696ba7817.r2.cloudflarestorage.com --exclude nix/* --only-show-errors $CREDENTIALS" \
     "$(head -1 "$WORK/log")"
 else
   printf '  FAIL  the release succeeds\n    %s\n' "$out"

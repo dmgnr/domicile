@@ -24,6 +24,7 @@ pub fn scoped(program: &str, args: &[String], random: u64) -> Vec<String> {
         "--slice=app.slice",
         "--collect",
         "--quiet",
+        "--property=PartOf=graphical-session.target",
     ]
     .into_iter()
     .map(str::to_string)
@@ -87,7 +88,8 @@ mod tests {
     fn a_client_runs_under_systemd_run_in_its_own_scope_in_the_app_slice() {
         // `--scope` makes systemd-run exec the client itself once the scope
         // exists, so the pid the compositor logs is the client's and nothing
-        // the client starts escapes the scope.
+        // the client starts escapes the scope. `PartOf=` stops it when the
+        // desk's session ends, daemons it left behind included.
         assert_eq!(
             scoped("kitty", &words(&["--single-instance"]), 0xabc),
             words(&[
@@ -97,6 +99,7 @@ mod tests {
                 "--slice=app.slice",
                 "--collect",
                 "--quiet",
+                "--property=PartOf=graphical-session.target",
                 "--unit=app-domicile-kitty-0000000000000abc.scope",
                 "--",
                 "kitty",

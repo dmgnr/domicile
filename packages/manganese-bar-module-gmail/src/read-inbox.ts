@@ -2,7 +2,12 @@ import { Result } from "@cprussin/option-result";
 
 import type { GoogleClient } from "./consent";
 import type { Counts, Mail, MailNews, Unread } from "./gmail-api";
-import { inboxCounts, mailHeaders, unreadMail } from "./gmail-api";
+import {
+  inboxCounts,
+  mailHeaders,
+  sendAsAddresses,
+  unreadMail,
+} from "./gmail-api";
 import type { Fetch, TokenRefusal } from "./google-token";
 import { refreshAccess, TokenRefusalKind } from "./google-token";
 import { Inbox } from "./inbox";
@@ -11,7 +16,11 @@ import { forgetToken, storedToken } from "./stored-token";
 /** How many of the newest unread conversations a reading names. */
 const LATEST = 8;
 
-type Held = { token: string; expiresAt: number };
+/**
+ * An access token, and the addresses the account sends from, read once per
+ * token: they change only in Gmail's settings.
+ */
+type Held = { token: string; expiresAt: number; addresses: readonly string[] };
 
 /**
  * Reads the account's inbox through the Gmail API, each call one read.
@@ -20,6 +29,8 @@ type Held = { token: string; expiresAt: number };
  *   (which is then forgotten), it is signed out.
  * - The refresh token gets an access token, kept until it expires or Gmail
  *   refuses it.
+ * - Each read names the addresses the account sends from, asked for once
+ *   per access token.
  * - Each read names the newest message of each of the {@link LATEST} newest
  *   unread conversations. A message's headers are asked for once.
  * - Each read passes `onMail` the unread messages that arrived since the
@@ -27,8 +38,8 @@ type Held = { token: string; expiresAt: number };
  *   first read after signing in passes none, so mail already there is not
  *   news.
  *
- * A read rejects when Google gives no access token, or Gmail no counts or
- * messages.
+ * A read rejects when Google gives no access token, or Gmail no counts,
+ * messages or addresses.
  */
 export const inboxReader = (
   domicile: Fetch,
@@ -61,7 +72,12 @@ export const inboxReader = (
         if (mail.length > 0 || read.length > 0) {
           await onMail({ arrived: mail, read });
         }
-        return Inbox.Counted(counts.total, counts.unread, latest);
+        return Inbox.Counted(
+          counts.total,
+          counts.unread,
+          latest,
+          access.addresses,
+        );
       },
     });
 
@@ -88,13 +104,20 @@ export const inboxReader = (
     const askedAt = now();
     return (await refreshAccess(domicile, client, refreshToken)).match({
       Err: (refusal) => Promise.resolve(refused(refusal)),
-      Ok: (access) => {
-        held.current = {
-          expiresAt: askedAt + access.expiresInMs,
-          token: access.token,
-        };
-        return count(held.current);
-      },
+      Ok: async (access) =>
+        (await sendAsAddresses(domicile, access.token)).match({
+          Err: (why): Promise<Inbox> => {
+            throw new Error(why);
+          },
+          Ok: (addresses) => {
+            held.current = {
+              addresses,
+              expiresAt: askedAt + access.expiresInMs,
+              token: access.token,
+            };
+            return count(held.current);
+          },
+        }),
     });
   };
 

@@ -16,7 +16,7 @@ are added here.
  2 files changed, 6 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 5f15719..10f93f7 100644
+index 413fa1c..8879f0f 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -210,6 +210,10 @@ generated_dictionary_sources_in_core = [
@@ -31,7 +31,7 @@ index 5f15719..10f93f7 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_drag_event_init.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_edit_context_init.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index 3c5ba5c..e76aaf2 100644
+index ed1b544..379441b 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -468,6 +468,8 @@ static_idl_files_in_core = [

@@ -16,6 +16,7 @@ const client = () => {
           extensions: extensions.map((said) => ({
             ...said,
             popup: said.popup ?? null,
+            profile: "default",
           })),
         });
       });
@@ -31,6 +32,7 @@ const extension = (id: string): Extension => ({
   id,
   name: id,
   popup: undefined,
+  profile: "default",
   title: id,
 });
 

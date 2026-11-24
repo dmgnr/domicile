@@ -13,17 +13,18 @@
 // 8. A Google search for the query, always, as the fallback.
 //
 // The site and the search each have a private row beside them. `!p` anywhere
-// in the query offers only the web rows, all private.
+// in the query offers only the web rows, all private. `!g` offers only its
+// Google search, so Enter searches without a look at the matches.
 //
 // `typedAddress` decides site vs. search, so this box and a browser window's
 // address bar agree.
 
 import type {
-  Engine,
   TaggedSearch,
   TaggedSite,
 } from "@domicile-desktop/manganese-address/search";
 import {
+  Engine,
   googleUrl,
   TAGS,
   taggedSearch,
@@ -128,13 +129,17 @@ export const choicesFor = (
 ): Choice[] => {
   const words = query.split(/\s+/).filter((word) => word !== "");
   const typed = words.filter((word) => word !== PRIVATE_TAG).join(" ");
+  const isPrivate = words.includes(PRIVATE_TAG);
+  const tagged = taggedChoicesFor(isPrivate ? typed : query, isPrivate);
   return [
     ...tagsFor(query),
-    ...(words.includes(PRIVATE_TAG)
-      ? [...taggedChoicesFor(typed, true), ...webChoicesFor(typed, true)]
+    ...(taggedSearch(query)?.engine === Engine.Google
+      ? tagged
       : [
-          ...taggedChoicesFor(query, false),
-          ...plainChoicesFor(query, found, apps, bookmarks),
+          ...tagged,
+          ...(isPrivate
+            ? webChoicesFor(typed, true)
+            : plainChoicesFor(query, found, apps, bookmarks)),
         ]),
   ];
 };
@@ -149,7 +154,7 @@ export const launchOf = (choice: Launchable): Launch => {
       return Launch.Opened(choice.row.path);
     }
     case ChoiceKind.Bookmark: {
-      return Launch.Browsed(choice.url, false);
+      return Launch.Browsed(choice.url, false, choice.profile);
     }
     case ChoiceKind.Site:
     case ChoiceKind.Search:
@@ -168,12 +173,16 @@ export const openWithOf = (choice: Launchable): Launch =>
 
 /**
  * The tags `query`'s last word starts, by tag, leaving out tags the line
- * already has. None once a space ends the word.
+ * already has. None once a space ends the word, or once the word is a whole
+ * tag after words to search: `kate bush !yt` then searches on Enter, as
+ * `!yt kate bush` does.
  */
 const tagsFor = (query: string): Choice[] => {
   const words = query.split(/\s+/);
   const typing = words.at(-1) ?? "";
-  return typing.startsWith("!")
+  const isDone =
+    isTag(typing) && words.some((word) => word !== "" && !isTag(word));
+  return typing.startsWith("!") && !isDone
     ? [...Object.keys(TAGS), PRIVATE_TAG]
         .filter(
           (tag) => tag.startsWith(typing) && !words.slice(0, -1).includes(tag),
@@ -188,6 +197,9 @@ const tagsFor = (query: string): Choice[] => {
         )
     : [];
 };
+
+/** Whether `word` is a tag, `!p` included. */
+const isTag = (word: string): boolean => word in TAGS || word === PRIVATE_TAG;
 
 /** The page and search `query`'s tag names, if any. */
 const taggedChoicesFor = (query: string, isPrivate: boolean): Choice[] => {

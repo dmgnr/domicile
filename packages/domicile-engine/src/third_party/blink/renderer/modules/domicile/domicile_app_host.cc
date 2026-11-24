@@ -3,11 +3,11 @@
 
 #include "third_party/blink/renderer/modules/domicile/domicile_app_host.h"
 
+#include "base/no_destructor.h"
 #include "third_party/blink/renderer/core/events/message_event.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
-#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 namespace blink {
 
@@ -59,8 +59,8 @@ void DomicileAppHost::System(const String& message) {
 // Not in event_target_names.json5, for domicile_event_names.h's reason: that
 // header is included across Blink.
 const AtomicString& DomicileAppHost::InterfaceName() const {
-  DEFINE_STATIC_LOCAL(const AtomicString, name, ("DomicileAppHost"));
-  return name;
+  static const base::NoDestructor<AtomicString> name("DomicileAppHost");
+  return *name;
 }
 
 ExecutionContext* DomicileAppHost::GetExecutionContext() const {

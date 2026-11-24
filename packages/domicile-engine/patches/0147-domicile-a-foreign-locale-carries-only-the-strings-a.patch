@@ -26,7 +26,7 @@ foreign_allowlist.py is a new file under src/.
  3 files changed, 53 insertions(+)
 
 diff --git a/chrome/chrome_repack_locales.gni b/chrome/chrome_repack_locales.gni
-index 3a1b238..f1e1a9f 100644
+index 4bb9f6a..02e7f3a 100644
 --- a/chrome/chrome_repack_locales.gni
 +++ b/chrome/chrome_repack_locales.gni
 @@ -20,6 +20,9 @@ template("chrome_repack_locales") {
@@ -40,7 +40,7 @@ index 3a1b238..f1e1a9f 100644
      source_patterns = [
        "${root_gen_dir}/chrome/branded_strings_",
 diff --git a/tools/grit/repack.gni b/tools/grit/repack.gni
-index c52e0e5..10e1f6f 100644
+index e662274..7476a7a 100644
 --- a/tools/grit/repack.gni
 +++ b/tools/grit/repack.gni
 @@ -134,6 +134,10 @@ template("repack") {
@@ -102,10 +102,10 @@ index c52e0e5..10e1f6f 100644
            output =
                "$_output_dir/${_output_locale}${_gender_suffix}.lproj/locale.pak"
 diff --git a/ui/base/resource/resource_bundle.cc b/ui/base/resource/resource_bundle.cc
-index 5c5b144..5e4804d 100644
+index 97264ff..1e9974b 100644
 --- a/ui/base/resource/resource_bundle.cc
 +++ b/ui/base/resource/resource_bundle.cc
-@@ -563,6 +563,19 @@ std::string ResourceBundle::LoadLocaleResources(const std::string& pref_locale,
+@@ -598,6 +598,19 @@ std::string ResourceBundle::LoadLocaleResources(const std::string& pref_locale,
    }
  
    locale_resources_data_.push_back(std::move(data_pack));

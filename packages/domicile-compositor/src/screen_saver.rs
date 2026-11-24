@@ -16,7 +16,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use tracing::{debug, warn};
+use tracing::debug;
 use zbus::blocking::connection::Builder;
 use zbus::blocking::MessageIterator;
 use zbus::message::{Header, Type};
@@ -122,7 +122,7 @@ pub fn serve(in_a_window: bool, tell: impl Fn(Vec<Hold>, Change) + Send + Sync +
     });
     thread::spawn(move || {
         if let Err(why) = answer(&shared, in_a_window) {
-            warn!(
+            tracing::error!(
                 %why,
                 "the screen saver is not being served; a browser's video call will \
                  not keep this desktop's screens on"

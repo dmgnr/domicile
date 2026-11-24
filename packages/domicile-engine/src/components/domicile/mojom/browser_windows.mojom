@@ -31,6 +31,34 @@ import "url/mojom/url.mojom";
 //
 // See "A browser window" in the Domicile repository's docs/WRITING-A-SHELL.md.
 
+// One extension in a browser profile, switched on or off there.
+struct BrowserProfileExtension {
+  string id;
+  bool enabled;
+  // The config names the profile's extensions, so only it switches this one.
+  bool locked;
+};
+
+// One of the desk's browser profiles: a set of sign-ins, site data and
+// extensions, as the config's `browser.profiles` names it. See
+// docs/architecture/BROWSER-PROFILES.md in the Domicile repository.
+struct BrowserProfile {
+  // Lowercase letters, digits and `-`.
+  string id;
+  string name;
+  // `#rrggbb`.
+  string color;
+  // Whether it keeps nothing past its last page.
+  bool private_browsing;
+  // The sites that open here because the user pinned them (PinSite), and
+  // because the config's `browser.sites` names them. Keys of `browser.sites`:
+  // a host, `*.host`, or a host and path.
+  array<string> pinned_sites;
+  array<string> config_sites;
+  // Its extensions, each switched on or off in it; empty until it loads.
+  array<BrowserProfileExtension> extensions;
+};
+
 // One browser window, as a shell draws it.
 struct BrowserWindow {
   // The name `<webview window>` and Close use: "1", "2", ... in open order. A
@@ -46,12 +74,16 @@ struct BrowserWindow {
   // one tab this is. 0 for a tab of the desk's own window.
   int32 popup_window;
   // The size the popup window, or the page's window.open(), asked for, in CSS
-  // pixels. 0 on an axis it left unset.
+  // pixels. 0 on an axis it left unset. For a view, the size its app gave it.
   int32 width;
   int32 height;
-  // Whether the page is in the profile's off-the-record profile. A private
+  // Whether the page is in a private profile, off the record. A private
   // window's new windows are private too.
   bool private_browsing;
+  // The id of the browser profile the page is in (see BrowserProfile). Empty
+  // for a page in no browser profile, such as an Electron app's. A window's
+  // new windows are in its profile.
+  string profile;
   // The page's storage partition, as a <webview>'s `partition` attribute
   // names it. Empty for the profile's own. A window's new windows share it.
   string partition;
@@ -67,6 +99,43 @@ struct BrowserWindow {
   // laid out, so a shell keeps a window it hides, such as behind a tab, laid
   // out while it is captured.
   bool captured;
+  // For an Electron app's view (a WebContentsView), the window that holds
+  // it; empty for every window. A view is listed right after its window,
+  // bottom first, and only while a window holds it. Its app asks for it at
+  // `x`, `y`, `width` and `height` in CSS pixels from the top left of the
+  // window's page; the shell lays it out there or wherever it likes. See
+  // "Windows" in docs/architecture/ELECTRON-APPS.md.
+  string parent;
+  int32 x;
+  int32 y;
+  // Whether the app hid the view or window. A shell keeps a hidden view laid
+  // out, as a page draws only while laid out, and out of sight. A hidden
+  // Electron window stays open, its page running, and the shell doesn't show
+  // it until its app shows it again.
+  bool hidden;
+  // An Electron app window's menu bar, for the shell to draw under its tab:
+  // its entries as JSON (see ElectronMenuJson in electron_protocol.h), empty
+  // for none; whether it shows; and whether it hides until Alt, as Electron's
+  // autoHideMenuBar. Click an entry with BrowserWindows.ClickMenu.
+  string menu;
+  bool menu_bar_visible;
+  bool menu_bar_auto_hide;
+  // The message box an Electron app asks over this window, for the shell to
+  // show over its page, as JSON (see ElectronShowMessageBox in
+  // electron_protocol.h); empty for none. One at a time: the next is listed
+  // once this one is answered with BrowserWindows.AnswerMessageBox.
+  string message_box;
+  // The popup menu an Electron app shows over this window (Menu.popup), for
+  // the shell to draw over its page, as JSON: {"menu": its entries, as
+  // `menu`'s, "x", "y"}, where it goes in CSS pixels from the page's top
+  // left; empty for none. Answer it with BrowserWindows.AnswerPopupMenu.
+  string popup_menu;
+  // What an Electron app asks this window to be (win.maximize, minimize,
+  // setFullScreen): the shell decides, and says what it made the window with
+  // BrowserWindows.SetWindowState. Each is false for any other window.
+  bool wants_maximized;
+  bool wants_minimized;
+  bool wants_fullscreen;
 };
 
 // What OpenApp does when an app window with its `app_id` is already open.
@@ -88,10 +157,18 @@ interface BrowserWindows {
 
   // Opens a browser window at `url`; it appears in the next list. A
   // domicile:// address shows about:blank#blocked, as in a <webview>.
-  // `private_browsing` puts its page in the off-the-record profile.
-  // `partition` gives it storage of its own, as a <webview>'s `partition`
-  // attribute does; empty for none. "persist:" with no name is a bad message.
-  Open(url.mojom.Url url, bool private_browsing, string partition);
+  // `profile` puts its page in that browser profile; empty for the one
+  // routing gives `url` (ProfileFor), or with `private_browsing` the default
+  // private one. A profile the
+  // desk does not have opens in the default one, logged: the shell's list may
+  // be a change behind. A private window never opens outside a private
+  // profile. `partition` gives it storage of its own, as a <webview>'s
+  // `partition` attribute does; empty for none. "persist:" with no name is a
+  // bad message.
+  Open(url.mojom.Url url,
+       bool private_browsing,
+       string profile,
+       string partition);
 
   // Opens an app window at `url`, as `domicile open --app` does; it appears in
   // the next list with `app` set and `app_id`. A domicile:// address shows
@@ -100,18 +177,83 @@ interface BrowserWindows {
   // With an `app_id` and a `reuse` other than kNew, the oldest open app window
   // with that id is reused instead, and only a new one is listed. The match is
   // made here, so two quick calls never open two windows.
-  OpenApp(url.mojom.Url url, string app_id, AppReuse reuse);
+  //
+  // A new window is in browser profile `profile`, or for an empty one the
+  // profile `url`'s site opens in, as Open's is.
+  OpenApp(url.mojom.Url url, string app_id, AppReuse reuse, string profile);
 
   // How many elements in window `id`'s main document match the CSS
   // `selector`, as a <webview>'s CountMatches counts them. Null for an
   // unknown id, and when the page gave no number.
   CountMatches(string id, string selector) => (int32? count);
 
+  // Clicks the first shown element in window `id`'s main document that matches
+  // the CSS `selector`, as a <webview>'s ClickMatch clicks it. Whether an
+  // element matched; null for an unknown id, and when the page gave no answer.
+  ClickMatch(string id, string selector) => (bool? clicked);
+
   // Closes window `id` and destroys its page once the page agrees; it leaves
   // the next list. A page with a `beforeunload` handler may ask the shell
   // first, and stays open if the shell answers Cancel. An unknown id is a
   // close that raced another, and does nothing.
   Close(string id);
+
+  // The user clicked entry `command` of window `id`'s menu bar; its app runs
+  // the entry. A window that closed meanwhile, or has no menu, is a click
+  // that raced it and does nothing. A `command` below 1 is a bad message.
+  ClickMenu(string id, int32 command);
+
+  // The user chose entry `command` of the popup menu window `id` shows, or
+  // put it away with nothing chosen for 0; its app hears which and runs the
+  // entry. A window that closed meanwhile, or shows none, is an answer that
+  // raced it and does nothing. A negative `command` is a bad message.
+  AnswerPopupMenu(string id, int32 command);
+
+  // The shell made window `id` maximized, minimized and fullscreen as these
+  // say; its Electron app hears each change. Any other window, or one that
+  // closed meanwhile, does nothing.
+  SetWindowState(string id, bool maximized, bool minimized, bool fullscreen);
+
+  // The user answered the message box window `id` shows with button
+  // `response`, leaving its checkbox checked or not; its app hears the
+  // answer and the window lists its next box, if any. A window that closed
+  // meanwhile, or shows none, is an answer that raced it and does nothing. A
+  // `response` the box has no button for is a bad message.
+  AnswerMessageBox(string id, int32 response, bool checkbox_checked);
+
+  // Moves window `id`'s page to browser profile `profile`: a new page under
+  // the same id, given the old one's back and forward list as addresses and
+  // titles, which reloads its current entry. The window keeps its place in
+  // the list, and its <webview> is told to show the new page
+  // (WebViewGuestClient.Replaced). An unknown window or profile, an app
+  // window, or the profile the page is already in, does nothing, logged: the
+  // shell's lists may be a change behind.
+  Reopen(string id, string profile);
+
+  // The browser profile `url` opens in: the most specific of the config's
+  // sites that matches it, else the default profile. See
+  // components/domicile/browser/browser_profiles.h.
+  ProfileFor(url.mojom.Url url) => (string profile);
+
+  // The site that routes `url`: the key of the config's or the user's sites
+  // that ProfileFor matched, or null when none did and it opens in the
+  // default profile.
+  SiteFor(url.mojom.Url url) => (string? site);
+
+  // Opens `site` in browser profile `profile` from now on, kept across
+  // restarts; the default profile unpins it. The profiles are sent again
+  // with the change. Answers with why not, or an empty string: for a site
+  // that is no key of the config's `browser.sites`, one the config's sites
+  // name, and a profile the desk does not have.
+  PinSite(string site, string profile) => (string error);
+
+  // Switches extension `id` on or off in browser profile `profile`, kept
+  // across restarts; the profiles are sent again with the change. Answers
+  // with why not, or an empty string: for a profile the desk does not have
+  // or has not loaded, an extension it does not have, and one the config
+  // switches (`locked`).
+  SetExtensionEnabled(string profile, string id, bool enabled)
+      => (string error);
 };
 
 // Browser -> renderer.
@@ -119,4 +261,10 @@ interface BrowserWindowsClient {
   // The whole list, oldest first, on every open, close, navigation or title
   // change. Deltas would leave a page wrong for good after one missed message.
   WindowsChanged(array<BrowserWindow> windows);
+
+  // The desk's browser profiles, in the config's order, and which of them are
+  // the defaults: on SetClient and on every change.
+  ProfilesChanged(array<BrowserProfile> profiles,
+                  string default_profile,
+                  string default_private_profile);
 };

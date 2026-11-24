@@ -6,6 +6,7 @@ import { hstack } from "../../styled-system/patterns";
 import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
 import { usePictureUrl } from "../usePictureUrl/usePictureUrl";
+import type { Presence } from "./presence";
 
 type Props = {
   answer: (answer: PortalAnswer) => void;
@@ -14,6 +15,8 @@ type Props = {
   body: AccountBody;
   /** Reads the user's picture. */
   files: Pick<Files, "read">;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -26,6 +29,7 @@ export const AccountDialog = ({
   asker,
   body,
   files,
+  presence,
   screen,
 }: Props) => {
   const picture = usePictureUrl(files, body.image);
@@ -56,7 +60,7 @@ export const AccountDialog = ({
           answer(Answer.Canceled());
         }
       }}
-      open
+      {...presence}
       screen={screen}
       title="Share your name and picture?"
     >

@@ -31,9 +31,11 @@
   "exports": {
     "./ago": "./src/ago.ts",
     "./inbox": "./src/inbox.ts",
+    "./MailPicker": "./src/MailPicker.tsx",
     "./NotificationDrawer": "./src/NotificationDrawer.tsx",
     "./NotificationToasts": "./src/NotificationToasts.tsx",
     "./notifications-context": "./src/notifications-context.ts",
+    "./useMailLinks": "./src/useMailLinks.ts",
     "./useNotifications": "./src/useNotifications.ts",
     "./useNow": "./src/useNow.ts"
   },

@@ -20,8 +20,33 @@ struct ListedBrowserWindow {
   std::string id;
   // The page's title. Empty when it has none.
   std::string title;
+  // The title an Electron app gave its window, which the desktop shows
+  // instead of the page's. Empty for none.
+  std::string app_title;
   // The app window's id, or empty for any other window.
   std::string app_id;
+  // The address it shows, or the one it is opening before its first
+  // navigation commits.
+  std::string url;
+  // Whether it is a private window, in the off-the-record profile.
+  bool off_the_record = false;
+  // Whether it is an Electron app's view, part of a window rather than one:
+  // a capture tool never lists it, and its app hears it closed only when it
+  // leaves this list.
+  bool view = false;
+  // Whether it is an Electron app's window the app hid: open, its page
+  // running, but out of sight, so a capture tool doesn't list it.
+  bool hidden = false;
+  // For a view a window holds and shows: that window's id, where the app
+  // placed the view in the window's page, in its CSS pixels, and `stack`
+  // from the bottom of the window's views. A capture of the window draws it
+  // there. Empty and zero for anything else.
+  std::string parent;
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+  int stack = 0;
 
   friend bool operator==(const ListedBrowserWindow&,
                          const ListedBrowserWindow&) = default;

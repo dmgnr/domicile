@@ -19,7 +19,7 @@ job builds it on `crux`.
  2 files changed, 96 deletions(-)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index c1e98c9..23c01e6 100644
+index 708efe0..039fb98 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -274,52 +274,20 @@ generated_dictionary_sources_in_modules = [
@@ -75,7 +75,7 @@ index c1e98c9..23c01e6 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_color_selection_options.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_color_selection_options.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_color_selection_result.cc",
-@@ -2373,49 +2341,26 @@ generated_interface_sources_in_modules = [
+@@ -2377,49 +2345,26 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_extendable_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_extendable_message_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_extendable_message_event.h",
@@ -125,7 +125,7 @@ index c1e98c9..23c01e6 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_audio_stream.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_audio_stream.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_audio_level.cc",
-@@ -2424,10 +2369,6 @@ generated_interface_sources_in_modules = [
+@@ -2428,10 +2373,6 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_audio_levels_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event.h",
@@ -136,7 +136,7 @@ index c1e98c9..23c01e6 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_item.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_item.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_window.cc",
-@@ -2436,11 +2377,6 @@ generated_interface_sources_in_modules = [
+@@ -2440,11 +2381,6 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification_action.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification_action.h",

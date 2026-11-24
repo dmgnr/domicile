@@ -21,10 +21,10 @@ override answers false.
  1 file changed, 8 insertions(+)
 
 diff --git a/content/browser/webauth/authenticator_common_impl.cc b/content/browser/webauth/authenticator_common_impl.cc
-index 9e46493..9bce473 100644
+index cfe5d04..fc0e10a 100644
 --- a/content/browser/webauth/authenticator_common_impl.cc
 +++ b/content/browser/webauth/authenticator_common_impl.cc
-@@ -3552,6 +3552,14 @@ void AuthenticatorCommonImpl::EnableRequestProxyExtensionsAPISupport() {
+@@ -3592,6 +3592,14 @@ void AuthenticatorCommonImpl::EnableRequestProxyExtensionsAPISupport() {
  WebAuthenticationRequestProxy*
  AuthenticatorCommonImpl::GetWebAuthnRequestProxyIfActive(
      const url::Origin& caller_origin) {

@@ -35,6 +35,9 @@ browser.openApp(url, { id: "gmail:me@example.com", reuse: AppReuse.Navigate })
   the page's own `window.focus()` does, so the shell raises it the same way.
 - **`countMatches(id, selector)`** counts elements in a window's page, so a
   shell can read an app's unread count from its window, hidden or not.
+- **`clickMatch(id, selector)`** clicks the first shown element matching a
+  selector in a window's page, so a shell can open what a notification names in
+  the app's own view, such as a mail beside Gmail's inbox list.
 
 - **An app window** is a browser window with `isApp` set. It shares the
   profile, extensions and site permissions of every other window. Its visits
@@ -134,7 +137,7 @@ runs `domicile open --app <entry.js>`.
   entries
 - [x] `DomicileHost.openAppWindow(url)`, for a shell's own launcher
 - [x] app ids and `reuse` (`open --app --id --reuse`, `openApp(url, { id,
-  reuse })`), and `countBrowserWindowMatches`
+  reuse })`), `countBrowserWindowMatches` and `clickBrowserWindowMatch`
 
 ## Open questions
 

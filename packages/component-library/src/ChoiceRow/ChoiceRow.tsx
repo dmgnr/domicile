@@ -1,6 +1,7 @@
 import { Checkbox } from "@base-ui/react/checkbox";
 import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
+import { CheckIcon } from "@phosphor-icons/react/dist/ssr/Check";
 import type { ReactNode } from "react";
 
 import { css } from "../../styled-system/css";
@@ -31,8 +32,9 @@ export const RadioRow = ({ detail, icon, name, ...props }: RadioRowProps) => (
 type CheckboxRowProps = ExtendProps<typeof Checkbox.Root, Content>;
 
 /**
- * A row of a list that picks several things, framed like {@link RadioRow}.
- * Goes in a `CheckboxGroup`.
+ * A row of a list that picks several things, with a checkbox before its
+ * icon. Unlike {@link RadioRow} it takes no frame while checked, so a list
+ * with many checked stays calm. Goes in a `CheckboxGroup`.
  */
 export const CheckboxRow = ({
   detail,
@@ -40,7 +42,12 @@ export const CheckboxRow = ({
   name,
   ...props
 }: CheckboxRowProps) => (
-  <Checkbox.Root {...props} className={rowStyles}>
+  <Checkbox.Root {...props} className={checkboxRowStyles}>
+    <span className={boxStyles} data-box="">
+      <Checkbox.Indicator className={tickStyles}>
+        <CheckIcon aria-hidden weight="bold" />
+      </Checkbox.Indicator>
+    </span>
     <RowContent detail={detail} icon={icon} name={name} />
   </Checkbox.Root>
 );
@@ -66,7 +73,7 @@ const listStyles = flex({ direction: "column", gap: 1 });
 
 // Over the wallpaper, as in a bar's popover, the rows take the panel's white
 // text, since `foreground` and `muted` follow the theme and the panel does not.
-const rowStyles = css({
+const rowRaw = css.raw({
   _checked: {
     backgroundColor: "color-mix(in oklab, {colors.accent} 20%, transparent)",
     borderColor: "accent",
@@ -102,6 +109,43 @@ const rowStyles = css({
   paddingInline: 2.5,
   textAlign: "start",
   transition: "background-color {durations.fast} {easings.out}",
+});
+
+const rowStyles = css(rowRaw);
+
+// A row's look without the picked frame; the box shows the check.
+const checkboxRowStyles = css(rowRaw, {
+  _checked: {
+    backgroundColor: "transparent",
+    borderColor: "transparent",
+  },
+  "&[data-checked] [data-box]": {
+    backgroundColor: "accent",
+    borderColor: "accent",
+  },
+  "&[data-checked]:hover": {
+    backgroundColor: "color-mix(in oklab, {colors.foreground} 6%, transparent)",
+  },
+});
+
+const boxStyles = css({
+  "[data-tone=overPhoto] &": { borderColor: "currentcolor" },
+  alignItems: "center",
+  blockSize: 4,
+  border: "1.5px solid {colors.borderStrong}",
+  borderRadius: "sm",
+  display: "flex",
+  flexShrink: 0,
+  inlineSize: 4,
+  justifyContent: "center",
+  transition:
+    "background-color {durations.fast} {easings.out}, border-color {durations.fast} {easings.out}",
+});
+
+const tickStyles = css({
+  "& > svg": { blockSize: 3, inlineSize: 3 },
+  color: "background",
+  display: "flex",
 });
 
 const textStyles = flex({ direction: "column", minInlineSize: 0 });

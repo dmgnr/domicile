@@ -12,11 +12,29 @@ domicile-config = { path = "../domicile-config" }
 domicile-host = { path = "../domicile-host" }
 # The chrome protocol, which `domicile screenshot` speaks to the compositor.
 domicile-protocol = { path = "../domicile-protocol" }
+# The relay's wire, which `domicile mcp --relay` dials.
+domicile-relay = { path = "../domicile-relay" }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 libc.workspace = true
 notify.workspace = true
+# Finds a JavaScript shell's imports, to tell a bundle from an entry.
+oxc_allocator.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+# Certificates from ACME, and TLS for agents on the web, through the relay.
+rcgen = "0.14"
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde.workspace = true
 serde_json.workspace = true
+# PKCE challenges and refresh token hashes, for `domicile mcp --http`.
+sha2 = "0.10"
+tempfile.workspace = true
 thiserror.workspace = true
+# `domicile mcp --http`. Blocking, as the rest of `domicile` is.
+tiny_http = "0.12"
+# ACME's HTTPS, from the desk.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Session bus, for reporting a failed reload as a notification. Features match
 # the compositor's so the workspace builds zbus once.
 zbus = { version = "5.0", default-features = false, features = [

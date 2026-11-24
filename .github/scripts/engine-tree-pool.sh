@@ -227,9 +227,13 @@ case "$action" in
     fi
 
     series="$("$STAMP_SH" identity)" || exit 1
-    take_best() {
+    # `pin` takes only a tree at this pin; `any` takes the best free tree.
+    take_best() { # pin|any
       local slot
       for slot in $(candidates "$pin" "$series"); do
+        if [ "$1" = pin ] && [ "$(slot_pin "$slot")" != "$pin" ]; then
+          continue
+        fi
         if take_slot "$slot" "$owner"; then
           touch "$(used_file "$slot")"
           printf '%s\n' "$slot/src"
@@ -238,10 +242,27 @@ case "$action" in
       done
       return 1
     }
+    some_tree_at_pin() {
+      local slot
+      for slot in $(usable); do
+        [ "$(slot_pin "$slot")" = "$pin" ] && return 0
+      done
+      return 1
+    }
     clear_finished
-    take_best && exit 0
+    # A tree at another pin rebuilds from scratch, about four hours. A run on
+    # this pin's tree is usually done within the hour, so wait for it. The
+    # nightly official build of 2026-11-23 took the other tree a minute before
+    # this pin's tree came free, and compiled for 4h50m.
+    want=any
+    if some_tree_at_pin; then
+      want=pin
+    fi
+    take_best "$want" && exit 0
 
-    # Every tree is held. Wait for one instead of failing.
+    # No tree that is worth having is free. Wait for one instead of failing.
+    # Waiting for this pin's tree falls back to any free tree when waiting is
+    # not possible or takes too long.
     #
     # Only one run waits. A waiting build holds one of crux's two runners, and
     # a tree is dropped only by its run's engine job, which needs a runner too.
@@ -266,7 +287,14 @@ case "$action" in
       echo
       echo "  rm -rf $("$LOCK_SH" path "$(usable | head -1)/src")"
     }
+    fall_back() {
+      [ "$want" = pin ] || return 1
+      take_best any || return 1
+      echo "::warning::$1, so this run took a tree at another pin and rebuilds it" >&2
+      return 0
+    }
     if [ "$WAIT" -le 0 ]; then
+      fall_back "every tree at $pin is held and this run cannot wait" && exit 0
       {
         echo "::error::every Chromium tree under $TREES is held, so this run has nowhere to build"
         holders
@@ -275,6 +303,7 @@ case "$action" in
     fi
     if ! mkdir "$WAITER" 2>/dev/null; then
       if [ -n "$(find "$WAITER" -newermt "-$WAITER_STALE seconds" 2>/dev/null)" ]; then
+        fall_back "every tree at $pin is held and '$(cat "$WAITER/owner" 2>/dev/null)' is already waiting" && exit 0
         {
           echo "::error::every Chromium tree under $TREES is held, and '$(cat "$WAITER/owner" 2>/dev/null)' is already waiting for one"
           echo "A second waiter would hold the runner a holder needs to drop its tree."
@@ -289,7 +318,11 @@ case "$action" in
     trap 'rm -rf "$WAITER"' EXIT
     printf '%s\n' "$owner" >"$WAITER/owner"
     touch "$WAITER/alive"
-    echo "every Chromium tree under $TREES is held; waiting up to ${WAIT}s for one" >&2
+    if [ "$want" = pin ]; then
+      echo "every Chromium tree at $pin is held; waiting up to ${WAIT}s for one rather than rebuilding another" >&2
+    else
+      echo "every Chromium tree under $TREES is held; waiting up to ${WAIT}s for one" >&2
+    fi
     waited=0
     asked=0
     cleared_at=0
@@ -318,11 +351,12 @@ case "$action" in
         cleared_at="$waited"
         clear_finished
       fi
-      if take_best; then
+      if take_best "$want"; then
         echo "took a tree after ${waited}s" >&2
         exit 0
       fi
     done
+    fall_back "every tree at $pin was still held after waiting ${waited}s" && exit 0
     {
       echo "::error::every Chromium tree under $TREES was still held after waiting ${waited}s, so this run has nowhere to build"
       holders

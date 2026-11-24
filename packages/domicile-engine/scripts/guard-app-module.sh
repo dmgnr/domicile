@@ -22,6 +22,8 @@
 #   the app fetched its own file   fetch() reads the app's origin (patch 0126)
 #   and not the shell's            ShellURLLoaderFactory::MayReadFiles refuses
 #                                  another origin
+#   the app is isolated            crossOriginIsolated and SharedArrayBuffer,
+#                                  with no COOP or COEP (patch 0225)
 #
 # Control: NEGATIVE=1 also opens the app's address with `open_url`, in a
 # window no app was opened in. That window must not run the app: an app's
@@ -149,6 +151,8 @@ wait_for_line "$TRIES" "GUARD app-answered" "$ENGINE_LOG" ||
   echo "the app's call was never answered; the verdict below says what that means" >&2
 wait_for_line "$TRIES" "GUARD app-fetch" "$ENGINE_LOG" ||
   echo "the app never said what it fetched; the verdict below says what that means" >&2
+wait_for_line "$TRIES" "GUARD app-isolated" "$ENGINE_LOG" ||
+  echo "the app never said whether it is isolated; the verdict below says what that means" >&2
 
 ANSWERED=0
 [ "$RUN" = '{"type":"opened"}' ] && ANSWERED=1
@@ -173,24 +177,26 @@ REPLIED=0
 grep -qE '"GUARD app-answered written=true"' "$ENGINE_LOG" && REPLIED=1
 FETCHED=0
 grep -qE '"GUARD app-fetch own=read shell=(empty|refused)"' "$ENGINE_LOG" && FETCHED=1
+ISOLATED=0
+grep -qE '"GUARD app-isolated isolated=true shared=true"' "$ENGINE_LOG" && ISOLATED=1
 
-MEASURED="$MODE $ANSWERED $MAINS $NARROW $HELLO $REPLIED $FETCHED"
+MEASURED="$MODE $ANSWERED $MAINS $NARROW $HELLO $REPLIED $FETCHED $ISOLATED"
 echo
 echo "measured: $MEASURED"
-echo "  (mode answered mains narrow app-hello replied fetched)"
+echo "  (mode answered mains narrow app-hello replied fetched isolated)"
 
 # Which end to blame. `packages/domicile-engine/tests/test-app-module-guard.sh` runs this block
 # directly. MEASURED is "<mode> <answered> <mains> <narrow> <hello>
-# <replied> <fetched>".
+# <replied> <fetched> <isolated>".
 FAILURE=""
 PASSED=""
 case "$MEASURED" in
-"pinned 1 1 1 1 1 1")
+"pinned 1 1 1 1 1 1 1")
   PASSED="an app module ran: run_app opened its window, its main was handed \
-the layer's AppDomicile, and its system call crossed to the compositor as an \
-app's and back"
+the layer's AppDomicile, its system call crossed to the compositor as an \
+app's and back, and it is cross-origin isolated"
   ;;
-"unpinned 1 1 1 1 1 1")
+"unpinned 1 1 1 1 1 1 1")
   PASSED="the control is sharp: the app's address in a window no app was \
 opened in ran nothing, so only the pinned window runs the app"
   ;;
@@ -222,11 +228,17 @@ said hello as a shell"
   FAILURE="the app's call was not answered: AppChannel dropped the \
 system_reply, or DomicileAppHost did not dispatch it"
   ;;
-"pinned 1 1 1 1 1 0" | "unpinned 1 1 1 1 1 0")
+"pinned 1 1 1 1 1 0 "* | "unpinned 1 1 1 1 1 0 "*)
   FAILURE="the app did not fetch its own file, or read the shell's -- its \
 app-fetch line is in the engine log. Blink refuses fetch() on a scheme not \
 registered as supporting the Fetch API (patch 0126); \
 ShellURLLoaderFactory::MayReadFiles serves a file only to its own origin"
+  ;;
+"pinned 1 1 1 1 1 1 0" | "unpinned 1 1 1 1 1 1 0")
+  FAILURE="the app is not cross-origin isolated, or has no \
+SharedArrayBuffer -- its app-isolated line is in the engine log. \
+NavigationRequest::ComputeCrossOriginIsolationKey isolates an origin \
+IsCrossOriginIsolatedOrigin names (patch 0225)"
   ;;
 *)
   FAILURE="there is no measurement here this guard can place ($MEASURED)"

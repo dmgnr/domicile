@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { css } from "../styled-system/css";
 import { recordedSettles } from "./recorded-settles";
 import { SettleHandoffs } from "./SettleHandoffs";
+import { SlidingScreen } from "./sliding-screen";
 import { TabStrip } from "./TabStrip";
 
 loadEmittedStylesheet(
@@ -72,6 +73,20 @@ const parentOf = (element: HTMLElement): HTMLElement => {
 };
 
 describe("TabStrip", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself to its workspace while a switch slides it", () => {
+    const { container } = render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <TabStrip {...stripProps} motion="leaving-to-start" />
+      </SlidingScreen>,
+    );
+
+    expect(stripOf(container).style.clip).toBe(
+      "rect(-50px, 1180px, 950px, -100px)",
+    );
+  });
+
   // One box for the whole strip, so no seam shows between its tabs.
   it("draws the whole strip as one box at its group's depth", () => {
     const { container } = render(<TabStrip {...stripProps} />);

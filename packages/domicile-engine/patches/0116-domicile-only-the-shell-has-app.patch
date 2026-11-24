@@ -34,7 +34,7 @@ job builds it on `crux`.
  6 files changed, 30 insertions(+), 33 deletions(-)
 
 diff --git a/content/browser/browser_interface_binders.cc b/content/browser/browser_interface_binders.cc
-index 6f52a29..0da9e43 100644
+index 7afb4b1..bc19032 100644
 --- a/content/browser/browser_interface_binders.cc
 +++ b/content/browser/browser_interface_binders.cc
 @@ -34,6 +34,7 @@
@@ -45,7 +45,7 @@ index 6f52a29..0da9e43 100644
  #include "content/browser/eye_dropper_chooser_impl.h"
  #include "content/browser/handwriting/handwriting_recognition_service_factory.h"
  #include "content/browser/haptics/haptics_service_impl.h"
-@@ -1587,6 +1588,11 @@ void PopulateBinderMapWithContext(
+@@ -1605,6 +1606,11 @@ void PopulateBinderMapWithContext(
    map->Add<optimization_guide::mojom::ModelBroker>(
        &EmptyBinderForFrame<optimization_guide::mojom::ModelBroker>);
  
@@ -95,10 +95,10 @@ index 781d934..203eded 100644
        registry.get(),
        base::BindRepeating(&RenderProcessHostImpl::BindCompositingModeReporter,
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-index a7858e6..8c0cb49 100644
+index 25246fb..3a0282b 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-@@ -2168,7 +2168,8 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
+@@ -2197,7 +2197,8 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
  
    const bool reconfiguring = !!external_surface_embedder_;
    if (!reconfiguring) {
@@ -123,7 +123,7 @@ index 7008ae6..a11a7c2 100644
    }
  };
 diff --git a/third_party/blink/renderer/core/html/html_tag_names.json5 b/third_party/blink/renderer/core/html/html_tag_names.json5
-index 42a3091..cec25f9 100644
+index fd10b64..c8ca640 100644
 --- a/third_party/blink/renderer/core/html/html_tag_names.json5
 +++ b/third_party/blink/renderer/core/html/html_tag_names.json5
 @@ -46,6 +46,9 @@
@@ -136,7 +136,7 @@ index 42a3091..cec25f9 100644
      },
      {
        name: "applet",
-@@ -636,6 +639,8 @@
+@@ -642,6 +645,8 @@
        interfaceName: "HTMLWebViewElement",
        interfaceHeaderDir: "third_party/blink/renderer/core/html/domicile",
        runtimeEnabled: "DomicileExternalSurface",
@@ -146,10 +146,10 @@ index 42a3091..cec25f9 100644
      {
        name: "xmp",
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-index 6e1a78b..e5d5513 100644
+index 5927ef0..6c7c7af 100644
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -2753,33 +2753,29 @@
+@@ -2832,33 +2832,29 @@
        name: "DocumentPolicyJSProfilingMode",
        status: "experimental",
      },

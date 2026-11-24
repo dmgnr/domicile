@@ -56,6 +56,7 @@ describe("signIn", () => {
       desk(fake, { [TOKEN]: [json(200, { refresh_token: "r" })] }),
       CLIENT,
       EMAIL,
+      undefined,
       storage,
       STATE,
     );
@@ -64,7 +65,7 @@ describe("signIn", () => {
     await signedIn;
 
     expect(fake.calls).toStrictEqual([
-      ["openBrowserWindow", consentAddress(CLIENT, EMAIL, STATE), ""],
+      ["openBrowserWindow", consentAddress(CLIENT, EMAIL, STATE), "", ""],
       ["closeBrowserWindow", "1"],
     ]);
     expect(storedToken(EMAIL, storage)).toStrictEqual(Some("r"));
@@ -77,6 +78,7 @@ describe("signIn", () => {
       desk(fake, {}),
       CLIENT,
       EMAIL,
+      undefined,
       heldStorage(),
       STATE,
     );
@@ -92,6 +94,7 @@ describe("signIn", () => {
       desk(fake, { [TOKEN]: [json(400, { error: "invalid_grant" })] }),
       CLIENT,
       EMAIL,
+      undefined,
       heldStorage(),
       STATE,
     );

@@ -12,6 +12,7 @@ import { token } from "../styled-system/tokens";
 import { AppWindow } from "./AppWindow";
 import { CROSSING } from "./placement";
 import { recordedSettles } from "./recorded-settles";
+import { SlidingScreen } from "./sliding-screen";
 
 // Records `focusApp` calls. Pointer mapping is the engine's, checked by
 // `guard-app-routes-input.sh`.
@@ -123,6 +124,34 @@ beforeEach(() => {
 });
 
 describe("AppWindow", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself and its popups to its workspace while a switch slides it", () => {
+    const { container } = render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <AppWindow
+          {...windowProps}
+          focused={false}
+          motion="leaving-to-start"
+          popups={[
+            {
+              appId: "menu",
+              cursor: "default",
+              frame: 0,
+              rect: { height: 240, width: 180, x: 12, y: 30 },
+            },
+          ]}
+        />
+      </SlidingScreen>,
+    );
+    const layer = container.querySelector('[app-id="menu"]')?.parentElement;
+
+    expect(windowBox(container).style.clip).toBe(
+      "rect(-32px, 1280px, 968px, 0px)",
+    );
+    expect(layer?.style.clip).toBe("rect(-32px, 1280px, 968px, 0px)");
+  });
+
   it("shows the synced frame it is given", () => {
     const { container } = render(
       <AppWindow {...windowProps} focused syncedFrame={4} />,

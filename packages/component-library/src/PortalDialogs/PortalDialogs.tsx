@@ -19,13 +19,15 @@ import {
   PortalKind,
   SHELL_APP_ID,
 } from "@domicile-desktop/sdk/portal";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { Folders } from "../FilePicker/folders";
 import { desktopFolders } from "../FilePicker/folders";
+import { useLeavingRows } from "../LeavingRows/useLeavingRows";
 import type { App } from "../useApps/useApps";
 import { useApps } from "../useApps/useApps";
 import { AccessDialog } from "./AccessDialog";
 import { AccountDialog } from "./AccountDialog";
+import { AgentDialog } from "./AgentDialog";
 import { AppChooserDialog } from "./AppChooserDialog";
 import { CapturingIndicator } from "./CapturingIndicator";
 import { FileChooserDialog } from "./FileChooserDialog";
@@ -35,6 +37,7 @@ import { LauncherDialog } from "./LauncherDialog";
 import { PickColorDialog } from "./PickColorDialog";
 import { PrintDialog } from "./PrintDialog";
 import { pageIcon } from "./page-icon";
+import type { Presence } from "./presence";
 import type { Recording } from "./RecordingToolbar";
 import { RecordingToolbar } from "./RecordingToolbar";
 import { RemoteDesktopDialog } from "./RemoteDesktopDialog";
@@ -63,6 +66,7 @@ export type PortalDialogsDesktop = DialogDesktop &
       Portals,
       | "answer"
       | "capturing"
+      | "changeAgent"
       | "discardRecording"
       | "on"
       | "pauseRecording"
@@ -88,6 +92,11 @@ type Props = {
    * them itself.
    */
   omitScreenCasts?: boolean | undefined;
+  /**
+   * Leave agents out of the capturing indicator, for a shell that shows them
+   * itself.
+   */
+  omitAgents?: boolean | undefined;
   /**
    * The browser windows the shell shows as closed, by the engine's id, such
    * as an inbox's kept running for its notifications. Pickers leave them out.
@@ -131,6 +140,7 @@ export const PortalDialogs = memo(
     domicile,
     holdKeyboard,
     omitScreenCasts = false,
+    omitAgents = false,
     screen,
     screenOf,
     shellChords = NONE,
@@ -142,6 +152,8 @@ export const PortalDialogs = memo(
     const apps = useApps(domicile, [
       ...requests.flatMap(appIds),
       ...sessions.map((session) => session.appId),
+      // App windows the pickers offer are named and drawn as their apps.
+      ...(domicile.browser.windows ?? []).map((window) => window.appId),
     ]);
 
     const { portals } = domicile;
@@ -165,11 +177,29 @@ export const PortalDialogs = memo(
       }
     }, [portals, requests]);
 
-    const dialogs = stacked(
-      requests.filter(
-        (request) => claims.get(request.id)?.kind !== CastClaimKind.Answered,
-      ),
+    const dialogs = useMemo(
+      () =>
+        stacked(
+          requests.filter(
+            (request) =>
+              claims.get(request.id)?.kind !== CastClaimKind.Answered,
+          ),
+        ),
+      [claims, requests],
     );
+    // A dialog stays, closed, until it has animated out. One a cast to a TV
+    // answered never showed, so it goes at once, before paint.
+    const { onLeft, rows } = useLeavingRows(dialogs, idOf, true);
+    useLayoutEffect(() => {
+      for (const { item, leaving } of rows) {
+        if (
+          leaving !== undefined &&
+          claims.get(item.id)?.kind === CastClaimKind.Answered
+        ) {
+          onLeft(item.id);
+        }
+      }
+    }, [claims, onLeft, rows]);
     const asking = dialogs.length > 0;
     useEffect(
       () => (asking ? holdKeyboard?.() : undefined),
@@ -181,11 +211,15 @@ export const PortalDialogs = memo(
       <>
         <CapturingIndicator
           apps={apps}
+          change={(id) => {
+            portals.changeAgent(id);
+          }}
           screen={screen}
           sessions={sessions.filter(
             (session) =>
               !isRecording(session) &&
-              !(omitScreenCasts && session.kind === CapturingKind.ScreenCast),
+              !(omitScreenCasts && session.kind === CapturingKind.ScreenCast) &&
+              !(omitAgents && session.kind === CapturingKind.Agent),
           )}
           stop={(id) => {
             portals.stopCapturing(id);
@@ -210,7 +244,7 @@ export const PortalDialogs = memo(
             }}
           />
         ))}
-        {dialogs.map((shown) => (
+        {rows.map(({ item: shown, leaving }) => (
           <Dialog
             answer={(answer) => {
               portals.answer(shown.id, answer);
@@ -224,6 +258,14 @@ export const PortalDialogs = memo(
             domicile={domicile}
             folders={folders}
             key={shown.id}
+            presence={{
+              onOpenChangeComplete: (open) => {
+                if (!open) {
+                  onLeft(shown.id);
+                }
+              },
+              open: leaving === undefined,
+            }}
             request={shown}
             screen={screenFor(shown, screen, screenOf)}
             shellChords={shellChords}
@@ -234,6 +276,8 @@ export const PortalDialogs = memo(
     );
   },
 );
+
+const idOf = (request: PortalRequest): number => request.id;
 
 /** The windows this page draws. */
 const drawnOnPage = () => drawnWindows(document);
@@ -252,6 +296,7 @@ const Dialog = ({
   browserWindows,
   claim,
   folders,
+  presence,
   request,
   screen,
   shellChords,
@@ -265,6 +310,7 @@ const Dialog = ({
   /** What a cast to a TV that asked for `request` makes of it. */
   claim: CastClaim | undefined;
   folders: Folders;
+  presence: Presence;
   request: PortalRequest;
   screen: string | undefined;
   shellChords: readonly string[];
@@ -278,6 +324,7 @@ const Dialog = ({
           answer={answer}
           asker={request.appId === SHELL_APP_ID ? undefined : asker}
           body={request.body}
+          presence={presence}
           screen={screen}
         />
       );
@@ -287,6 +334,7 @@ const Dialog = ({
           answer={answer}
           asker={asker}
           body={request.body}
+          presence={presence}
           screen={screen}
         />
       );
@@ -296,6 +344,7 @@ const Dialog = ({
           answer={answer}
           asker={asker}
           body={request.body}
+          presence={presence}
           screen={screen}
         />
       );
@@ -306,6 +355,7 @@ const Dialog = ({
           asker={asker}
           body={request.body}
           domicile={domicile}
+          presence={presence}
           screen={screen}
         />
       );
@@ -315,6 +365,7 @@ const Dialog = ({
           answer={answer}
           body={request.body}
           folders={folders}
+          presence={presence}
           screen={screen}
         />
       );
@@ -325,6 +376,7 @@ const Dialog = ({
           asker={asker}
           body={request.body}
           files={domicile.files}
+          presence={presence}
           screen={screen}
         />
       );
@@ -335,6 +387,7 @@ const Dialog = ({
           apps={apps}
           asker={asker}
           body={request.body}
+          presence={presence}
           screen={screen}
           shellChords={shellChords}
         />
@@ -346,6 +399,7 @@ const Dialog = ({
           asker={asker}
           body={request.body}
           files={domicile.files}
+          presence={presence}
           screen={screen}
         />
       );
@@ -355,6 +409,7 @@ const Dialog = ({
           answer={answer}
           asker={asker}
           body={request.body}
+          presence={presence}
           screen={screen}
         />
       );
@@ -364,6 +419,7 @@ const Dialog = ({
           answer={answer}
           asker={asker}
           body={request.body}
+          presence={presence}
           screen={screen}
         />
       );
@@ -377,6 +433,7 @@ const Dialog = ({
           browserWindows={browserWindows}
           castTo={claim?.kind === CastClaimKind.Pick ? claim.to : undefined}
           pageIcon={pageIconOnPage}
+          presence={presence}
           previewWindow={domicile.capture.preview}
           record={request.appId === SHELL_APP_ID}
           screen={screen}
@@ -390,6 +447,7 @@ const Dialog = ({
           asker={asker}
           body={request.body}
           folders={folders}
+          presence={presence}
           screen={screen}
         />
       );
@@ -402,6 +460,7 @@ const Dialog = ({
           body={request.body}
           browserWindows={browserWindows}
           pageIcon={pageIconOnPage}
+          presence={presence}
           previewWindow={domicile.capture.preview}
           screen={screen}
           shownWindows={shownWindows}
@@ -413,6 +472,17 @@ const Dialog = ({
           answer={answer}
           asker={asker}
           body={request.body}
+          presence={presence}
+          screen={screen}
+        />
+      );
+    case PortalKind.Agent:
+      return (
+        <AgentDialog
+          answer={answer}
+          apps={apps}
+          body={request.body}
+          presence={presence}
           screen={screen}
         />
       );
@@ -472,6 +542,10 @@ const otherAppIds = (request: PortalRequest): string[] => {
     case PortalKind.Inhibit:
     case PortalKind.Unknown:
       return [];
+    case PortalKind.Agent:
+      return request.body.windows.flatMap((window) =>
+        !window.browser && window.app !== undefined ? [window.app] : [],
+      );
   }
 };
 
@@ -506,6 +580,7 @@ const isCapture = (request: PortalRequest): boolean => {
     case PortalKind.GlobalShortcuts:
     case PortalKind.Wallpaper:
     case PortalKind.Print:
+    case PortalKind.Agent:
     case PortalKind.Inhibit:
     case PortalKind.Unknown:
       return false;
@@ -529,6 +604,7 @@ const isAsked = (request: PortalRequest): boolean => {
     case PortalKind.Print:
     case PortalKind.Screenshot:
     case PortalKind.PickColor:
+    case PortalKind.Agent:
       return true;
     case PortalKind.Inhibit:
     case PortalKind.Unknown:

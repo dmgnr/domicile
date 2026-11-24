@@ -21,6 +21,9 @@ namespace domicile {
 //   same realm is answered with it, as in Chrome.
 // - Chrome's password manager does not fill or save these.
 // - A page outside any guest gets no sign-in: its request is canceled.
+// - An Electron app's page asks its app first, as `login`: the app signs in
+//   or cancels, and when no listener takes it the shell asks, where
+//   Electron would cancel. See electron_sign_ins.h.
 //
 // Called once from StartDesk, before any guest exists.
 void UseTheShellForSignIns();

@@ -40,6 +40,7 @@ fn run() -> Result<(), String> {
     let asking = |request: &Request| {
         let patience = match request {
             Request::ClearBrowsingData(_) => CLEAR_WITHIN + PATIENCE,
+            Request::ExportLogs { .. } => domicile_launch::log_export::EXPORT_WITHIN,
             _ => PATIENCE * 2,
         };
         ask(&socket, request, Some(patience)).map_err(|why| why.to_string())
@@ -48,6 +49,17 @@ fn run() -> Result<(), String> {
     let _watching = watching(&asking, Arc::clone(&output))?;
 
     let home = std::env::var_os("HOME").map(PathBuf::from);
+    let env = |name: &str| std::env::var(name).ok();
+    let web_status = domicile_launch::mcp::web::status_file(&env);
+    let signed_in = domicile_launch::profile_path::state_directory(&env)
+        .map(|directory| directory.join(domicile_launch::mcp::SIGNED_IN_FILE));
+    // Where `xdg-user-dirs` names the Downloads folder.
+    let user_dirs = env("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| home.join(".config")))
+        .and_then(|config| std::fs::read_to_string(config.join("user-dirs.dirs")).ok());
+    let downloads =
+        domicile_launch::app_host::downloads(&env, user_dirs.as_deref(), home.as_deref());
     let host = Host {
         ask: &asking,
         home: home.as_deref(),
@@ -57,8 +69,27 @@ fn run() -> Result<(), String> {
             choose_folder(&bus, "Load an unpacked extension")
         },
         read: &|path| std::fs::read_to_string(path),
+        read_bytes: &|path| std::fs::read(path),
         writable: &writable,
         write: &|path, text| std::fs::write(path, text),
+        web_status: web_status.as_deref(),
+        signed_in: signed_in.as_deref(),
+        downloads: downloads.as_deref(),
+        // `domicile open`, beside this binary, picks the folder's handler.
+        open: &|folder| {
+            let domicile = std::env::current_exe()
+                .map_err(|why| format!("cannot find myself: {why}"))?
+                .with_file_name("domicile");
+            let status = std::process::Command::new(&domicile)
+                .arg("open")
+                .arg(folder)
+                .status()
+                .map_err(|why| format!("cannot run {}: {why}", domicile.display()))?;
+            match status.success() {
+                true => Ok(()),
+                false => Err(format!("domicile open {} {status}", folder.display())),
+            }
+        },
     };
     let mut input = std::io::stdin().lock();
     while let Some(message) =

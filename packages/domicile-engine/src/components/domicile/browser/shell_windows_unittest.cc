@@ -67,12 +67,33 @@ TEST(ShellWindowsTest, AMonitorUnpluggedTakesItsWindowWithIt) {
   EXPECT_EQ(plan.close, std::vector<int64_t>({2}));
 }
 
-TEST(ShellWindowsTest, OneMonitorSwappedForAnotherIsBothHalvesAtOnce) {
-  // A dock swap arrives as one reading, so one plan must both open and close.
+TEST(ShellWindowsTest, OneMonitorSwappedForAnotherTakesItsWindowAlong) {
+  // A dock swap arrives as one reading. Moving the window keeps the shell's
+  // page; opening a new one would reload it.
   const ShellWindowPlan plan =
       ShellWindowsFor({Monitor(1), Monitor(4)}, {1, 2});
 
-  EXPECT_EQ(plan.open, std::vector<int64_t>({4}));
+  EXPECT_EQ(plan.move, std::vector<ShellWindowMove>({{.from = 2, .to = 4}}));
+  EXPECT_TRUE(plan.open.empty());
+  EXPECT_TRUE(plan.close.empty());
+}
+
+TEST(ShellWindowsTest, TheHostMovingTakesItsWindowAlong) {
+  // Only the host display is asked for, so sleeping or waking a display can
+  // move the host. Reopening the window there would restart the shell.
+  const ShellWindowPlan plan = ShellWindowsFor({Monitor(2)}, {1});
+
+  EXPECT_EQ(plan.move, std::vector<ShellWindowMove>({{.from = 1, .to = 2}}));
+  EXPECT_TRUE(plan.open.empty());
+  EXPECT_TRUE(plan.close.empty());
+}
+
+TEST(ShellWindowsTest, WindowsNoDisplayTakesAreClosedAfterTheMoves) {
+  // The first window moves; the rest have nowhere to go.
+  const ShellWindowPlan plan = ShellWindowsFor({Monitor(3)}, {1, 2});
+
+  EXPECT_EQ(plan.move, std::vector<ShellWindowMove>({{.from = 1, .to = 3}}));
+  EXPECT_TRUE(plan.open.empty());
   EXPECT_EQ(plan.close, std::vector<int64_t>({2}));
 }
 
@@ -85,14 +106,15 @@ TEST(ShellWindowsTest, NoDisplaysAtAllStillKeepsOneWindow) {
   EXPECT_EQ(plan.close, std::vector<int64_t>({2}));
 }
 
-TEST(ShellWindowsTest, AWholeDeskSwappedAtOnceReplacesEveryWindow) {
-  // Every id is new, so every window is replaced. The caller opens before
-  // closing, so the browser never has zero windows.
+TEST(ShellWindowsTest, AWholeDeskSwappedAtOnceMovesEveryWindow) {
+  // Every id is new, so every window moves, in order.
   const ShellWindowPlan plan =
       ShellWindowsFor({Monitor(7), Monitor(8)}, {1, 2});
 
-  EXPECT_EQ(plan.open, std::vector<int64_t>({7, 8}));
-  EXPECT_EQ(plan.close, std::vector<int64_t>({1, 2}));
+  EXPECT_EQ(plan.move, std::vector<ShellWindowMove>(
+                           {{.from = 1, .to = 7}, {.from = 2, .to = 8}}));
+  EXPECT_TRUE(plan.open.empty());
+  EXPECT_TRUE(plan.close.empty());
 }
 
 TEST(ShellWindowsTest, NothingWindowedAndNothingPluggedInIsNotACrash) {
@@ -212,6 +234,17 @@ TEST(ShellWindowPlacesTest, TheDisplayAWindowIsOnCanBeAskedForOnItsOwn) {
 
   EXPECT_EQ(places.Of(1), 100);
   EXPECT_EQ(places.Of(2), display::kInvalidDisplayId);
+}
+
+TEST(ShellWindowPlacesTest, AMovedWindowIsOnItsNewDisplay) {
+  // The host's window moves when the host does, and must not read as still
+  // on the display it left.
+  ShellWindowPlaces places;
+  places.Update({Seen(1, 100)}, {});
+
+  places.Move(1, 200);
+
+  EXPECT_EQ(places.Update({Seen(1, 100)}, {}), std::vector<int64_t>({200}));
 }
 
 }  // namespace

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# A bubble moves in the same display frame as its window's content: each
-# captured frame shows the bubble at the content it is anchored to.
+# A subsurface moves in the same display frame as its window's content: each
+# captured frame shows the bubble at the content it is anchored to, since the
+# window's frame draws it.
 #
 #   nix develop .#full --command \
 #     ./packages/domicile-engine/scripts/under-wayland.sh /build/chromium/src \
@@ -8,19 +9,18 @@
 #
 # `domicile-test-client --scrolling-bubble` scrolls a #339966 stripe down its
 # window, a step each frame, and moves a sync subsurface bubble (#C04020) onto
-# the stripe in the same commit. The shell (guard-scrolling-bubble.js) calls
-# `syncFrames()` and sets each `<app frame>` in the same render as the move.
-# The compositor casts its monitor to PipeWire (`DOMICILE_CAST_MONITOR`), and
-# `domicile-test-cast-reader` prints where both colors are in each frame. The
-# claim: in every frame that shows the bubble, its top is the stripe's.
+# the stripe in the same commit. The shell (guard-scrolling-bubble.js) draws
+# the window's one `<app>`; the bubble is in the window's frame, which embeds
+# it (`domicile_surface_set_children`). The compositor casts its monitor to
+# PipeWire (`DOMICILE_CAST_MONITOR`), and `domicile-test-cast-reader` prints
+# where both colors are in each frame. The claim: in every frame that shows
+# the bubble, its top is the stripe's.
 #
-# Control: NEGATIVE=1 runs the same synced shell, but it places each window
-# where the move before put it (`?late=1`): the move without its frame. The
-# bubble must be off its stripe in at least one frame, so the claim's frames
-# can show a lag. A page that ignores frames is no control: it embeds the
-# frames the control channel names with each move, so it does not lag either.
+# Control: NEGATIVE=1 runs the client with `--late-bubble`, which moves the
+# bubble to where the stripe was the frame before. The bubble must be off its
+# stripe in at least one frame, so the claim's frames can show a lag.
 #
-# See docs/architecture/WINDOW-COMPOSITING.md#what-each-side-knows.
+# See docs/architecture/WINDOW-COMPOSITING.md#subsurfaces.
 set -u
 
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
@@ -48,8 +48,8 @@ STRIPE="339966"
 # NEGATIVE=1 runs the control. See the header.
 NEGATIVE="${NEGATIVE:-0}"
 MODE="sync"
-LATE=0
-[ "$NEGATIVE" = "1" ] && MODE="control" && LATE=1
+LATE=()
+[ "$NEGATIVE" = "1" ] && MODE="control" && LATE=(--late-bubble)
 
 # Frames to read: four seconds at 60 a second, the scroll's period ten times
 # over.
@@ -142,7 +142,7 @@ rm -f "$COMP_SOCK" "$COMP_SOCK.session" "$ENGINE_LOG" "$COMP_LOG" "$FRAMES_LOG"
 rm -rf "$PROFILE"; mkdir -p "$PROFILE"
 "$CHROMIUM/$OUT/chrome" \
   --ozone-platform=wayland \
-  --app="domicile://shell/?late=$LATE" \
+  --app="domicile://shell/" \
   --domicile-shell-root="$SCRIPTS" \
   --domicile-shell-module=guard-scrolling-bubble.js \
   --domicile-control-socket="$COMP_SOCK" \
@@ -190,13 +190,13 @@ CLIENT_DISPLAY=$(grep -a "apps connect here" "$COMP_LOG" | grep -aoE "wayland-[0
 rm -f "$CLI_LOG"
 echo "driving domicile-test-client --scrolling-bubble"
 WAYLAND_DISPLAY="$CLIENT_DISPLAY" timeout "$CLIENT_LIVES_FOR" \
-  "$CLIENT" --title scrolling --scrolling-bubble >"$CLI_LOG" 2>&1 &
+  "$CLIENT" --title scrolling --scrolling-bubble "${LATE[@]}" >"$CLI_LOG" 2>&1 &
 STARTED+=($!)
 
 TRIES=$((FOR_SECONDS * 4))
-# Both `<app>`s are on the page: the window's, then the bubble's.
+# The window's `<app>` is on the page.
 for _ in $(seq 1 "$TRIES"); do
-  [ "$(grep -ac "GUARD drawn" "$ENGINE_LOG")" -ge 2 ] && break
+  [ "$(grep -ac "GUARD drawn" "$ENGINE_LOG")" -ge 1 ] && break
   sleep 0.25
 done
 wait_for_line "$TRIES" "cast ready" "$COMP_LOG" || {
@@ -247,18 +247,16 @@ measure() { # the reader's frames
   ' "$1"
 }
 
-SYNCED=0
-grep -aq "GUARD synced" "$ENGINE_LOG" && SYNCED=1
-MEASURED="$MODE $SYNCED $(measure "$FRAMES_LOG")"
+MEASURED="$MODE $(measure "$FRAMES_LOG")"
 echo
 echo "measured: $MEASURED"
-echo "  (mode synced frames with-the-bubble stripe-tops off)"
+echo "  (mode frames with-the-bubble stripe-tops off)"
 
 # Which end to blame. `packages/domicile-engine/tests/test-scrolling-bubble-guard.sh` runs this block
-# directly. MEASURED is "<mode> <synced> <frames> <with> <tops> <off>".
+# directly. MEASURED is "<mode> <frames> <with> <tops> <off>".
 FAILURE=""
 PASSED=""
-read -r MODE_READ SYNCED_READ FRAMES_READ WITH TOPS OFF <<<"$MEASURED"
+read -r MODE_READ FRAMES_READ WITH TOPS OFF <<<"$MEASURED"
 if [ "${MODE_READ:-}" != "sync" ] && [ "${MODE_READ:-}" != "control" ]; then
   FAILURE="there is no measurement here this guard can place ($MEASURED): \
 the run did not get as far as reading, or ran a mode this guard does not know"
@@ -267,28 +265,24 @@ elif [ "$FRAMES_READ" -eq 0 ]; then
 compositor captured nothing (the reader's and the compositor's logs say which)"
 elif [ "$WITH" -lt 60 ]; then
   FAILURE="only $WITH of $FRAMES_READ captured frames show the bubble, too \
-few to say it keeps up: the page did not draw the bubble's <app>, or the \
-client never opened it"
+few to say it keeps up: the window's frame did not draw it, or the client \
+never opened it"
 elif [ "$TOPS" -lt 5 ]; then
   FAILURE="the window did not scroll in the captured frames: its stripe was \
 at $TOPS place(s), so no frame could show a lag"
-elif [ "$SYNCED_READ" != "1" ]; then
-  FAILURE="the compositor never named a synced frame to the page, so no move \
-was synced: the page's syncFrames() did not reach it, or the engine has no \
-domicile_surface_sync"
 elif [ "$MODE_READ" = "sync" ] && [ "$OFF" -gt 0 ]; then
   FAILURE="THE BUBBLE LAGGED: in $OFF of $WITH captured frames the bubble is \
-not at its window's stripe. The page showed a window frame without the move \
-synced with it, or the move without its frame"
+not at its window's stripe. The window's frame showed the subsurface a \
+frame apart from the content it was committed with"
 elif [ "$MODE_READ" = "sync" ]; then
   PASSED="in all $WITH captured frames with the bubble, it is at its \
 window's stripe, $TOPS places down the scroll"
 elif [ "$OFF" -eq 0 ]; then
-  FAILURE="the control placed each move a step late, yet its bubble was at \
-its stripe in all $WITH frames, so the guard cannot see a lag"
+  FAILURE="the control moved its bubble a frame late, yet it was at its \
+stripe in all $WITH frames, so the guard cannot see a lag"
 else
-  PASSED="the control is sharp: a move placed a step late puts the bubble \
-off its stripe in $OFF of $WITH captured frames"
+  PASSED="the control is sharp: a bubble moved a frame late is off its \
+stripe in $OFF of $WITH captured frames"
 fi
 
 if [ -n "$PASSED" ]; then
@@ -307,7 +301,7 @@ grep -aE "GUARD|domicile:" "$ENGINE_LOG" | tail -12 | cut -c1-200 | sed 's/^/  /
 echo "the engine's last words:" >&2
 last_words "$ENGINE_LOG" >&2
 echo "the compositor's last words:" >&2
-grep -aE "cast|engine|frame sink|bubble|ERROR|WARN" "$COMP_LOG" | tail -30 | sed 's/^/  /' >&2
+grep -aE "cast|engine|frame sink|subsurface|ERROR|WARN" "$COMP_LOG" | tail -30 | sed 's/^/  /' >&2
 echo "the client said:" >&2
 tail -5 "$CLI_LOG" | sed 's/^/  /' >&2
 exit 1

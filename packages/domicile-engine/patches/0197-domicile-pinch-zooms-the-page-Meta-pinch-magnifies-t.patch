@@ -29,7 +29,7 @@ job builds it on `crux`.
 ---
  .../render_widget_host_input_event_router.cc  | 54 +++++++++++++++++++
  .../render_widget_host_input_event_router.h   | 12 +++++
- .../cross_process_frame_connector.cc          | 13 ++++++
+ .../cross_process_frame_connector.cc          | 13 +++++
  .../render_widget_host_view_aura.cc           |  5 +-
  ui/events/ozone/evdev/event_factory_evdev.cc  |  6 ++-
  .../wayland/host/wayland_event_source.cc      |  6 ++-
@@ -179,10 +179,10 @@ index 74dcb3d..8a8585f 100644
    return parent ? parent->GetPinchZoomTarget() : nullptr;
  }
 diff --git a/content/browser/renderer_host/render_widget_host_view_aura.cc b/content/browser/renderer_host/render_widget_host_view_aura.cc
-index 48d4cce..d0e5fb6 100644
+index 790368a..9b7535d 100644
 --- a/content/browser/renderer_host/render_widget_host_view_aura.cc
 +++ b/content/browser/renderer_host/render_widget_host_view_aura.cc
-@@ -1473,7 +1473,10 @@ void RenderWidgetHostViewAura::GestureEventAck(
+@@ -1496,7 +1496,10 @@ void RenderWidgetHostViewAura::GestureEventAck(
  
    event_handler_->GestureEventAck(event, ack_result);
  
@@ -195,10 +195,10 @@ index 48d4cce..d0e5fb6 100644
  
  void RenderWidgetHostViewAura::ProcessAckedTouchEvent(
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
-index c7e9210..ed6a5ee 100644
+index 6d4111d..baccb52 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.cc
 +++ b/ui/events/ozone/evdev/event_factory_evdev.cc
-@@ -391,8 +391,10 @@ void EventFactoryEvdev::DispatchPinchEvent(const PinchEventParams& params) {
+@@ -418,8 +418,10 @@ void EventFactoryEvdev::DispatchPinchEvent(const PinchEventParams& params) {
    if (params.type == EventType::kGesturePinchUpdate) {
      details.set_scale(params.scale);
    }
@@ -212,10 +212,10 @@ index c7e9210..ed6a5ee 100644
      SetPinchMetadata(event, *params.native_pinch);
    }
 diff --git a/ui/ozone/platform/wayland/host/wayland_event_source.cc b/ui/ozone/platform/wayland/host/wayland_event_source.cc
-index e6f52f4..d8f8b94 100644
+index 5200c00..2dbdb31 100644
 --- a/ui/ozone/platform/wayland/host/wayland_event_source.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_event_source.cc
-@@ -956,8 +956,10 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
+@@ -949,8 +949,10 @@ void WaylandEventSource::OnPinchEvent(EventType event_type,
    }
  
    auto location = pointer_location_ + delta;

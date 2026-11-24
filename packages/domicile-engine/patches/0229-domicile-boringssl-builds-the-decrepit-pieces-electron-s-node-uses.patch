@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: BoringSSL builds the decrepit pieces Electron's
+ Node uses
+
+Electron's BoringSSL patches expose RIPEMD-160 and extra ciphers that
+Node's crypto offers, and they reach into BoringSSL's decrepit/, which
+Chromium doesn't build: the link failed on RIPEMD160_Init. This builds
+those sources, as Electron's boringssl_build_gn.patch does.
+---
+ third_party/boringssl/BUILD.gn | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/third_party/boringssl/BUILD.gn b/third_party/boringssl/BUILD.gn
+index f4e51bf..3a838d5 100644
+--- a/third_party/boringssl/BUILD.gn
++++ b/third_party/boringssl/BUILD.gn
+@@ -47,6 +47,18 @@ all_sources = bcm_internal_headers + bcm_sources + crypto_internal_headers +
+               crypto_sources + ssl_internal_headers + ssl_sources + pki_sources
+ all_headers = crypto_headers + ssl_headers + pki_headers + pki_internal_headers
+ 
++# What Electron's Node needs of BoringSSL, which the engine builds for
++# Electron apps' main processes: these decrepit ciphers and digests, which
++# Node's crypto offers. As Electron's boringssl_build_gn.patch adds them.
++all_sources += [
++  "decrepit/blowfish/blowfish.cc",
++  "decrepit/cfb/cfb.cc",
++  "decrepit/evp/evp_do_all.cc",
++  "decrepit/ripemd/internal.h",
++  "decrepit/ripemd/ripemd.cc",
++  "decrepit/xts/xts.cc",
++]
++
+ if (enable_rust) {
+   rust_bindgen_generator("raw_bssl_sys_bindings") {
+     output_name = "bindgen"

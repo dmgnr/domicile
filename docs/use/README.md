@@ -13,6 +13,8 @@ site: [domicile-desktop.com/docs](https://domicile-desktop.com/docs).
 
 - [Windows and workspaces](WINDOWS.md)
 - [Browsing and web apps](BROWSER.md)
+- [Electron apps](ELECTRON-APPS.md)
+- [Agents](AGENTS.md)
 - [The launcher](LAUNCHER.md)
 - [The top bar](TOP-BAR.md)
 - [Notifications](NOTIFICATIONS.md)

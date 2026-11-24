@@ -10,9 +10,12 @@ export enum PageId {
   Startup,
   Shell,
   Extensions,
+  Profiles,
+  Agents,
   Permissions,
   SiteData,
   Code,
+  Troubleshooting,
 }
 
 /** Each page's name and what it holds. */
@@ -65,6 +68,18 @@ export const PAGES = [
     title: "Extensions",
   },
   {
+    description:
+      "Each profile keeps its own sign-ins, saved data and extensions. Pages from every profile share your windows.",
+    id: PageId.Profiles,
+    title: "Profiles",
+  },
+  {
+    description:
+      "Apps like Claude Code that can see and use your desktop. Each asks before it starts.",
+    id: PageId.Agents,
+    title: "Agents",
+  },
+  {
     description: "What each site may use: the camera, your location and more.",
     id: PageId.Permissions,
     title: "Site permissions",
@@ -78,5 +93,10 @@ export const PAGES = [
     description: "The config file and the shell, as code.",
     id: PageId.Code,
     title: "Code",
+  },
+  {
+    description: "Logs to send along when something goes wrong.",
+    id: PageId.Troubleshooting,
+    title: "Troubleshooting",
   },
 ] as const;

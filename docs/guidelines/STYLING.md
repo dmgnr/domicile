@@ -184,6 +184,7 @@ Stick to the **semantic** color tokens defined by the domicile preset:
 | `card` | Card / elevated surface backgrounds |
 | `accent` | Primary brand / focus / selection |
 | `danger` / `warning` / `success` | Status colors |
+| `onDanger` | Text on a `danger` fill |
 | `private` | Marks a private browser window |
 | `backdrop` | Modal/popover backdrop overlay |
 | `skeleton` | Loading skeleton fills |

@@ -1,0 +1,56 @@
+// Copyright 2026 Connor Prussin
+// SPDX-License-Identifier: MIT
+
+// Dispatched by a <webview> when a site in its page signs in with an identity
+// provider ("Sign in with Google", FedCM), once for each step to show:
+// waiting for the accounts, the accounts, signed out of the provider, signing
+// in, and an error. The next step replaces it. Chrome would draw each as a
+// dialog of its own.
+//
+// Domicile-only, not a web standard. No constructor: only the browser creates
+// one.
+[
+    RuntimeEnabled=DomicileExternalSurface,
+    Exposed=Window
+] interface DomicileIdentityEvent : Event {
+  // "loading", "accounts", "signed-out", "verifying" or "error".
+  readonly attribute DOMString step;
+
+  // The page asked from its own sign-in button, so show the step over the
+  // page. Otherwise the site offers it unasked: leave the page usable.
+  readonly attribute boolean button;
+
+  // The site signing in, as Chrome names it ("medium.com"), and the frame
+  // asking when that is another site's, or "".
+  readonly attribute DOMString site;
+  readonly attribute DOMString frameSite;
+
+  // What signing in is for, as the site says: "sign-in", "sign-up", "use" or
+  // "continue".
+  readonly attribute DOMString purpose;
+
+  // The providers, and the accounts: on "accounts" those to pick from, on
+  // "verifying" the one signing in.
+  sequence<DomicileIdentityProvider> providers();
+  sequence<DomicileIdentityAccount> accounts();
+
+  // On "verifying": signing in without the user picking, to a site they
+  // signed in to before.
+  readonly attribute boolean automatic;
+
+  // On "error": the provider's error code, such as "access_denied", or "";
+  // and its page about the error, or "" for none.
+  readonly attribute DOMString error;
+  readonly attribute USVString errorUrl;
+
+  // Answers. `choose()` signs in with an account, on "accounts".
+  // `signInToProvider()` opens a provider's sign-in page in a browser window,
+  // on "accounts" and "signed-out". `moreDetails()` opens the error's page,
+  // on an "error" with an `errorUrl`. `dismiss()` closes the step. Each
+  // throws InvalidStateError if already answered or withdrawn, or on a step
+  // that does not take it, and TypeError for an index out of range.
+  [RaisesException] undefined choose(long account);
+  [RaisesException] undefined signInToProvider(long provider);
+  [RaisesException] undefined moreDetails();
+  [RaisesException] undefined dismiss();
+};

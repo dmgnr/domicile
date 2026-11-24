@@ -33,6 +33,18 @@ out="$(nix build --no-link --print-out-paths .#domicile)"
   echo "libexec/domicile/engine holds no chrome" >&2
   exit 1
 }
+# Its three lines, joined with `|`.
+version="$("$out/bin/domicile" --version | tr '\n' '|')"
+grep -qE '^domicile [^|]+\|commit +[0-9a-f]{40}(-dirty)?\|engine +s[0-9a-f]{12}, [^|]+\|$' <<<"$version" || {
+  echo "domicile --version does not name the version, commit and engine: $version" >&2
+  exit 1
+}
+[ -x "$out/libexec/domicile/electron-host" ] &&
+  [ -f "$(sed -n 's/^exec [^ ]* \([^ ]*\) .*/\1/p' "$out/libexec/domicile/electron-host")" ] || {
+  echo "libexec/domicile/electron-host is missing or runs no main.ts, so" >&2
+  echo "  domicile open --electron has nothing to run apps with" >&2
+  exit 1
+}
 for program in domicile-history domicile-settings domicile-app-host; do
   [ -x "$out/bin/$program" ] && [ ! -L "$out/bin/$program" ] || {
     echo "bin/$program is missing or a symlink, so it cannot find the" >&2
@@ -40,6 +52,11 @@ for program in domicile-history domicile-settings domicile-app-host; do
     exit 1
   }
 done
+[ -f "$out/share/man/man1/domicile.1" ] && [ -f "$out/share/man/man1/domicile-list-windows.1" ] || {
+  echo "share/man/man1 lacks domicile.1 or domicile-list-windows.1, so" >&2
+  echo "  man domicile finds nothing" >&2
+  exit 1
+}
 for module in settings history; do
   [ -f "$out/libexec/domicile/app-modules/$module/$module.js" ] || {
     echo "libexec/domicile/app-modules/$module holds no $module.js, so" >&2

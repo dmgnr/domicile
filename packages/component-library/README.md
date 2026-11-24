@@ -50,9 +50,10 @@ Each export is `@domicile-desktop/component-library/<name>`.
 | `PanelSection` | A group in a panel under a small label, such as Inboxes or Paired. |
 | `source-name` | `sourceName`: how a screen cast's source is named. |
 | `Popover` | Non-modal panel anchored to the control that opened it. `tone="overPhoto"` is a see-through panel for the bar, dark in either theme. |
-| `PopupBoundary` | Keeps every popup inside it (tooltips, popovers, menus, lists) within a box, such as a window's frame. Outside one, popups stay on their `Screen`. `Popover` and `Tooltip` take `spansWindows` to leave it. |
+| `PopupBoundary` | Keeps every popup inside it (tooltips, popovers, menus, lists) within a box, such as a window's frame, and closes them when the box moves. Outside one, popups stay on their `Screen`. `Popover` and `Tooltip` take `spansWindows` to leave it. |
+| `PopupScene` | Closes every popup inside it when its `scene` key changes. A shell keys it on what moves or covers its windows: an overview, a fullscreen window, a workspace switch. |
 | `Provider` | base-ui `DirectionProvider` wrapper. Every app roots its tree in it. |
-| `QuickTile` | Quick settings tile into the details of something nearly always on, such as Wi-Fi: one button with an arrow, or only its state without details. Drawn in `currentcolor`. |
+| `QuickTile` | Quick settings tile into the details of something nearly always on, such as Wi-Fi: one button with an arrow, or only its state without details. Its icon's circle is lit in the accent color while `lit`. |
 | `QuickToggle` | Quick settings switch for something turned on and off often: an icon in a circle, in the accent color while on, over its label. |
 | `Screen` | Renders its children once per selected display. |
 | `DisplayProvider` | Supplies the host's displays to `Screen`. |

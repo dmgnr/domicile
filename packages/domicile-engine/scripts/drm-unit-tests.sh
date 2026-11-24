@@ -39,8 +39,8 @@ case "$WHOLE_SUITE" in
 esac
 
 SUITES=(
-  DrmScreenTest:37
-  DrmModesetTest:38
+  DrmScreenTest:47
+  DrmModesetTest:41
   DrmVtSwitcherTest:20
   DrmSleepTest:2
   DrmFullscreenTest:4
@@ -48,11 +48,13 @@ SUITES=(
   DrmInputOpensTest:17
   DrmInputControllerTest:7
   DrmCursorFactoryTest:5
-  DrmCursorFactoryThemeTest:5
+  DrmCursorFactoryThemeTest:9
+  DrmCursorTintTest:4
   DrmClipboardTest:12
   DrmEdidSerialTest:18
   DrmConnectorNameTest:6
   DrmPointerCrossingTest:20
+  DrmPointerConfinementTest:6
   DrmPointerTargetsTest:6
   DrmDeskInputTest:6
   DrmCanvasTest:7
@@ -77,7 +79,8 @@ SUITES=(
   HeadlessDeskInputTest:10
   HeadlessDeskCursorsTest:4
   DrmColorCommitTest:3
-  DrmPageFlipTimeoutTest:8
+  DrmCursorHotspotTest:2
+  DrmPageFlipTimeoutTest:10
   DrmDamageClipsTest:3
   DrmInputMethodTest:13
   DeskInputMethodTest:4

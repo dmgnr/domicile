@@ -1,0 +1,541 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 20 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: Node builds against V8 without
+ ArrayBufferView::Buffer()
+
+V8 removed the deprecated `v8::ArrayBufferView::Buffer()` and
+`v8::WasmMemoryObject::Buffer()` (V8 233e271021, in Chromium
+160.0.8174.0), and `v8::RegExp::Exec` now returns `MaybeLocal<Value>`.
+Electron's src_stop_using_deprecated_arraybufferview_buffer.patch only
+moved the headers embedders compile, so the engine's Node build failed
+in aliased_buffer-inl.h.
+
+- A call that only reads the buffer (Data, GetBackingStore, WasDetached,
+  IsDetachable, IsSharedArrayBuffer) uses `GetBuffer()`.
+- A call that needs a `Local<ArrayBuffer>` uses
+  `GetBuffer().As<v8::ArrayBuffer>()`, which is what `Buffer()` did.
+- URLPattern's regex provider keeps `Exec`'s result as a `Value`.
+
+Drop this when Electron's own patches move to a V8 without `Buffer()`.
+---
+ src/aliased_buffer-inl.h    |  2 +-
+ src/crypto/crypto_util.cc   |  2 +-
+ src/crypto/crypto_util.h    |  2 +-
+ src/dataqueue/queue.cc      |  6 +++---
+ src/encoding_binding.cc     |  4 ++--
+ src/ffi/data.cc             |  4 ++--
+ src/ffi/fast.cc             |  4 ++--
+ src/ffi/types.cc            |  4 ++--
+ src/heap_utils.cc           |  2 +-
+ src/histogram.cc            |  6 +++---
+ src/js_native_api_v8.cc     |  4 ++--
+ src/module_wrap.cc          |  2 +-
+ src/node_blob.cc            |  4 ++--
+ src/node_buffer.cc          | 10 +++++-----
+ src/node_contextify.cc      |  4 ++--
+ src/node_file.cc            |  2 +-
+ src/node_ipc_serdes.cc      |  2 +-
+ src/node_os.cc              |  2 +-
+ src/node_process_methods.cc |  2 +-
+ src/node_sqlite.cc          |  2 +-
+ src/node_url_pattern.cc     |  4 ++--
+ src/node_wasi.cc            |  4 ++--
+ src/node_wasm_web_api.cc    |  2 +-
+ src/node_zlib.cc            |  2 +-
+ src/quic/data.cc            |  4 ++--
+ src/quic/streams.cc         |  4 ++--
+ 26 files changed, 45 insertions(+), 45 deletions(-)
+
+diff --git a/src/aliased_buffer-inl.h b/src/aliased_buffer-inl.h
+index 38ca828e..ea1bcdb4 100644
+--- a/src/aliased_buffer-inl.h
++++ b/src/aliased_buffer-inl.h
+@@ -146,7 +146,7 @@ template <typename NativeT, typename V8T>
+   requires std::is_scalar_v<NativeT>
+ v8::Local<v8::ArrayBuffer> AliasedBufferBase<NativeT, V8T>::GetArrayBuffer()
+     const {
+-  return GetJSArray()->Buffer();
++  return GetJSArray()->GetBuffer().template As<v8::ArrayBuffer>();
+ }
+ 
+ template <typename NativeT, typename V8T>
+diff --git a/src/crypto/crypto_util.cc b/src/crypto/crypto_util.cc
+index a99b4f10..57b26abd 100644
+--- a/src/crypto/crypto_util.cc
++++ b/src/crypto/crypto_util.cc
+@@ -1142,7 +1142,7 @@ MaybeLocal<Value> ToWebCryptoJobResult(Environment* env, Local<Value> value) {
+   }
+ 
+   if (Buffer::HasInstance(value)) {
+-    return value.As<ArrayBufferView>()->Buffer();
++    return value.As<ArrayBufferView>()->GetBuffer().As<v8::ArrayBuffer>();
+   }
+ 
+   CHECK(value->IsBoolean() || (value->IsObject() && !value->IsArray() &&
+diff --git a/src/crypto/crypto_util.h b/src/crypto/crypto_util.h
+index 00ac9f67..fb50d1b6 100644
+--- a/src/crypto/crypto_util.h
++++ b/src/crypto/crypto_util.h
+@@ -706,7 +706,7 @@ class ArrayBufferOrViewContents final {
+       auto view = buf.As<v8::ArrayBufferView>();
+       offset_ = view->ByteOffset();
+       length_ = view->ByteLength();
+-      data_ = view->Buffer()->Data();
++      data_ = view->GetBuffer()->Data();
+     } else if (buf->IsArrayBuffer()) {
+       auto ab = buf.As<v8::ArrayBuffer>();
+       offset_ = 0;
+diff --git a/src/dataqueue/queue.cc b/src/dataqueue/queue.cc
+index 96a7956b..7c623ec0 100644
+--- a/src/dataqueue/queue.cc
++++ b/src/dataqueue/queue.cc
+@@ -1163,13 +1163,13 @@ std::unique_ptr<DataQueue::Entry> DataQueue::CreateInMemoryEntryFromView(
+   // the underlying buffer, something else could modify the buffer while we're
+   // holding the reference, which means we cannot guarantee that reads will be
+   // idempotent.
+-  if (!view->Buffer()->IsDetachable()) {
++  if (!view->GetBuffer()->IsDetachable()) {
+     return nullptr;
+   }
+-  auto store = view->Buffer()->GetBackingStore();
++  auto store = view->GetBuffer()->GetBackingStore();
+   auto offset = view->ByteOffset();
+   auto length = view->ByteLength();
+-  USE(view->Buffer()->Detach(Local<Value>()));
++  USE(view->GetBuffer().As<v8::ArrayBuffer>()->Detach(Local<Value>()));
+   return CreateInMemoryEntryFromBackingStore(std::move(store), offset, length);
+ }
+ 
+diff --git a/src/encoding_binding.cc b/src/encoding_binding.cc
+index 8a445088..d1b9368f 100644
+--- a/src/encoding_binding.cc
++++ b/src/encoding_binding.cc
+@@ -206,7 +206,7 @@ void BindingData::EncodeInto(const FunctionCallbackInfo<Value>& args) {
+   Local<String> source = args[0].As<String>();
+ 
+   Local<Uint8Array> dest = args[1].As<Uint8Array>();
+-  Local<ArrayBuffer> buf = dest->Buffer();
++  Local<ArrayBuffer> buf = dest->GetBuffer().As<v8::ArrayBuffer>();
+ 
+   // Handle detached buffers - return {read: 0, written: 0}
+   if (buf->Data() == nullptr) {
+@@ -434,7 +434,7 @@ void BindingData::DecodeUTF8(const FunctionCallbackInfo<Value>& args) {
+ 
+   if (args[0]->IsArrayBufferView()) {
+     Local<v8::ArrayBufferView> view = args[0].As<v8::ArrayBufferView>();
+-    isShared = view->Buffer()->IsSharedArrayBuffer();
++    isShared = view->GetBuffer()->IsSharedArrayBuffer();
+   }
+ 
+   ArrayBufferViewContents<char> buffer(args[0]);
+diff --git a/src/ffi/data.cc b/src/ffi/data.cc
+index ca3315d4..cf729414 100644
+--- a/src/ffi/data.cc
++++ b/src/ffi/data.cc
+@@ -793,7 +793,7 @@ void GetRawPointer(const FunctionCallbackInfo<Value>& args) {
+     store = args[0].As<SharedArrayBuffer>()->GetBackingStore();
+   } else if (args[0]->IsArrayBufferView()) {
+     Local<ArrayBufferView> view = args[0].As<ArrayBufferView>();
+-    if (view->Buffer()->WasDetached()) {
++    if (view->GetBuffer()->WasDetached()) {
+       THROW_ERR_INVALID_ARG_VALUE(
+           env, "ArrayBufferView is backed by a detached ArrayBuffer");
+       return;
+@@ -801,7 +801,7 @@ void GetRawPointer(const FunctionCallbackInfo<Value>& args) {
+     // Access the store here to ensure that it exists. Small typed arrays
+     // may not have a store until this point and can instead be stored
+     // entirely in-heap.
+-    store = view->Buffer()->GetBackingStore();
++    store = view->GetBuffer()->GetBackingStore();
+     offset = view->ByteOffset();
+   } else {
+     THROW_ERR_INVALID_ARG_TYPE(
+diff --git a/src/ffi/fast.cc b/src/ffi/fast.cc
+index 4f6606d5..bd5d55cc 100644
+--- a/src/ffi/fast.cc
++++ b/src/ffi/fast.cc
+@@ -125,7 +125,7 @@ uintptr_t PointerFromValue(v8::Local<v8::Value> value) {
+   // ArrayBuffer and SharedArrayBuffer point at the start of their store.
+   if (value->IsArrayBufferView()) {
+     v8::Local<v8::ArrayBufferView> view = value.As<v8::ArrayBufferView>();
+-    void* data = view->Buffer()->Data();
++    void* data = view->GetBuffer()->Data();
+     return reinterpret_cast<uintptr_t>(static_cast<char*>(data) +
+                                        view->ByteOffset());
+   }
+@@ -253,7 +253,7 @@ extern "C" uintptr_t node_ffi_fast_buffer_data(v8::Local<v8::Value> value,
+   // lifetimes match the generic path.
+   if (value->IsArrayBufferView()) {
+     v8::Local<v8::ArrayBufferView> view = value.As<v8::ArrayBufferView>();
+-    if (view->Buffer()->WasDetached()) {
++    if (view->GetBuffer()->WasDetached()) {
+       if (isolate != nullptr) {
+         // No HandleScope is active during a Fast API call, so open one before
+         // creating the error object.
+diff --git a/src/ffi/types.cc b/src/ffi/types.cc
+index 5a910e63..8196014f 100644
+--- a/src/ffi/types.cc
++++ b/src/ffi/types.cc
+@@ -714,7 +714,7 @@ Maybe<FFIArgumentCategory> ToFFIArgument(Environment* env,
+       // invalidating that backing store during the active FFI call is
+       // unsupported and dangerous.
+       Local<ArrayBufferView> view = arg.As<ArrayBufferView>();
+-      if (view->Buffer()->WasDetached()) {
++      if (view->GetBuffer()->WasDetached()) {
+         THROW_ERR_INVALID_ARG_VALUE(
+             env,
+             "Argument %u is an ArrayBufferView backed by a detached "
+@@ -722,7 +722,7 @@ Maybe<FFIArgumentCategory> ToFFIArgument(Environment* env,
+             index);
+         return {};
+       }
+-      std::shared_ptr<BackingStore> store = view->Buffer()->GetBackingStore();
++      std::shared_ptr<BackingStore> store = view->GetBuffer()->GetBackingStore();
+ 
+       if (!store) {
+         THROW_ERR_INVALID_ARG_VALUE(
+diff --git a/src/heap_utils.cc b/src/heap_utils.cc
+index bb7519e4..d7a7e264 100644
+--- a/src/heap_utils.cc
++++ b/src/heap_utils.cc
+@@ -431,7 +431,7 @@ HeapProfiler::HeapSnapshotOptions GetHeapSnapshotOptions(
+   CHECK(options_value->IsUint8Array());
+   Local<Uint8Array> arr = options_value.As<Uint8Array>();
+   uint8_t* options =
+-      static_cast<uint8_t*>(arr->Buffer()->Data()) + arr->ByteOffset();
++      static_cast<uint8_t*>(arr->GetBuffer()->Data()) + arr->ByteOffset();
+   HeapProfiler::HeapSnapshotOptions result;
+   result.snapshot_mode = options[0]
+                              ? HeapProfiler::HeapSnapshotMode::kExposeInternals
+diff --git a/src/histogram.cc b/src/histogram.cc
+index 6efe2d69..4104ac2a 100644
+--- a/src/histogram.cc
++++ b/src/histogram.cc
+@@ -3122,7 +3122,7 @@ void HistogramImpl::GetQrde(const FunctionCallbackInfo<Value>& args) {
+   Local<Float64Array> input = args[0].As<Float64Array>();
+   CHECK_GE(input->Length(), 2);
+   CHECK_LE(input->Length(), 1001);
+-  auto backing = input->Buffer()->GetBackingStore();
++  auto backing = input->GetBuffer()->GetBackingStore();
+   const double* data = reinterpret_cast<const double*>(
+       static_cast<const char*>(backing->Data()) + input->ByteOffset());
+   std::vector<double> probabilities(data, data + input->Length());
+@@ -3206,7 +3206,7 @@ void HistogramImpl::DoImport(const FunctionCallbackInfo<Value>& args) {
+     return;
+   }
+   Local<Uint8Array> input = args[0].As<Uint8Array>();
+-  auto backing = input->Buffer()->GetBackingStore();
++  auto backing = input->GetBuffer()->GetBackingStore();
+   const uint8_t* data =
+       static_cast<const uint8_t*>(backing->Data()) + input->ByteOffset();
+   size_t len = input->ByteLength();
+@@ -3279,7 +3279,7 @@ void HistogramImpl::GetPercentilesAt(const FunctionCallbackInfo<Value>& args) {
+   CHECK(args[1]->IsFloat64Array());
+   Local<Float64Array> input = args[1].As<Float64Array>();
+   size_t length = input->Length();
+-  auto backing = input->Buffer()->GetBackingStore();
++  auto backing = input->GetBuffer()->GetBackingStore();
+   double* percentiles = reinterpret_cast<double*>(
+       static_cast<char*>(backing->Data()) + input->ByteOffset());
+ 
+diff --git a/src/js_native_api_v8.cc b/src/js_native_api_v8.cc
+index 59f80e66..46d80d20 100644
+--- a/src/js_native_api_v8.cc
++++ b/src/js_native_api_v8.cc
+@@ -3396,7 +3396,7 @@ napi_status NAPI_CDECL napi_get_typedarray_info(napi_env env,
+   if (data != nullptr || arraybuffer != nullptr) {
+     // Calling Buffer() may have the side effect of allocating the buffer,
+     // so only do this when it’s needed.
+-    buffer = array->Buffer();
++    buffer = array->GetBuffer().As<v8::ArrayBuffer>();
+   }
+ 
+   if (data != nullptr) {
+@@ -3485,7 +3485,7 @@ napi_status NAPI_CDECL napi_get_dataview_info(napi_env env,
+   if (data != nullptr || arraybuffer != nullptr) {
+     // Calling Buffer() may have the side effect of allocating the buffer,
+     // so only do this when it’s needed.
+-    buffer = array->Buffer();
++    buffer = array->GetBuffer().As<v8::ArrayBuffer>();
+   }
+ 
+   if (data != nullptr) {
+diff --git a/src/module_wrap.cc b/src/module_wrap.cc
+index efaf53ad..7045f5d8 100644
+--- a/src/module_wrap.cc
++++ b/src/module_wrap.cc
+@@ -358,7 +358,7 @@ void ModuleWrap::New(const FunctionCallbackInfo<Value>& args) {
+         CHECK(!can_use_builtin_cache);  // We don't use this option internally.
+         Local<ArrayBufferView> cached_data_buf = args[5].As<ArrayBufferView>();
+         uint8_t* data =
+-            static_cast<uint8_t*>(cached_data_buf->Buffer()->Data());
++            static_cast<uint8_t*>(cached_data_buf->GetBuffer()->Data());
+         user_cached_data =
+             new ScriptCompiler::CachedData(data + cached_data_buf->ByteOffset(),
+                                            cached_data_buf->ByteLength());
+diff --git a/src/node_blob.cc b/src/node_blob.cc
+index a04bc2be..fb5253cc 100644
+--- a/src/node_blob.cc
++++ b/src/node_blob.cc
+@@ -76,7 +76,7 @@ void Concat(const FunctionCallbackInfo<Value>& args) {
+     } else {
+       CHECK(val->IsArrayBufferView());
+       auto view = val.As<ArrayBufferView>();
+-      views.push_back(View{view->Buffer()->GetBackingStore(),
++      views.push_back(View{view->GetBuffer()->GetBackingStore(),
+                            view->ByteLength(),
+                            view->ByteOffset()});
+       total += view->ByteLength();
+@@ -244,7 +244,7 @@ void Blob::New(const FunctionCallbackInfo<Value>& args) {
+     } else if (entry->IsArrayBufferView()) {
+       Local<ArrayBufferView> view = entry.As<ArrayBufferView>();
+       auto ret = entryFromArrayBuffer(
+-          view->Buffer(), view->ByteLength(), view->ByteOffset());
++          view->GetBuffer().As<v8::ArrayBuffer>(), view->ByteLength(), view->ByteOffset());
+       if (!ret) return;
+       entries[i] = std::move(ret);
+     } else if (Blob::HasInstance(env, entry)) {
+diff --git a/src/node_buffer.cc b/src/node_buffer.cc
+index 1d16813b..caf8a967 100644
+--- a/src/node_buffer.cc
++++ b/src/node_buffer.cc
+@@ -257,7 +257,7 @@ bool HasInstance(Local<Object> obj) {
+ char* Data(Local<Value> val) {
+   CHECK(val->IsArrayBufferView());
+   Local<ArrayBufferView> ui = val.As<ArrayBufferView>();
+-  return static_cast<char*>(ui->Buffer()->Data()) + ui->ByteOffset();
++  return static_cast<char*>(ui->GetBuffer()->Data()) + ui->ByteOffset();
+ }
+ 
+ 
+@@ -584,7 +584,7 @@ void StringSlice(const FunctionCallbackInfo<Value>& args) {
+   size_t length = end - start;
+ 
+   std::unique_ptr<char[]> data_copy;
+-  if (view->Buffer()->IsSharedArrayBuffer()) {
++  if (view->GetBuffer()->IsSharedArrayBuffer()) {
+     data_copy = std::make_unique_for_overwrite<char[]>(length);
+     memcpy(data_copy.get(), data_ptr + start, length);
+     data_ptr = data_copy.get();
+@@ -609,8 +609,8 @@ size_t CopyImpl(Local<Value> source_obj,
+   Local<ArrayBufferView> source = source_obj.As<ArrayBufferView>();
+   Local<ArrayBufferView> target = target_obj.As<ArrayBufferView>();
+ 
+-  Local<ArrayBuffer> source_ab = source->Buffer();
+-  Local<ArrayBuffer> target_ab = target->Buffer();
++  Local<ArrayBuffer> source_ab = source->GetBuffer().As<v8::ArrayBuffer>();
++  Local<ArrayBuffer> target_ab = target->GetBuffer().As<v8::ArrayBuffer>();
+ 
+   const size_t source_offset = source->ByteOffset() + source_start;
+   const size_t target_offset = target->ByteOffset() + target_start;
+@@ -1501,7 +1501,7 @@ static bool MaskArgs(Local<Value> source_obj,
+                      uint32_t mask) {
+   CHECK(destination_obj->IsArrayBufferView());
+   Local<ArrayBufferView> destination = destination_obj.As<ArrayBufferView>();
+-  Local<ArrayBuffer> destination_ab = destination->Buffer();
++  Local<ArrayBuffer> destination_ab = destination->GetBuffer().As<v8::ArrayBuffer>();
+   if (destination_ab->IsImmutable()) return false;
+   if (length == 0) return true;
+   const size_t destination_length = destination->ByteLength();
+diff --git a/src/node_contextify.cc b/src/node_contextify.cc
+index 661c6ffc..6dcb4203 100644
+--- a/src/node_contextify.cc
++++ b/src/node_contextify.cc
+@@ -1024,7 +1024,7 @@ void ContextifyScript::New(const FunctionCallbackInfo<Value>& args) {
+ 
+   ScriptCompiler::CachedData* cached_data = nullptr;
+   if (!cached_data_buf.IsEmpty()) {
+-    uint8_t* data = static_cast<uint8_t*>(cached_data_buf->Buffer()->Data());
++    uint8_t* data = static_cast<uint8_t*>(cached_data_buf->GetBuffer()->Data());
+     cached_data = new ScriptCompiler::CachedData(
+         data + cached_data_buf->ByteOffset(), cached_data_buf->ByteLength());
+   }
+@@ -1435,7 +1435,7 @@ void ContextifyFunction::CompileFunction(
+   // Read cache from cached data buffer
+   ScriptCompiler::CachedData* cached_data = nullptr;
+   if (!cached_data_buf.IsEmpty()) {
+-    uint8_t* data = static_cast<uint8_t*>(cached_data_buf->Buffer()->Data());
++    uint8_t* data = static_cast<uint8_t*>(cached_data_buf->GetBuffer()->Data());
+     cached_data = new ScriptCompiler::CachedData(
+       data + cached_data_buf->ByteOffset(), cached_data_buf->ByteLength());
+   }
+diff --git a/src/node_file.cc b/src/node_file.cc
+index f2fd41ee..13124711 100644
+--- a/src/node_file.cc
++++ b/src/node_file.cc
+@@ -3972,7 +3972,7 @@ class WriteFileJob final : public AsyncWrap, public ThreadPoolWork {
+     // detached or collected meanwhile; a resizable buffer can still have its
+     // pages decommitted by a shrink, so its contents are copied instead.
+     length_ = view->ByteLength();
+-    backing_store_ = view->Buffer()->GetBackingStore();
++    backing_store_ = view->GetBuffer()->GetBackingStore();
+     if (backing_store_->IsResizableByUserJavaScript()) {
+       copy_.reset(new char[length_]);
+       memcpy(copy_.get(),
+diff --git a/src/node_ipc_serdes.cc b/src/node_ipc_serdes.cc
+index 05d5ae7c..c1b2cd9c 100644
+--- a/src/node_ipc_serdes.cc
++++ b/src/node_ipc_serdes.cc
+@@ -346,7 +346,7 @@ static void Deserialize(const FunctionCallbackInfo<Value>& args) {
+ 
+   CHECK(args[0]->IsArrayBufferView());
+   Local<ArrayBufferView> view = args[0].As<ArrayBufferView>();
+-  Local<ArrayBuffer> ab = view->Buffer();
++  Local<ArrayBuffer> ab = view->GetBuffer().As<v8::ArrayBuffer>();
+   const size_t byte_offset = view->ByteOffset();
+   const size_t byte_length = view->ByteLength();
+   const uint8_t* data = static_cast<const uint8_t*>(ab->Data()) + byte_offset;
+diff --git a/src/node_os.cc b/src/node_os.cc
+index 4c7ebde4..a7f83730 100644
+--- a/src/node_os.cc
++++ b/src/node_os.cc
+@@ -186,7 +186,7 @@ static void GetLoadAvg(const FunctionCallbackInfo<Value>& args) {
+   CHECK(args[0]->IsFloat64Array());
+   Local<Float64Array> array = args[0].As<Float64Array>();
+   CHECK_EQ(array->Length(), 3);
+-  Local<ArrayBuffer> ab = array->Buffer();
++  Local<ArrayBuffer> ab = array->GetBuffer().As<v8::ArrayBuffer>();
+   double* loadavg = static_cast<double*>(ab->Data());
+   uv_loadavg(loadavg);
+ }
+diff --git a/src/node_process_methods.cc b/src/node_process_methods.cc
+index 6a35e5c5..8dba111b 100644
+--- a/src/node_process_methods.cc
++++ b/src/node_process_methods.cc
+@@ -108,7 +108,7 @@ inline Local<ArrayBuffer> get_fields_array_buffer(
+   Local<Float64Array> arr = args[index].As<Float64Array>();
+   CHECK_EQ(arr->Length(), array_length);
+   CHECK_EQ(arr->ByteOffset(), 0);
+-  return arr->Buffer();
++  return arr->GetBuffer().As<v8::ArrayBuffer>();
+ }
+ 
+ // CPUUsage use libuv's uv_getrusage() this-process resource usage accessor,
+diff --git a/src/node_sqlite.cc b/src/node_sqlite.cc
+index 4f98c622..c0b5a0d2 100644
+--- a/src/node_sqlite.cc
++++ b/src/node_sqlite.cc
+@@ -1833,7 +1833,7 @@ std::optional<std::string> ValidateDatabasePath(Environment* env,
+     size_t byteOffset = buffer->ByteOffset();
+     size_t byteLength = buffer->ByteLength();
+     auto data =
+-        static_cast<const uint8_t*>(buffer->Buffer()->Data()) + byteOffset;
++        static_cast<const uint8_t*>(buffer->GetBuffer()->Data()) + byteOffset;
+     if (std::find(data, data + byteLength, 0) == data + byteLength) {
+       return std::string(reinterpret_cast<const char*>(data), byteLength);
+     }
+diff --git a/src/node_url_pattern.cc b/src/node_url_pattern.cc
+index 63f01d58..ae2d2cba 100644
+--- a/src/node_url_pattern.cc
++++ b/src/node_url_pattern.cc
+@@ -108,7 +108,7 @@ bool URLPatternRegexProvider::regex_match(std::string_view input,
+            .ToLocal(&local_input)) {
+     return false;
+   }
+-  Local<Object> result_object;
++  Local<Value> result_object;
+   if (!pattern.Get(isolate)
+            ->Exec(env->context(), local_input)
+            .ToLocal(&result_object)) {
+@@ -129,7 +129,7 @@ URLPatternRegexProvider::regex_search(std::string_view input,
+            .ToLocal(&local_input)) {
+     return std::nullopt;
+   }
+-  Local<Object> exec_result_object;
++  Local<Value> exec_result_object;
+   auto pattern = global_pattern.Get(isolate);
+   if (!pattern->Exec(env->context(), local_input)
+            .ToLocal(&exec_result_object) ||
+diff --git a/src/node_wasi.cc b/src/node_wasi.cc
+index 6c2adc82..09d30510 100644
+--- a/src/node_wasi.cc
++++ b/src/node_wasi.cc
+@@ -281,7 +281,7 @@ R WASI::WasiFunction<FT, F, R, Args...>::FastCallback(
+     THROW_ERR_WASI_NOT_STARTED(isolate);
+     return EinvalError<R>();
+   }
+-  Local<ArrayBuffer> ab = wasi->memory_.Get(isolate)->Buffer();
++  Local<ArrayBuffer> ab = wasi->memory_.Get(isolate)->GetBuffer().As<v8::ArrayBuffer>();
+   size_t mem_size = ab->ByteLength();
+   char* mem_data = static_cast<char*>(ab->Data());
+   CHECK_NOT_NULL(mem_data);
+@@ -403,7 +403,7 @@ void WASI::WasiFunction<FT, F, R, Args...>::SlowCallback(
+   }
+ 
+   Local<WasmMemoryObject> memory = PersistentToLocal::Strong(wasi->memory_);
+-  Local<ArrayBuffer> ab = memory->Buffer();
++  Local<ArrayBuffer> ab = memory->GetBuffer().As<v8::ArrayBuffer>();
+   size_t mem_size = ab->ByteLength();
+   char* mem_data = static_cast<char*>(ab->Data());
+   CHECK_NOT_NULL(mem_data);
+diff --git a/src/node_wasm_web_api.cc b/src/node_wasm_web_api.cc
+index d977793e..e372849e 100644
+--- a/src/node_wasm_web_api.cc
++++ b/src/node_wasm_web_api.cc
+@@ -107,7 +107,7 @@ void WasmStreamingObject::Push(const FunctionCallbackInfo<Value>& args) {
+ 
+   if (chunk->IsArrayBufferView()) [[likely]] {
+     Local<ArrayBufferView> view = chunk.As<ArrayBufferView>();
+-    bytes = view->Buffer()->Data();
++    bytes = view->GetBuffer()->Data();
+     offset = view->ByteOffset();
+     size = view->ByteLength();
+   } else if (chunk->IsArrayBuffer()) [[likely]] {
+diff --git a/src/node_zlib.cc b/src/node_zlib.cc
+index 3cb736c2..1793e361 100644
+--- a/src/node_zlib.cc
++++ b/src/node_zlib.cc
+@@ -829,7 +829,7 @@ class ZlibStream final : public CompressionStream<ZlibContext> {
+     CHECK(args[4]->IsUint32Array());
+     Local<Uint32Array> array = args[4].As<Uint32Array>();
+     CHECK_GE(array->Length(), 2);
+-    Local<ArrayBuffer> ab = array->Buffer();
++    Local<ArrayBuffer> ab = array->GetBuffer().As<v8::ArrayBuffer>();
+     uint32_t* write_result = static_cast<uint32_t*>(ab->Data());
+ 
+     CHECK(args[5]->IsFunction());
+diff --git a/src/quic/data.cc b/src/quic/data.cc
+index f15051da..d6c618da 100644
+--- a/src/quic/data.cc
++++ b/src/quic/data.cc
+@@ -128,7 +128,7 @@ Maybe<Store> Store::From(Local<ArrayBufferView> view) {
+   }
+   if (length > 0) {
+     memcpy(dest->Data(),
+-           static_cast<const uint8_t*>(view->Buffer()->Data()) + offset,
++           static_cast<const uint8_t*>(view->GetBuffer()->Data()) + offset,
+            length);
+   }
+   return Just(Store(std::move(dest), length, 0));
+@@ -154,7 +154,7 @@ Store Store::CopyFrom(Local<ArrayBuffer> buffer) {
+ 
+ Store Store::CopyFrom(Local<ArrayBufferView> view) {
+   Isolate* isolate = Isolate::GetCurrent();
+-  auto backing = view->Buffer()->GetBackingStore();
++  auto backing = view->GetBuffer()->GetBackingStore();
+   auto length = view->ByteLength();
+   auto offset = view->ByteOffset();
+   auto dest = ArrayBuffer::NewBackingStore(
+diff --git a/src/quic/streams.cc b/src/quic/streams.cc
+index 1354ad54..20e8997e 100644
+--- a/src/quic/streams.cc
++++ b/src/quic/streams.cc
+@@ -325,7 +325,7 @@ Maybe<std::shared_ptr<DataQueue>> Stream::GetDataQueueFromSource(
+     auto offset = view->ByteOffset();
+     auto length = view->ByteLength();
+     if (length > 0) {
+-      auto entry = CreateEntryFromBuffer(env, view->Buffer(), offset, length);
++      auto entry = CreateEntryFromBuffer(env, view->GetBuffer().As<v8::ArrayBuffer>(), offset, length);
+       if (!entry) {
+         return Nothing<std::shared_ptr<DataQueue>>();
+       }
+@@ -1370,7 +1370,7 @@ void Stream::WriteStreamData(const FunctionCallbackInfo<Value>& args) {
+     auto length = view->ByteLength();
+     if (length == 0) return true;
+     auto entry =
+-        CreateEntryFromBuffer(env, view->Buffer(), view->ByteOffset(), length);
++        CreateEntryFromBuffer(env, view->GetBuffer().As<v8::ArrayBuffer>(), view->ByteOffset(), length);
+     if (!entry) {
+       return false;
+     }

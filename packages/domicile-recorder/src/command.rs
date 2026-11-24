@@ -1,5 +1,14 @@
 //! What the compositor tells a running recorder, one line each on its stdin.
 
+use crate::pipeline::Encoder;
+
+/// The line the recorder says on stdout once its pipeline plays, naming the
+/// encoder it chose. The compositor waits for it before it says the
+/// recording runs, and logs the encoder.
+pub fn started(encoder: &Encoder) -> String {
+    format!("recording with {encoder:?}")
+}
+
 /// One line of the recorder's stdin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -32,6 +41,16 @@ impl std::str::FromStr for Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::GpuEncoder;
+
+    #[test]
+    fn the_started_line_names_the_encoder() {
+        assert_eq!(
+            started(&Encoder::Gpu(GpuEncoder::Av1)),
+            "recording with Gpu(Av1)"
+        );
+        assert_eq!(started(&Encoder::Cpu), "recording with Cpu");
+    }
 
     #[test]
     fn each_command_is_its_own_word_on_a_line() {

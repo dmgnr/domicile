@@ -17,15 +17,14 @@ shell decides when to take it and when to let go.
 WRITTEN BY HAND, AGAINST THE SERIES RATHER THAN IN A CHECKOUT, so its
 post-image blob is not known and is left zeroed, as 0036's is.
 ---
- .../browser_web_contents_delegate.cc                | 12 ++++++++----
+ .../browser_web_contents_delegate.cc                 | 12 ++++++++----
  1 file changed, 8 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-index 2f8a419..0000000 100644
+index a5a82af..12d30ea 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-@@ -413,12 +413,16 @@
- void BrowserWebContentsDelegate::RequestPointerLock(
+@@ -415,13 +415,17 @@ void BrowserWebContentsDelegate::RequestPointerLock(
      content::WebContents* web_contents,
      bool user_gesture,
      bool last_unlocked_by_target) {
@@ -45,3 +44,5 @@ index 2f8a419..0000000 100644
 +  // Domicile: nothing to put back, since the grant above never went through
 +  // the exclusive-access manager.
  }
+ 
+ bool BrowserWebContentsDelegate::AllowKeyboardLockForInnerContents(

@@ -23,6 +23,27 @@ export type WifiNetwork = {
   connected: boolean;
 };
 
+/** How a saved network asks to join. */
+export enum WifiSecurity {
+  Open,
+  /** A shared password: WEP, WPA or WPA3 Personal. */
+  Password,
+  /** A sign-in per person: 802.1X, WPA Enterprise or Passpoint. */
+  Enterprise,
+}
+
+/** A network the service remembers, in range or not. */
+export type SavedWifi = {
+  /** The profile: a connection (NetworkManager) or a known network (iwd). */
+  profile: string;
+  ssid: string;
+  security: WifiSecurity;
+  /** Whether the service joins it by itself when it is in range. */
+  autoJoin: boolean;
+  /** When it was last joined; `undefined` if never. */
+  lastUsed: Date | undefined;
+};
+
 /** The addresses the service configured. */
 export type Ip = {
   /** Each with its prefix, as `192.168.1.23/24`. */
@@ -56,6 +77,8 @@ export type Wifi = {
   /** One per name, strongest first. Hidden networks are left out. */
   networks: WifiNetwork[];
   connection: WifiConnection | undefined;
+  /** Every saved network, in the service's order. */
+  saved: SavedWifi[];
 };
 
 /** What a request needs of the device. */

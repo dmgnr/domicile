@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Mon, 16 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the shell lists the desk's browser profiles
+
+The shell reads the desk's browser profiles from
+`domicile.browserProfiles` and opens a window in one. Blink builds
+`DomicileBrowserProfile`, one profile in that list. See
+docs/architecture/BROWSER-PROFILES.md in the Domicile repository.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ third_party/blink/renderer/bindings/generated_in_modules.gni | 2 ++
+ third_party/blink/renderer/bindings/idl_in_modules.gni       | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
+index cd08ae2..fc90f9b 100644
+--- a/third_party/blink/renderer/bindings/generated_in_modules.gni
++++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
+@@ -2363,6 +2363,8 @@ generated_interface_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_installed_extension.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_gesture_event.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_gesture_event.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_profile.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_profile.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_window.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_window.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_cast_sink.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
+index 1bc8803..7d17c69 100644
+--- a/third_party/blink/renderer/bindings/idl_in_modules.gni
++++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
+@@ -291,6 +291,7 @@ static_idl_files_in_modules = [
+   "//third_party/blink/renderer/modules/domicile/domicile_file_search.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_fetch_header.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_fetch_response.idl",
++  "//third_party/blink/renderer/modules/domicile/domicile_browser_profile.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_browser_window.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_cast_sink.idl",
+   "//third_party/blink/renderer/modules/domicile/domicile_download.idl",

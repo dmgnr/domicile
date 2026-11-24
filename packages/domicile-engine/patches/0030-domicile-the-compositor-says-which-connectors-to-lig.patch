@@ -61,7 +61,7 @@ index 8cb01c1..d8a854a 100644
      return drm_device_connector_.get();
    }
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index be85fec..a2aadd6 100644
+index 7a4094c..ce8a65e 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -5,6 +5,8 @@
@@ -108,7 +108,7 @@ index be85fec..a2aadd6 100644
  // Base class for Ozone platform implementations.
  //
  // Ozone platforms must override this class and implement the virtual
-@@ -336,6 +359,13 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -323,6 +346,13 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // `screen` that was returned from CreateScreen.  They are separated to avoid
    // observer recursion into display::Screen from inside CreateScreen.
    virtual void InitScreen(PlatformScreen* screen) = 0;

@@ -14,7 +14,7 @@ import { Layer, layerStyles } from "./layer";
 import type { Order } from "./order";
 import { shuffledOrder } from "./order";
 import { Photo } from "./Photo";
-import { DEFAULT_WALLPAPERS, WALLPAPER_FALLBACKS } from "./photos";
+import { DEFAULT_WALLPAPERS, photoSizes, WALLPAPER_FALLBACKS } from "./photos";
 import type { Wallpapers } from "./wallpapers";
 import { isWebAddress } from "./wallpapers";
 
@@ -44,6 +44,11 @@ type Props = {
    * fades in once released.
    */
   held?: boolean;
+  /**
+   * Keeps the photograph on screen: the rotation never advances, so
+   * nothing redraws the wallpaper while the desktop is idle.
+   */
+  still?: boolean;
   /**
    * The order each pass through a rotation shows its photographs in.
    * Defaults to a fresh shuffle each pass.
@@ -82,6 +87,7 @@ const STARTS: Readonly<Record<Theme, number>> = { dark: 0, light: 0 };
 export const Wallpaper = ({
   files,
   held = false,
+  still = false,
   order: givenOrder,
   photos = DEFAULT_WALLPAPERS,
   picture,
@@ -111,13 +117,16 @@ export const Wallpaper = ({
   });
 
   useEffect(() => {
+    if (still) {
+      return;
+    }
     const timer = setInterval(() => {
       setDue(true);
     }, DWELL_MS);
     return () => {
       clearInterval(timer);
     };
-  }, []);
+  }, [still]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -161,10 +170,11 @@ export const Wallpaper = ({
           screen={undefined}
           settled={settled}
           shown={theme}
+          sizes={photoSizes(undefined)}
           steps={steps}
         />
       ) : (
-        displays.map(({ name }) => (
+        displays.map(({ name, size }) => (
           <ScreenWallpaper
             fallback={fallback}
             files={files}
@@ -176,6 +186,7 @@ export const Wallpaper = ({
             screen={name}
             settled={settled}
             shown={theme}
+            sizes={photoSizes(size)}
             steps={steps}
           />
         ))
@@ -197,6 +208,8 @@ type RotationProps = {
   photos: Wallpapers;
   /** Whether the shown rotation's fade has finished. */
   settled: boolean;
+  /** How wide the photographs show, as an `<img sizes>`. */
+  sizes: string;
   /** The theme shown. */
   shown: Theme;
   /** Each theme's step. */
@@ -242,6 +255,7 @@ const Rotation = ({
   photos,
   settled,
   shown,
+  sizes,
   steps,
 }: RotationProps) => (
   <>
@@ -272,6 +286,7 @@ const Rotation = ({
             layer={layerOf(step, steps[theme], settled || theme !== shown)}
             onError={onPhotoError}
             photo={photoAt(order, photos[theme], step)}
+            sizes={sizes}
           />
         ))}
       </div>
@@ -288,16 +303,24 @@ const ConfiguredPhoto = ({
   layer,
   onError,
   photo,
+  sizes,
 }: {
   files: FileCalls;
   layer: Layer;
   onError: () => void;
   photo: string;
+  sizes: string;
 }) =>
   isWebAddress(photo) ? (
-    <Photo layer={layer} onError={onError} src={photo} />
+    <Photo layer={layer} onError={onError} sizes={sizes} src={photo} />
   ) : (
-    <PathPhoto files={files} layer={layer} onError={onError} path={photo} />
+    <PathPhoto
+      files={files}
+      layer={layer}
+      onError={onError}
+      path={photo}
+      sizes={sizes}
+    />
   );
 
 /** The photograph at `path`, shown once read. */
@@ -306,15 +329,17 @@ const PathPhoto = ({
   layer,
   onError,
   path,
+  sizes,
 }: {
   files: FileCalls;
   layer: Layer;
   onError: () => void;
   path: string;
+  sizes: string;
 }) => {
   const url = usePictureUrl(files, path);
   return url === undefined ? undefined : (
-    <Photo layer={layer} onError={onError} src={url} />
+    <Photo layer={layer} onError={onError} sizes={sizes} src={url} />
   );
 };
 

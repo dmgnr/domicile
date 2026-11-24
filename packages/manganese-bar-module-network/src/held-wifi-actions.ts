@@ -23,7 +23,11 @@ export const heldWifiActions = (
     connectWifi: (_system, wifi, network, passphrase) =>
       ask(["connect", wifi.device, network.ssid, passphrase]),
     disconnectWifi: (_system, wifi) => ask(["disconnect", wifi.device]),
+    forgetWifi: (_system, wifi, saved) =>
+      ask(["forget", wifi.device, saved.ssid]),
     scanWifi: (_system, wifi) => ask(["scan", wifi.device]),
+    setWifiAutoJoin: (_system, wifi, saved, autoJoin) =>
+      ask(["autoJoin", wifi.device, saved.ssid, autoJoin]),
     setWifiEnabled: (_system, wifi, enabled) =>
       ask(["setEnabled", wifi.device, enabled]),
   };

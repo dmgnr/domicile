@@ -28,7 +28,7 @@ setting.
  1 file changed, 3 insertions(+)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 6e4200e..c481ebc 100644
+index f9f3d2c..3334a87 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -136,6 +136,8 @@ source_set("gbm") {
@@ -40,7 +40,7 @@ index 6e4200e..c481ebc 100644
      "host/drm_window_host_manager.h",
      "host/gpu_thread_adapter.h",
      "host/gpu_thread_observer.h",
-@@ -257,6 +259,7 @@ source_set("gbm_unittests") {
+@@ -259,6 +261,7 @@ source_set("gbm_unittests") {
      "domicile/drm_modeset_unittest.cc",
      "domicile/drm_screen_unittest.cc",
      "domicile/drm_vt_switcher_unittest.cc",

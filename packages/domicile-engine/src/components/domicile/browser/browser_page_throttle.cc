@@ -6,7 +6,9 @@
 #include <memory>
 
 #include "base/logging.h"
+#include "components/domicile/browser/app_navigation_throttle.h"
 #include "components/domicile/browser/browser_pages.h"
+#include "components/domicile/browser/profile_route_throttle.h"
 #include "components/domicile/browser/web_view_guest.h"
 #include "components/domicile/browser/web_view_url.h"
 #include "components/domicile/browser/will_navigate_throttle.h"
@@ -21,9 +23,14 @@ void BrowserPageThrottle::MaybeCreateAndAdd(
   if (WebViewGuest::FromWebContents(
           registry.GetNavigationHandle().GetWebContents())) {
     registry.AddThrottle(std::make_unique<BrowserPageThrottle>(registry));
-    // After this one, so the shell is never asked about a page it may not
-    // show.
+    // The app that owns the page decides before the shell, as Electron's
+    // will-navigate does, on a page it may show.
+    AppNavigationThrottle::Add(registry);
+    // After these, so the shell is never asked about a page it may not show
+    // or the app stopped.
     WillNavigateThrottle::Add(registry);
+    // After the shell's answer, so a navigation it cancels moves nothing.
+    ProfileRouteThrottle::Add(registry);
   }
 }
 

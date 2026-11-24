@@ -1,0 +1,46 @@
+name: Relay
+
+# Deploys domicile-relay, the relay agents on the web reach desks through, to
+# fly.io at mcp.domicile-desktop.com (packages/domicile-relay/fly.toml) each
+# time main changes it. The fly app, its dedicated IPv4 and the
+# FLY_API_TOKEN secret (`fly tokens create deploy -a domicile-relay`) are set
+# up once by hand; see docs/AGENTS.md#the-relay.
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/domicile-relay/**
+      - Cargo.lock
+      - .github/workflows/relay.yml
+  workflow_dispatch:
+
+# One deploy at a time; a newer push waits for the one running rather than
+# cutting it off halfway.
+concurrency:
+  group: relay
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+      # Built on fly's builder from the repository's root, which holds the
+      # Cargo workspace. Exactly one machine: a desk's connection lives on the
+      # machine it dialed, so a second machine would answer half the clients
+      # with no desk to reach.
+      - run: >-
+          flyctl deploy .
+          --config packages/domicile-relay/fly.toml
+          --dockerfile packages/domicile-relay/Dockerfile
+          --remote-only
+          --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - run: flyctl scale count 1 --yes --config packages/domicile-relay/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

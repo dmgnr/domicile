@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 20 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an unacked resize names the page it belongs to
+
+The unacked-resize line named the widget only by its frame sink, which no
+renderer line mentions, so a widget that never drew could not be told from
+one that froze, or matched to its renderer's lines. It now names the
+renderer's pid, the widget's kind (a page's main frame, an out-of-process
+frame, or a widget of its own), its page's kind (a <webview> guest, a
+primary page, a prerender) and its page's URL.
+---
+ .../renderer_host/render_widget_host_impl.cc  | 26 +++++++++++++++++++
+ .../renderer_host/render_widget_host_impl.h   |  3 +++
+ 2 files changed, 29 insertions(+)
+
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index c718819..7fef984 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -1705,9 +1705,35 @@ void RenderWidgetHostImpl::DomicileReportAckWait() {
+              << (view_ && view_->IsShowing() ? "showing" : "not showing")
+              << ", renderer "
+              << (GetProcess()->IsInitializedAndNotDead() ? "alive" : "dead")
++             << " (pid "
++             << (GetProcess()->IsInitializedAndNotDead()
++                     ? GetProcess()->GetProcess().Pid()
++                     : base::kNullProcessId)
++             << "). It is " << DomicileDescribeWidget()
+              << ". No resize reaches it until it does.";
+ }
+ 
++std::string RenderWidgetHostImpl::DomicileDescribeWidget() const {
++  // Which page, and what part of it: the line above names the widget only by
++  // its frame sink, which the renderer's own lines never mention, and a
++  // widget that never drew at all is told apart from one that froze by what
++  // it belongs to.
++  std::string kind = owner_delegate_ ? "a page's main frame"
++                     : (view_ && view_->IsRenderWidgetHostViewChildFrame())
++                         ? "a frame in another process"
++                         : "a popup or other widget of its own";
++  if (!frame_tree_) {
++    return kind + " with no frame tree";
++  }
++  const char* tree = frame_tree_->is_guest()           ? "a <webview> guest"
++                     : frame_tree_->is_prerendering()  ? "a prerendered page"
++                     : frame_tree_->is_primary()       ? "a primary page"
++                                                       : "another kind of page";
++  return kind + " of " + tree + " at " +
++         frame_tree_->root()->current_url().possibly_invalid_spec().substr(
++             0, 200);
++}
++
+ bool RenderWidgetHostImpl::IsCurrentlyUnresponsive() {
+   return is_unresponsive_;
+ }
+diff --git a/content/browser/renderer_host/render_widget_host_impl.h b/content/browser/renderer_host/render_widget_host_impl.h
+index 6080916..4abbe29 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.h
++++ b/content/browser/renderer_host/render_widget_host_impl.h
+@@ -1541,6 +1541,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+   // past `kDomicileAckWait`; see `DomicileReportAckWait`.
+   void DomicileWatchAck();
+   void DomicileStopWatchingAck();
++  // What the widget belongs to, for DomicileReportAckWait: its kind, its page's
++  // kind and its page's URL.
++  std::string DomicileDescribeWidget() const;
+   void DomicileReportAckWait();
+   base::OneShotTimer domicile_ack_timer_;
+   base::TimeTicks domicile_ack_wait_started_;

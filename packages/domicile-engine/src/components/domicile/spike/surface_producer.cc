@@ -90,7 +90,8 @@ void SurfaceProducer::OnFrameSinkCreated(
 void SurfaceProducer::OnSurfaceEmbedded(
     const viz::LocalSurfaceId& local_surface_id,
     const gfx::Size& size,
-    double scale) {
+    double scale,
+    double zoom) {
   const bool first = !submitting_;
   local_surface_id_ = local_surface_id;
   size_ = size;

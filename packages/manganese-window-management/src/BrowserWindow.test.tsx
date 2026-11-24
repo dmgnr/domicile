@@ -11,7 +11,9 @@ import {
   WEBVIEW_FOCUS_REQUEST_EVENT,
   WEBVIEW_GUEST_FOCUS_EVENT,
   WEBVIEW_GUEST_KEYDOWN_EVENT,
+  WEBVIEW_GUEST_KEYUP_EVENT,
   WEBVIEW_HISTORY_CHANGE_EVENT,
+  WEBVIEW_IDENTITY_EVENT,
   WEBVIEW_LOAD_PROGRESS_CHANGE_EVENT,
   WEBVIEW_LOADING_CHANGE_EVENT,
   WEBVIEW_PAGE_CHANGE_EVENT,
@@ -40,6 +42,7 @@ import { css } from "../styled-system/css";
 import { BrowserWindow } from "./BrowserWindow";
 import { CROSSING } from "./placement";
 import { recordedSettles } from "./recorded-settles";
+import { SlidingScreen } from "./sliding-screen";
 
 /** A desktop whose system calls these tests never answer. */
 const fakeDesk = new FakeDomicileHost().domicile;
@@ -119,24 +122,31 @@ const progresses = (element: HTMLWebViewElement, progress: number): void => {
 };
 
 /**
- * Fires a file chooser request, recording each answer in `answers`. Cancelable
+ * Fires a file chooser request, recording each answer in `answers`. It bubbles,
+ * as the engine's does, and is cancelable
  * because taking it calls `preventDefault()`.
  */
 const asksForAFile = (element: HTMLWebViewElement, answers: string[]): void => {
   fireEvent(
     element,
-    Object.assign(new Event(WEBVIEW_FILE_CHOOSER_EVENT, { cancelable: true }), {
-      accept: [],
-      cancel: () => {
-        answers.push("cancel");
+    Object.assign(
+      new Event(WEBVIEW_FILE_CHOOSER_EVENT, {
+        bubbles: true,
+        cancelable: true,
+      }),
+      {
+        accept: [],
+        cancel: () => {
+          answers.push("cancel");
+        },
+        choose: (paths: readonly string[]) => {
+          answers.push(`choose ${paths.join(",")}`);
+        },
+        home: "/home/someone",
+        mode: "open",
+        suggestedName: "",
       },
-      choose: (paths: readonly string[]) => {
-        answers.push(`choose ${paths.join(",")}`);
-      },
-      home: "/home/someone",
-      mode: "open",
-      suggestedName: "",
-    }),
+    ),
   );
 };
 
@@ -251,18 +261,25 @@ const asksForAMenu = (
       canCut: false,
       canDelete: false,
       canPaste: false,
+      canPictureInPicture: false,
       canRedo: false,
       canSelectAll: false,
       canUndo: false,
       hasImageContents: false,
+      inPictureInPicture: false,
       isEditable: false,
       linkText: "",
       linkUrl: "",
       mediaType: "none",
+      misspelledWord: "",
+      replaceMisspelling: (word: string) => {
+        ran.push(`replace with ${word}`);
+      },
       run: (action: string) => {
         ran.push(action);
       },
       selectionText: "",
+      spellingSuggestions: [],
       srcUrl: "",
       x: 10,
       y: 20,
@@ -305,6 +322,39 @@ const nothingEnded = () => {
 };
 
 describe("BrowserWindow", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself to its workspace while a switch slides it", () => {
+    render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <BrowserWindow
+          behindPanel={false}
+          clickThrough={false}
+          covered={false}
+          depth={0}
+          domicile={silentDomicile}
+          dragging={false}
+          focused
+          frame={FRAME}
+          fullscreen={false}
+          motion="leaving-to-start"
+          onDescription={noDescription}
+          onFocusRequest={() => undefined}
+          onIcon={noIcon}
+          onMotionEnded={nothingEnded}
+          onPageFullscreen={noFullscreen}
+          onReach={() => undefined}
+          rect={ON_SCREEN}
+          resizing={false}
+          url="https://example.com"
+          window="1"
+        />
+      </SlidingScreen>,
+    );
+
+    expect(browser().style.clip).toBe("rect(-32px, 1280px, 968px, 0px)");
+  });
+
   describe("its corners", () => {
     usesStylesheet();
 
@@ -1648,6 +1698,63 @@ describe("BrowserWindow", () => {
 
       expect(calls).toStrictEqual(["back", "forward"]);
     });
+
+    // `AddressBar` tests the menus. This checks they read the view's history
+    // and open the History app.
+    it("opens the History app from Back's menu", async () => {
+      const launched = new Promise<readonly string[]>((resolve) => {
+        const { container } = render(
+          <BrowserWindow
+            behindPanel={false}
+            clickThrough={false}
+            covered={false}
+            depth={0}
+            domicile={{
+              ...silentDomicile,
+              processes: { ...silentDomicile.processes, launch: resolve },
+            }}
+            dragging={false}
+            focused
+            frame={FRAME}
+            fullscreen={false}
+            motion="resting"
+            onDescription={noDescription}
+            onFocusRequest={() => undefined}
+            onIcon={noIcon}
+            onMotionEnded={nothingEnded}
+            onPageFullscreen={noFullscreen}
+            onReach={() => undefined}
+            rect={ON_SCREEN}
+            resizing={false}
+            url="https://example.com"
+            window="1"
+          />,
+        );
+        const element = view(container);
+        Object.assign(element, {
+          history: () =>
+            Promise.resolve({
+              back: [
+                {
+                  favicon: "",
+                  id: 1,
+                  title: "One",
+                  url: "https://example.com/1",
+                },
+              ],
+              forward: [],
+            }),
+        });
+        historyReaches(element, true, false);
+      });
+
+      fireEvent.contextMenu(control("Back"));
+      await userEvent.click(
+        await screen.findByRole("menuitem", { name: "Show full history" }),
+      );
+
+      expect(await launched).toStrictEqual(["domicile-history"]);
+    });
   });
 
   // `AddressBar` tests the button itself. This checks that it reads the view's
@@ -2173,6 +2280,129 @@ describe("BrowserWindow", () => {
     });
   });
 
+  // The engine draws no "Sign in with" account chooser.
+  describe("a provider its site signs in with", () => {
+    const renderWindow = (opens: (url: string) => void = () => undefined) =>
+      render(
+        <BrowserWindow
+          behindPanel={false}
+          clickThrough={false}
+          covered={false}
+          depth={0}
+          domicile={{
+            ...silentDomicile,
+            browser: { ...silentDomicile.browser, open: opens },
+          }}
+          dragging={false}
+          focused
+          frame={FRAME}
+          fullscreen={false}
+          motion="resting"
+          onDescription={noDescription}
+          onFocusRequest={() => undefined}
+          onIcon={noIcon}
+          onMotionEnded={nothingEnded}
+          onPageFullscreen={noFullscreen}
+          onReach={() => undefined}
+          rect={ON_SCREEN}
+          resizing={false}
+          url="https://news.example"
+          window="1"
+        />,
+      );
+
+    /** The accounts step, from the site's button or offered unasked. */
+    const asksWithAccounts = (
+      element: HTMLElement,
+      button: boolean,
+      answers: string[],
+    ) => {
+      fireEvent(
+        element,
+        Object.assign(new Event(WEBVIEW_IDENTITY_EVENT, { cancelable: true }), {
+          accounts: () => [
+            {
+              identifier: "alex@idp.example",
+              name: "Alex Rivera",
+              picture: "",
+              provider: 0,
+              returning: false,
+              shared: ["name"],
+            },
+          ],
+          automatic: false,
+          button,
+          choose: (account: number) => {
+            answers.push(`choose ${account}`);
+          },
+          dismiss: () => undefined,
+          error: "",
+          errorUrl: "",
+          frameSite: "",
+          moreDetails: () => undefined,
+          providers: () => [
+            {
+              addAccount: false,
+              icon: "",
+              name: "idp.example",
+              privacyPolicy: "https://news.example/privacy",
+              signedOut: false,
+              termsOfService: "",
+            },
+          ],
+          purpose: "sign-in",
+          signInToProvider: () => undefined,
+          site: "news.example",
+          step: "accounts",
+        }),
+      );
+    };
+
+    it("asks over the page after the site's button, with the keyboard", async () => {
+      const answers: string[] = [];
+      const { container } = renderWindow();
+      asksWithAccounts(view(container), true, answers);
+
+      const dialog = await screen.findByRole("alertdialog", {
+        name: "Sign in to news.example with idp.example",
+      });
+      const continuing = within(dialog).getByRole("button", {
+        name: "Continue as Alex",
+      });
+      // The page waits on it, so a focused window gives it the keyboard.
+      await waitFor(() => {
+        expect(continuing).toHaveFocus();
+      });
+      await userEvent.keyboard("{Enter}");
+
+      expect(answers).toStrictEqual(["choose 0"]);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("leaves the page the keyboard when the site offers it unasked", async () => {
+      const { container } = renderWindow();
+      asksWithAccounts(view(container), false, []);
+
+      const card = await screen.findByRole("dialog", {
+        name: "Sign in to news.example with idp.example",
+      });
+
+      expect(card.contains(document.activeElement)).toBe(false);
+    });
+
+    it("opens the site's privacy policy in a browser window", async () => {
+      const opened = Promise.withResolvers<string>();
+      const { container } = renderWindow(opened.resolve);
+      asksWithAccounts(view(container), true, []);
+
+      await userEvent.click(
+        await screen.findByRole("link", { name: "privacy policy" }),
+      );
+
+      expect(await opened.promise).toBe("https://news.example/privacy");
+    });
+  });
+
   // The engine leaves a failed page blank.
   describe("a page that failed to load", () => {
     it("draws the error over it, and tries again", async () => {
@@ -2625,6 +2855,19 @@ describe("BrowserWindow", () => {
 
       expect(ran).toStrictEqual(["paste"]);
     });
+
+    it("puts the chosen spelling in place of a misspelled word", async () => {
+      const { container } = renderWindow();
+      const ran = asksForAMenu(view(container), {
+        isEditable: true,
+        misspelledWord: "recieve",
+        spellingSuggestions: ["receive", "relieve"],
+      });
+
+      await userEvent.click(await menuItem("relieve"));
+
+      expect(ran).toStrictEqual(["replace with relieve"]);
+    });
   });
 
   describe("DevTools", () => {
@@ -3075,5 +3318,442 @@ describe("BrowserWindow", () => {
         fireEvent.animationEnd(browser());
       });
     });
+  });
+});
+
+describe("an Electron app's menu bar", () => {
+  /** An entry as the engine lists it, with Electron's defaults. */
+  const entry = (fields: object) => ({
+    checked: false,
+    enabled: true,
+    type: "normal",
+    visible: true,
+    ...fields,
+  });
+
+  const MENU = JSON.stringify([
+    entry({
+      id: 1,
+      label: "&File",
+      submenu: [
+        entry({
+          accelerator: "CmdOrCtrl+N",
+          id: 2,
+          label: "&New Conversation",
+        }),
+        entry({ accelerator: "CmdOrCtrl+R", id: 3, label: "&Reload" }),
+      ],
+      type: "submenu",
+    }),
+    entry({
+      id: 4,
+      label: "&Edit",
+      submenu: [entry({ id: 5, label: "Undo" })],
+      type: "submenu",
+    }),
+  ]);
+
+  /** A browser window "1" whose app set `MENU`, and the host's calls. */
+  const appWindow = (
+    options: { autoHide?: boolean; visible?: boolean } = {},
+  ) => {
+    const host = new FakeDomicileHost();
+    host.openBrowser("https://claude.test/");
+    host.setMenuBar("1", MENU, options);
+    const domicile: Domicile = {
+      ...host.domicile,
+      windows: {
+        ...host.domicile.windows,
+        focus: () => undefined,
+        focusShell: () => undefined,
+      },
+    };
+    const rendered = render(
+      <BrowserWindow
+        behindPanel={false}
+        clickThrough={false}
+        covered={false}
+        depth={0}
+        domicile={domicile}
+        dragging={false}
+        focused
+        frame={FRAME}
+        fullscreen={false}
+        isApp
+        motion="resting"
+        onDescription={noDescription}
+        onFocusRequest={() => undefined}
+        onIcon={noIcon}
+        onMotionEnded={nothingEnded}
+        onPageFullscreen={noFullscreen}
+        onReach={() => undefined}
+        rect={ON_SCREEN}
+        resizing={false}
+        url="https://claude.test/"
+        window="1"
+      />,
+    );
+    const clicks = () =>
+      host.calls.filter(([name]) => name === "clickBrowserWindowMenu");
+    return { clicks, host, rendered };
+  };
+
+  const menuBar = () => screen.queryByRole("menubar");
+
+  const guestLetsGo = (
+    element: HTMLWebViewElement,
+    init: KeyboardEventInit,
+  ) => {
+    fireEvent(
+      element,
+      new KeyboardEvent(WEBVIEW_GUEST_KEYUP_EVENT, { bubbles: true, ...init }),
+    );
+  };
+
+  it("draws the app's menus under the tab, and clicks the entry chosen", async () => {
+    const { clicks } = appWindow();
+
+    expect(
+      within(menuBar() ?? document.body)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["File", "Edit"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "File" }));
+    const file = await screen.findByRole("menu", { name: "File" });
+    const entries = within(file).getAllByRole("menuitem");
+    expect(entries.map((entry) => entry.textContent)).toEqual([
+      "New ConversationCtrl+N",
+      "ReloadCtrl+R",
+    ]);
+    await userEvent.click(entries[0] ?? file);
+
+    expect(clicks()).toEqual([["clickBrowserWindowMenu", "1", 2]]);
+  });
+
+  it("draws no bar for a window whose app hides it, or sets no menu", () => {
+    const { host } = appWindow({ visible: false });
+
+    expect(menuBar()).not.toBeInTheDocument();
+    act(() => {
+      host.setMenuBar("1", null);
+    });
+    expect(menuBar()).not.toBeInTheDocument();
+  });
+
+  it("runs an accelerator the page left alone instead of the browser's key", () => {
+    const { clicks, rendered } = appWindow();
+    const element = view(rendered.container);
+    const reloads: string[] = [];
+    element.reload = () => {
+      reloads.push("reload");
+    };
+
+    guestPresses(element, { code: "KeyR", ctrlKey: true, key: "r" });
+
+    expect(clicks()).toEqual([["clickBrowserWindowMenu", "1", 3]]);
+    expect(reloads).toEqual([]);
+  });
+
+  it("runs an accelerator pressed in one of the app's views", () => {
+    const { clicks, host, rendered } = appWindow();
+    act(() => {
+      host.openBrowser("https://claude.test/chat", { parent: "1" });
+    });
+    const chat = rendered.container.querySelector<HTMLWebViewElement>(
+      'webview[window="2"]',
+    );
+    expect(chat).not.toBeNull();
+
+    guestPresses(chat ?? view(rendered.container), {
+      code: "KeyN",
+      ctrlKey: true,
+      key: "n",
+    });
+
+    expect(clicks()).toEqual([["clickBrowserWindowMenu", "1", 2]]);
+  });
+
+  // An Electron app's page is often in a view, as Claude's is: its uploads
+  // and downloads ask from there.
+  it("asks for a file one of the app's views wants, as for the window's page", async () => {
+    const { host, rendered } = appWindow();
+    act(() => {
+      host.openBrowser("https://claude.test/chat", { parent: "1" });
+    });
+    const chat = rendered.container.querySelector<HTMLWebViewElement>(
+      'webview[window="2"]',
+    );
+    expect(chat).not.toBeNull();
+    const answers: string[] = [];
+
+    asksForAFile(chat ?? view(rendered.container), answers);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(pickerBox()).toBeInTheDocument();
+    expect(answers).toStrictEqual([]);
+  });
+
+  it("leaves the browser's keys pressed in a view alone, as they act on the window's page", () => {
+    const { host, rendered } = appWindow();
+    act(() => {
+      host.setMenuBar("1", null);
+      host.openBrowser("https://claude.test/chat", { parent: "1" });
+    });
+    const element = view(rendered.container);
+    const reloads: string[] = [];
+    element.reload = () => {
+      reloads.push("reload");
+    };
+    const chat = rendered.container.querySelector<HTMLWebViewElement>(
+      'webview[window="2"]',
+    );
+
+    guestPresses(chat ?? element, { code: "KeyR", ctrlKey: true, key: "r" });
+    expect(reloads).toEqual([]);
+    guestPresses(element, { code: "KeyR", ctrlKey: true, key: "r" });
+    expect(reloads).toEqual(["reload"]);
+  });
+
+  it("opens a menu with Alt and its mnemonic", async () => {
+    const { rendered } = appWindow();
+
+    guestPresses(view(rendered.container), {
+      altKey: true,
+      code: "KeyE",
+      key: "e",
+    });
+
+    expect(await screen.findByRole("menu", { name: "Edit" })).toBeVisible();
+  });
+
+  it("shows an auto-hidden bar on an Alt tap, and not for Alt held for a chord", () => {
+    const { rendered } = appWindow({ autoHide: true });
+    const element = view(rendered.container);
+    expect(menuBar()).not.toBeInTheDocument();
+
+    guestPresses(element, { altKey: true, code: "AltLeft", key: "Alt" });
+    guestPresses(element, {
+      altKey: true,
+      code: "ArrowLeft",
+      key: "ArrowLeft",
+    });
+    guestLetsGo(element, { code: "AltLeft", key: "Alt" });
+    expect(menuBar()).not.toBeInTheDocument();
+
+    guestPresses(element, { altKey: true, code: "AltLeft", key: "Alt" });
+    guestLetsGo(element, { code: "AltLeft", key: "Alt" });
+    expect(menuBar()).toBeInTheDocument();
+
+    guestPresses(element, { altKey: true, code: "AltLeft", key: "Alt" });
+    guestLetsGo(element, { code: "AltLeft", key: "Alt" });
+    expect(menuBar()).not.toBeInTheDocument();
+  });
+});
+
+describe("an Electron app's message box", () => {
+  const BOX = JSON.stringify({
+    buttons: ["Cancel", "Quit"],
+    cancelId: 0,
+    checkboxChecked: false,
+    checkboxLabel: "Don't ask again",
+    defaultId: 1,
+    detail: "Any conversation still generating will stop.",
+    message: "Quit Claude?",
+    title: "Claude",
+    type: "question",
+  });
+
+  /** A browser window "1" whose app asked `BOX`, and the host's answers. */
+  const appWindow = () => {
+    const host = new FakeDomicileHost();
+    host.openBrowser("https://claude.test/");
+    host.setMessageBox("1", BOX);
+    const domicile: Domicile = {
+      ...host.domicile,
+      windows: {
+        ...host.domicile.windows,
+        focus: () => undefined,
+        focusShell: () => undefined,
+      },
+    };
+    render(
+      <BrowserWindow
+        behindPanel={false}
+        clickThrough={false}
+        covered={false}
+        depth={0}
+        domicile={domicile}
+        dragging={false}
+        focused
+        frame={FRAME}
+        fullscreen={false}
+        isApp
+        motion="resting"
+        onDescription={noDescription}
+        onFocusRequest={() => undefined}
+        onIcon={noIcon}
+        onMotionEnded={nothingEnded}
+        onPageFullscreen={noFullscreen}
+        onReach={() => undefined}
+        rect={ON_SCREEN}
+        resizing={false}
+        url="https://claude.test/"
+        window="1"
+      />,
+    );
+    const answers = () =>
+      host.calls.filter(([name]) => name === "answerBrowserWindowMessageBox");
+    return { answers, host };
+  };
+
+  it("shows the box over the window and answers the app", async () => {
+    const { answers } = appWindow();
+
+    expect(
+      screen.getByRole("alertdialog", { name: "Quit Claude?" }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("switch", { name: "Don't ask again" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Quit" }));
+
+    expect(answers()).toEqual([
+      ["answerBrowserWindowMessageBox", "1", 1, true],
+    ]);
+  });
+
+  it("focuses the default button", () => {
+    appWindow();
+
+    expect(screen.getByRole("button", { name: "Quit" })).toHaveFocus();
+  });
+
+  it("takes the box away once the engine lists none", () => {
+    const { host } = appWindow();
+
+    act(() => {
+      host.setMessageBox("1", null);
+    });
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("starts the app's next box with its own checkbox", async () => {
+    const { host } = appWindow();
+    await userEvent.click(
+      screen.getByRole("switch", { name: "Don't ask again" }),
+    );
+
+    act(() => {
+      host.setMessageBox(
+        "1",
+        JSON.stringify({ ...JSON.parse(BOX), message: "Really quit?" }),
+      );
+    });
+
+    expect(
+      screen.getByRole("switch", { name: "Don't ask again" }),
+    ).not.toBeChecked();
+  });
+});
+
+describe("an Electron app's popup menu", () => {
+  /** An entry as the engine lists it, with Electron's defaults. */
+  const entry = (fields: object) => ({
+    checked: false,
+    enabled: true,
+    type: "normal",
+    visible: true,
+    ...fields,
+  });
+
+  const POPUP = JSON.stringify({
+    menu: [
+      entry({ id: 7, label: "New Chat" }),
+      entry({ id: 8, label: "", type: "separator" }),
+      entry({ id: 9, label: "Settings" }),
+    ],
+    x: 12,
+    y: 30,
+  });
+
+  /** A browser window "1" whose app popped `POPUP` up, and its answers. */
+  const appWindow = () => {
+    const host = new FakeDomicileHost();
+    host.openBrowser("https://claude.test/");
+    host.setPopupMenu("1", POPUP);
+    const domicile: Domicile = {
+      ...host.domicile,
+      windows: {
+        ...host.domicile.windows,
+        focus: () => undefined,
+        focusShell: () => undefined,
+      },
+    };
+    render(
+      <BrowserWindow
+        behindPanel={false}
+        clickThrough={false}
+        covered={false}
+        depth={0}
+        domicile={domicile}
+        dragging={false}
+        focused
+        frame={FRAME}
+        fullscreen={false}
+        isApp
+        motion="resting"
+        onDescription={noDescription}
+        onFocusRequest={() => undefined}
+        onIcon={noIcon}
+        onMotionEnded={nothingEnded}
+        onPageFullscreen={noFullscreen}
+        onReach={() => undefined}
+        rect={ON_SCREEN}
+        resizing={false}
+        url="https://claude.test/"
+        window="1"
+      />,
+    );
+    const answers = () =>
+      host.calls.filter(([name]) => name === "answerBrowserWindowPopupMenu");
+    return { answers, host };
+  };
+
+  it("draws the app's menu and answers with the entry chosen", async () => {
+    const { answers } = appWindow();
+
+    const menu = await screen.findByRole("menu", { name: "Application" });
+    const entries = within(menu).getAllByRole("menuitem");
+    expect(entries.map((item) => item.textContent)).toEqual([
+      "New Chat",
+      "Settings",
+    ]);
+    await userEvent.click(entries[1] ?? menu);
+
+    expect(answers()).toEqual([["answerBrowserWindowPopupMenu", "1", 9]]);
+  });
+
+  it("answers 0 when the menu is put away with nothing chosen", async () => {
+    const { answers } = appWindow();
+
+    await screen.findByRole("menu", { name: "Application" });
+    await userEvent.keyboard("{Escape}");
+
+    expect(answers()).toEqual([["answerBrowserWindowPopupMenu", "1", 0]]);
+  });
+
+  it("takes the menu away once the engine lists none", async () => {
+    const { answers, host } = appWindow();
+    await screen.findByRole("menu", { name: "Application" });
+
+    act(() => {
+      host.setPopupMenu("1", null);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+    expect(answers()).toEqual([]);
   });
 });

@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- The page guard-electron-preload.sh opens in an Electron app's windows. -->
+<meta charset="utf-8">
+<title>Electron preload guard</title>
+<script>
+  // Runs as the page parses, so a preload that ran first has exposed `guard`.
+  if (typeof window.guard === "object") {
+    window.guard.onPing((value) => {
+      document.title = "pinged " + value;
+    });
+    // The exposed API is the preload's to give, not the page's to replace.
+    const was = window.guard;
+    window.guard = null;
+    delete window.guard;
+    window.guard.send("page", {
+      // What the preload's own emit gave its listener.
+      emitted: window.guard.emitted,
+      kept: window.guard === was,
+      // What the page can see of the preload's world: only what it exposed.
+      require: typeof require,
+      secret: typeof window.secret,
+    });
+    window.guard.ask(2).then((answer) => window.guard.send("answered", answer));
+    window.guard.send("synced", window.guard.askNow(3));
+    // The preload's insertCSS colors the page's text, and removing it takes
+    // the color away.
+    document.addEventListener("DOMContentLoaded", () => {
+      const color = () =>
+        getComputedStyle(document.querySelector("p")).color;
+      const styled = color() === "rgb(1, 2, 3)";
+      window.guard.unstyle();
+      const unstyled = color() !== "rgb(1, 2, 3)";
+      // The preload hears document-end once DOMContentLoaded has gone to
+      // every listener, this one included.
+      setTimeout(() => {
+        window.guard.send("shaped", {
+          ...window.guard.shaped,
+          heard: window.guard.heard(),
+          styled,
+          unstyled,
+        });
+      });
+    });
+  } else {
+    document.title = "no preload";
+  }
+</script>
+<p>An Electron app's window.</p>

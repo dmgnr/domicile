@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domicile CI <ci@domicile.invalid>
+Date: Tue, 17 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page cut off from begin frames says so
+
+A page draws only on begin frames, and rAF-aligned input waits for one.
+viz stops sending them to a sink that leaves 100 unanswered
+(BeginFrameTracker::kLimitStop). The client's ExternalBeginFrameSource
+drops, unanswered, every begin frame older than the last one it took or
+an observer used. A page caught between the two never draws again while
+every process idles, as on lyra after resizing windows.
+
+- viz logs at ERROR, once per stop (at most once a second), the sink it
+  stops and the last begin frame it sent.
+- ExternalBeginFrameSource logs at ERROR a run of 8 begin frames it or
+  an observer dropped, with the last one taken or used and the one
+  dropped.
+
+Both log only. If neither fires, look at the sink's frame sink hierarchy
+and whether it still asks for begin frames.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+---
+ .../common/frame_sinks/begin_frame_source.cc  | 35 +++++++++++++++++--
+ .../common/frame_sinks/begin_frame_source.h   |  7 ++++
+ .../compositor_frame_sink_support.cc          | 16 +++++++++
+ .../compositor_frame_sink_support.h           |  2 ++
+ 4 files changed, 58 insertions(+), 2 deletions(-)
+
+diff --git a/components/viz/common/frame_sinks/begin_frame_source.cc b/components/viz/common/frame_sinks/begin_frame_source.cc
+index c455af7..10d5031 100644
+--- a/components/viz/common/frame_sinks/begin_frame_source.cc
++++ b/components/viz/common/frame_sinks/begin_frame_source.cc
+@@ -14,6 +14,7 @@
+ #include "base/check_op.h"
+ #include "base/feature_list.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/notreached.h"
+@@ -598,8 +599,21 @@ void ExternalBeginFrameSource::OnBeginFrame(const BeginFrameArgs& args) {
+       (args.frame_time <= last_begin_frame_args_.frame_time ||
+        (args.frame_id.source_id == last_begin_frame_args_.frame_id.source_id &&
+         args.frame_id.sequence_number <=
+-            last_begin_frame_args_.frame_id.sequence_number)))
++            last_begin_frame_args_.frame_id.sequence_number))) {
++    // Domicile: a dropped begin frame is never answered, and viz stops
++    // sending to a sink that leaves 100 unanswered, so a source whose begin
++    // frames all look older than the last one taken freezes its page for
++    // good. Say so once a run is long enough to matter, and before viz stops.
++    if (++domicile_dropped_in_a_row_ == kDomicileDroppedRunToReport) {
++      LOG(ERROR) << "domicile: dropped " << domicile_dropped_in_a_row_
++                 << " begin frames in a row as older than the last one "
++                    "taken; last taken "
++                 << last_begin_frame_args_.ToString() << ", this "
++                 << args.ToString();
++    }
+     return;
++  }
++  domicile_dropped_in_a_row_ = 0;
+ 
+   if (RequestCallbackOnGpuAvailable()) {
+     pending_begin_frame_args_ = args;
+@@ -634,11 +648,28 @@ void ExternalBeginFrameSource::OnBeginFrame(const BeginFrameArgs& args) {
+   base::flat_set<raw_ptr<BeginFrameObserver, DanglingUntriaged>> observers(
+       observers_);
+ 
++  // Domicile: an observer also drops, unanswered, a begin frame older than
++  // its last one, which it keeps when its sink is recreated. Counted per
++  // begin frame, so one stuck observer is seen beside healthy ones.
++  BeginFrameArgs domicile_dropped_last_used;
+   for (BeginFrameObserver* obs : observers) {
+-    if (!CheckBeginFrameContinuity(obs, args))
++    if (!CheckBeginFrameContinuity(obs, args)) {
++      domicile_dropped_last_used = obs->LastUsedBeginFrameArgs();
+       continue;
++    }
+     FilterAndIssueBeginFrame(obs, args);
+   }
++  if (!domicile_dropped_last_used.IsValid()) {
++    domicile_observer_dropped_in_a_row_ = 0;
++  } else if (++domicile_observer_dropped_in_a_row_ ==
++             kDomicileDroppedRunToReport) {
++    LOG(ERROR) << "domicile: an observer dropped "
++               << domicile_observer_dropped_in_a_row_
++               << " begin frames in a row as older than the last one it "
++                  "used; last used "
++               << domicile_dropped_last_used.ToString() << ", this "
++               << args.ToString();
++  }
+   IssueBeginFrameToSchedulerClient(args);
+ }
+ 
+diff --git a/components/viz/common/frame_sinks/begin_frame_source.h b/components/viz/common/frame_sinks/begin_frame_source.h
+index 1a58564..1905da8 100644
+--- a/components/viz/common/frame_sinks/begin_frame_source.h
++++ b/components/viz/common/frame_sinks/begin_frame_source.h
+@@ -513,6 +513,13 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
+ 
+  private:
+   BeginFrameArgs pending_begin_frame_args_;
++
++  // Domicile: begin frames dropped in a row as older than the last one this
++  // source took or an observer used, and the run length that is logged, below
++  // viz's 100. See OnBeginFrame.
++  static constexpr int kDomicileDroppedRunToReport = 8;
++  int domicile_dropped_in_a_row_ = 0;
++  int domicile_observer_dropped_in_a_row_ = 0;
+ };
+ 
+ }  // namespace viz
+diff --git a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+index 58af94d..75c02ca 100644
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -18,6 +18,7 @@
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/system/sys_info.h"
+@@ -1506,6 +1507,11 @@ bool CompositorFrameSinkSupport::ShouldSendBeginFrame(
+     BeginFrameId frame_id,
+     base::TimeTicks frame_time,
+     base::TimeDelta vsync_interval) {
++  // Domicile: a sink below the stop limit re-arms the log for its next stop.
++  if (!begin_frame_tracker_.ShouldStopBeginFrame()) {
++    domicile_reported_stop_ = false;
++  }
++
+   // Don't send the same BeginFrameId to a client twice. This could otherwise
+   // happen if the client removes and then immediately re-adds a
+   // BeginFrameObserver before the next BeginFrame arrives. See
+@@ -1579,6 +1585,16 @@ bool CompositorFrameSinkSupport::ShouldSendBeginFrame(
+ 
+   // Stop sending BeginFrames to clients that are totally unresponsive.
+   if (begin_frame_tracker_.ShouldStopBeginFrame()) {
++    // Domicile: a page cut off here draws nothing, so shows no response to
++    // input, until it answers. Say so once per stop.
++    if (!domicile_reported_stop_) {
++      domicile_reported_stop_ = true;
++      LOG(ERROR) << "domicile: frame sink " << frame_sink_id_.ToString()
++                 << " left " << BeginFrameTracker::kLimitStop
++                 << " begin frames unanswered and gets no more until it "
++                    "answers; last sent "
++                 << last_begin_frame_args_.ToString();
++    }
+     return RecordShouldSendBeginFrame("StopUnresponsiveClient", false);
+   }
+ 
+diff --git a/components/viz/service/frame_sinks/compositor_frame_sink_support.h b/components/viz/service/frame_sinks/compositor_frame_sink_support.h
+index 7865965..1b25749 100644
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.h
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.h
+@@ -461,6 +461,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
+   uint32_t trace_sequence_ = 0;
+ 
+   BeginFrameTracker begin_frame_tracker_;
++  // Domicile: whether the current stop for an unresponsive client is logged.
++  bool domicile_reported_stop_ = false;
+ 
+   // Keeps track of the timestamps for a specific frame's submission and
+   // embedding. Observes the surface if the frame hasn't been embedded yet.

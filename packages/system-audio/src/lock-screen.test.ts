@@ -24,6 +24,7 @@ describe("on a lock screen", () => {
     stop();
     await sound.setVolume("output:alsa_output.pci", 1);
     await sound.setMuted("output:alsa_output.pci", true);
+    await sound.setMuted("output:alsa_output.pci", false);
 
     expect(sent).toEqual(lockScreenReadouts("system-audio"));
   });

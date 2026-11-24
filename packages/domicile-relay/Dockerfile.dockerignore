@@ -1,0 +1,5 @@
+# Only the Cargo workspace goes into the build.
+.git
+**/node_modules
+**/target
+**/dist

@@ -1,4 +1,4 @@
-import type { KeyboardEvent, PointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { css, cva } from "../../styled-system/css";
@@ -90,7 +90,7 @@ const Rings = ({ aim, cards, overviews }: Props) => {
             className={ringStyles({ kind: "shown" })}
             data-overview-ring="shown"
             key={`shown ${card}`}
-            style={placedIn(box)}
+            style={ringAt(box)}
           />
         ))}
       {aimed !== undefined && (
@@ -98,12 +98,22 @@ const Rings = ({ aim, cards, overviews }: Props) => {
           className={ringStyles({ kind: "aim" })}
           data-overview-ring="aim"
           key={`aim ${ringed(aimed.name)}`}
-          style={placedIn(aimed.box)}
+          style={ringAt(aimed.box)}
         />
       )}
     </div>
   );
 };
+
+/**
+ * Inline style placing a ring over `box` with `translate`, so a swap between
+ * tiles of one size slides it on the compositor.
+ */
+const ringAt = (box: Rect): CSSProperties => ({
+  blockSize: `${box.height.toString()}px`,
+  inlineSize: `${box.width.toString()}px`,
+  translate: `${box.x.toString()}px ${box.y.toString()}px`,
+});
 
 /** The tile workspace `aim` is on, in any of `overviews`. */
 const aimOf = (overviews: readonly ScreenOverview[], aim: string) =>
@@ -421,13 +431,17 @@ const ringsStyles = css({
 const ringStyles = cva({
   base: {
     borderRadius: "md",
+    insetBlockStart: 0,
+    insetInlineStart: 0,
     outlineColor: "accent",
     outlineOffset: "3px",
     outlineStyle: "solid",
     outlineWidth: "2px",
+    position: "absolute",
     transitionDuration: "slower",
-    transitionProperty:
-      "inset-block-start, inset-inline-start, block-size, inline-size",
+    // main-thread animation: sizes ease only where two tiles differ, as across
+    // monitors at other scales; within one, only `translate` changes.
+    transitionProperty: "translate, block-size, inline-size",
     transitionTimingFunction: "emphasized",
   },
   variants: {

@@ -32,7 +32,8 @@
     "./addresses": "./src/addresses.ts",
     "./consent": "./src/consent.ts",
     "./desk-inbox": "./src/desk-inbox.ts",
-    "./inbox": "./src/inbox.ts"
+    "./inbox": "./src/inbox.ts",
+    "./write-mail": "./src/write-mail.ts"
   },
   "files": [
     "src/**",

@@ -59,10 +59,10 @@ index a6efac4..9eb0014 100644
  
    // If certain views were not laid out, make sure they're hidden to avoid
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index cf7a3be..930c6df 100644
+index fc7b4d1..ba0b58f 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
-@@ -969,6 +969,8 @@ source_set("browser") {
+@@ -966,6 +966,8 @@ source_set("browser") {
      "dom_storage/dom_storage_context_wrapper.h",
      "dom_storage/session_storage_namespace_handle_impl.cc",
      "dom_storage/session_storage_namespace_handle_impl.h",
@@ -72,7 +72,7 @@ index cf7a3be..930c6df 100644
      "domicile/domicile_frame_sink_broker.h",
      "domicile/domicile_spike_probe.cc",
 diff --git a/content/browser/renderer_host/render_widget_host_view_base.cc b/content/browser/renderer_host/render_widget_host_view_base.cc
-index bf83513..63975fe 100644
+index 0507a63..fc96b62 100644
 --- a/content/browser/renderer_host/render_widget_host_view_base.cc
 +++ b/content/browser/renderer_host/render_widget_host_view_base.cc
 @@ -25,6 +25,7 @@
@@ -83,7 +83,7 @@ index bf83513..63975fe 100644
  #include "content/browser/gpu/gpu_data_manager_impl.h"
  #include "content/browser/renderer_host/delegated_frame_host.h"
  #include "content/browser/renderer_host/frame_tree.h"
-@@ -1023,6 +1024,14 @@ display::ScreenInfos RenderWidgetHostViewBase::GetNewScreenInfosForUpdate() {
+@@ -1025,6 +1026,14 @@ display::ScreenInfos RenderWidgetHostViewBase::GetNewScreenInfosForUpdate() {
  
    display::ScreenInfos screen_infos;
  
@@ -99,10 +99,10 @@ index bf83513..63975fe 100644
      gfx::NativeView native_view = GetNativeView();
      const auto& display = native_view
 diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
-index 0851075..abb6a1b 100644
+index c4f59ab..81e0d08 100644
 --- a/content/public/browser/BUILD.gn
 +++ b/content/public/browser/BUILD.gn
-@@ -169,6 +169,7 @@ source_set("browser_sources") {
+@@ -168,6 +168,7 @@ source_set("browser_sources") {
      "document_user_data.cc",
      "document_user_data.h",
      "dom_storage_context.h",
@@ -279,10 +279,10 @@ index f8ab219..e10c14b 100644
    // not have -- `Clipboard::Create` falls back to `ClipboardNonBacked`, an
    // in-process store nothing outside the browser can reach, so a copy made in
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 3ec0067..794467c 100644
+index cb87d74..a9aead2 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
-@@ -390,6 +390,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -377,6 +377,11 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // to lay out. See `DomicileDisplayLayout` above.
    virtual void SetDomicileDisplayLayout(
        const std::vector<DomicileDisplayLayout>& layout) {}

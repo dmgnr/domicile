@@ -60,4 +60,28 @@ describe(Menu, () => {
       expect(chose).toEqual(["hour"]);
     });
   });
+
+  it("holds a context menu's check, radio and submenu items", async () => {
+    render(
+      <Menu trigger={<Button>More</Button>}>
+        <Menu.CheckboxItem checked>In private windows</Menu.CheckboxItem>
+        <Menu.Submenu label="Can read websites">
+          <Menu.RadioGroup value="all">
+            <Menu.RadioItem value="all">On all sites</Menu.RadioItem>
+          </Menu.RadioGroup>
+        </Menu.Submenu>
+      </Menu>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
+
+    expect(
+      await screen.findByRole("menuitemcheckbox", {
+        name: "In private windows",
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByRole("menuitem", { name: "Can read websites" }),
+    ).toHaveAttribute("aria-haspopup", "menu");
+  });
 });

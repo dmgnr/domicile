@@ -20,10 +20,12 @@
 #include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/expected.h"
+#include "chrome/browser/domicile/domicile_electron_page.h"
 #include "chrome/browser/domicile/domicile_media_devices.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/domicile/browser/command_protocol.h"
+#include "components/domicile/browser/electron_app.h"
 #include "components/domicile/browser/site_permissions.h"
 #include "components/domicile/browser/web_view_guest.h"
 #include "components/domicile/mojom/web_view_guest.mojom.h"
@@ -139,6 +141,80 @@ class ShellPermissionPrompt : public permissions::PermissionPrompt {
   base::WeakPtrFactory<ShellPermissionPrompt> weak_factory_{this};
 };
 
+// A prompt an Electron app's permission request handler answers, in place of
+// the shell, for a page in one of its sessions. Lives while
+// PermissionRequestManager shows it.
+//
+// The answer is Chrome's to keep, as the user's would be: the handler is
+// asked when Chrome would prompt.
+class ElectronPermissionPrompt : public permissions::PermissionPrompt {
+ public:
+  ElectronPermissionPrompt(ElectronSession& session,
+                           const std::string& window,
+                           Delegate& delegate,
+                           ElectronPermissionDetails details)
+      : delegate_(&delegate) {
+    session.AskPermission(window, std::move(details),
+                          base::BindOnce(&ElectronPermissionPrompt::Answered,
+                                         weak_factory_.GetWeakPtr()));
+  }
+
+  ElectronPermissionPrompt(const ElectronPermissionPrompt&) = delete;
+  ElectronPermissionPrompt& operator=(const ElectronPermissionPrompt&) = delete;
+  // An answer that comes after the manager dropped this prompt finds
+  // nothing: the request went with its page.
+  ~ElectronPermissionPrompt() override = default;
+
+  // permissions::PermissionPrompt:
+  bool UpdateAnchor() override { return true; }
+  // The app answers whether or not its window shows, and asking it again
+  // for the same request would be a second request to its handler.
+  TabSwitchingBehavior GetTabSwitchingBehavior() override {
+    return kKeepPromptAlive;
+  }
+  // As ShellPermissionPrompt's, for Chrome's records.
+  permissions::PermissionPromptDisposition GetPromptDisposition()
+      const override {
+    return permissions::PermissionPromptDisposition::ANCHORED_BUBBLE;
+  }
+  bool IsAskPrompt() const override { return true; }
+  std::optional<gfx::Rect> GetViewBoundsInScreen() const override {
+    return std::nullopt;
+  }
+  std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
+      const override {
+    return {};
+  }
+  std::optional<permissions::feature_params::PermissionElementPromptPosition>
+  GetPromptPosition() const override {
+    return std::nullopt;
+  }
+
+ private:
+  // Acted on in a later task, as ShellPermissionPrompt's answers are: an app
+  // that is already gone answers while the manager is still making this
+  // prompt.
+  void Answered(bool granted) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ElectronPermissionPrompt::Decide,
+                                  weak_factory_.GetWeakPtr(), granted));
+  }
+
+  // Deletes this prompt.
+  void Decide(bool granted) {
+    const PromptOptions options = std::monostate();
+    if (granted) {
+      delegate_->Accept(options);
+    } else {
+      delegate_->Deny(options);
+    }
+  }
+
+  // Owns this prompt.
+  const raw_ptr<Delegate> delegate_;
+  base::WeakPtrFactory<ElectronPermissionPrompt> weak_factory_{this};
+};
+
 // The kinds `delegate`'s requests ask for, or nothing if any has no kind.
 std::optional<std::vector<mojom::WebViewPermission>> PermissionsAsked(
     const permissions::PermissionPrompt::Delegate& delegate) {
@@ -161,8 +237,22 @@ std::unique_ptr<permissions::PermissionPrompt> MakePrompt(
   // AttachPermissionPrompts gives a manager only to guests.
   WebViewGuest* guest = WebViewGuest::FromWebContents(contents);
   CHECK(guest);
+  std::optional<std::vector<mojom::WebViewPermission>> asked =
+      PermissionsAsked(*delegate);
+  // An Electron app's handler answers its pages, for the kinds Electron
+  // asks about.
+  const base::WeakPtr<ElectronSession> session =
+      ElectronPage::SessionOf(*contents);
+  if (session && session->HandlesPermissions() && asked.has_value()) {
+    std::optional<ElectronPermissionDetails> details =
+        ElectronPermissionFor(*asked, delegate->GetRequestingOrigin());
+    if (details.has_value()) {
+      return std::make_unique<ElectronPermissionPrompt>(
+          *session, guest->window_id(), *delegate, std::move(*details));
+    }
+  }
   return std::make_unique<ShellPermissionPrompt>(*guest, *delegate,
-                                                 PermissionsAsked(*delegate));
+                                                 std::move(asked));
 }
 
 class ChromeMediaAccess : public MediaAccess {
@@ -181,6 +271,10 @@ class ChromeMediaAccess : public MediaAccess {
              blink::mojom::MediaStreamType type) override {
     return MediaCaptureDevicesDispatcher::GetInstance()
         ->CheckMediaAccessPermission(&frame, origin, type);
+  }
+
+  void WhenDevicesListed(base::OnceClosure listed) override {
+    WhenMediaDevicesListed(std::move(listed));
   }
 
   mojom::WebViewMediaDevicesPtr ListDevices(
@@ -238,7 +332,7 @@ void AttachPermissionPrompts(content::WebContents& guest) {
 void UseChromeForGuestMedia() {
   static base::NoDestructor<ChromeMediaAccess> access;
   WebViewGuest::SetMediaAccess(access.get());
-  StartListingMediaDevices();
+  HearMediaDeviceLists();
 }
 
 }  // namespace domicile

@@ -22,17 +22,17 @@ Verified: not built. This repository cannot build Chromium; the engine
 job builds it on `crux`. guard-notification-window.sh covers it.
 ---
  chrome/browser/notifications/BUILD.gn         |  4 ++++
- .../notification_platform_bridge_linux.cc     | 14 +++++++++++++
+ .../notification_platform_bridge_linux.cc     | 15 ++++++++++++++
  .../notification_event_dispatcher_impl.cc     | 20 +++++++++++++++++++
  .../notification_event_dispatcher_impl.h      |  2 ++
  .../browser/notification_event_dispatcher.h   |  8 ++++++++
- 5 files changed, 48 insertions(+)
+ 5 files changed, 49 insertions(+)
 
 diff --git a/chrome/browser/notifications/BUILD.gn b/chrome/browser/notifications/BUILD.gn
-index 884370a..a4f80ee 100644
+index 3a220f9..5948541 100644
 --- a/chrome/browser/notifications/BUILD.gn
 +++ b/chrome/browser/notifications/BUILD.gn
-@@ -338,6 +338,10 @@ source_set("impl") {
+@@ -340,6 +340,10 @@ source_set("impl") {
        deps += [
          "//chrome/app/theme:chrome_unscaled_resources_grit",
          "//chrome/browser/themes",
@@ -41,13 +41,13 @@ index 884370a..a4f80ee 100644
 +        # notification came from.
 +        "//components/domicile:notification_window",
        ]
-     }
-   }
+ 
+       if (use_glib && use_gio) {
 diff --git a/chrome/browser/notifications/notification_platform_bridge_linux.cc b/chrome/browser/notifications/notification_platform_bridge_linux.cc
-index 498acbc..5a681f9 100644
+index 5c20e20..9f6ec4f 100644
 --- a/chrome/browser/notifications/notification_platform_bridge_linux.cc
 +++ b/chrome/browser/notifications/notification_platform_bridge_linux.cc
-@@ -69,6 +69,7 @@
+@@ -70,6 +70,7 @@
  #include "components/dbus/utils/read_value.h"
  #include "components/dbus/utils/variant.h"
  #include "components/dbus/xdg/portal.h"
@@ -55,7 +55,7 @@ index 498acbc..5a681f9 100644
  #include "components/url_formatter/elide_url.h"
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
-@@ -132,6 +133,8 @@ const char kCapabilityPersistence[] = "persistence";
+@@ -141,6 +142,8 @@ const char kCapabilityPersistence[] = "persistence";
  const char kCapabilityXKdeOriginName[] = "x-kde-origin-name";
  const char kCapabilityXKdeReplyPlaceholderText[] =
      "x-kde-reply-placeholder-text";
@@ -64,13 +64,14 @@ index 498acbc..5a681f9 100644
  
  // Button IDs.
  const char kCloseButtonId[] = "close";
-@@ -1047,6 +1050,17 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
+@@ -1175,6 +1178,18 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
            dbus_utils::Variant::Wrap<"s">(std::move(context_display_text)));
      }
  
 +    // Domicile's engine fork: the browser window whose page showed it, so
 +    // the desktop can tell a site's window apart from its other pages.
-+    if (notification_type == NotificationHandler::Type::WEB_NON_PERSISTENT) {
++    if (data->notification_type ==
++        NotificationHandler::Type::WEB_NON_PERSISTENT) {
 +      std::string window =
 +          domicile::FindNotificationWindow(notification->id());
 +      if (!window.empty()) {
@@ -83,7 +84,7 @@ index 498acbc..5a681f9 100644
        hints.emplace(kCapabilityXKdeReplyPlaceholderText,
                      dbus_utils::Variant::Wrap<"s">(
 diff --git a/content/browser/notifications/notification_event_dispatcher_impl.cc b/content/browser/notifications/notification_event_dispatcher_impl.cc
-index a17db79..23328b7 100644
+index 4752906..bef8606 100644
 --- a/content/browser/notifications/notification_event_dispatcher_impl.cc
 +++ b/content/browser/notifications/notification_event_dispatcher_impl.cc
 @@ -22,6 +22,7 @@
@@ -94,7 +95,7 @@ index a17db79..23328b7 100644
  #include "content/public/common/persistent_notification_status.h"
  #include "third_party/blink/public/common/notifications/platform_notification_data.h"
  #include "third_party/blink/public/common/storage_key/storage_key.h"
-@@ -591,6 +592,25 @@ void NotificationEventDispatcherImpl::OnNonPersistentCloseComplete(
+@@ -605,6 +606,25 @@ void NotificationEventDispatcherImpl::OnNonPersistentCloseComplete(
    std::move(completed_closure).Run();
  }
  

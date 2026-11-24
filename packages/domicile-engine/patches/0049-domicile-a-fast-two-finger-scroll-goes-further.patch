@@ -28,7 +28,7 @@ The test is listed in ozone_unittests rather than evdev's own
  4 files changed, 21 insertions(+), 1 deletion(-)
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index 535a9a3..f23aa3c 100644
+index 2e1e117..95d0bce 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -49,6 +49,8 @@ component("evdev") {
@@ -92,10 +92,10 @@ index 175b490..54ffd05 100644
  
  }  // namespace ui
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index e66a361..6e20eb6 100644
+index fb31d3c..8cb217f 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -267,6 +267,11 @@ source_set("gbm_unittests") {
+@@ -269,6 +269,11 @@ source_set("gbm_unittests") {
      "domicile/drm_sleep_unittest.cc",
      "domicile/drm_vt_switcher_unittest.cc",
      "domicile/edid_name_unittest.cc",

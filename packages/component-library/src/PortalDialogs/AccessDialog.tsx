@@ -3,17 +3,26 @@ import { PortalAnswer as Answer } from "@domicile-desktop/sdk/portal";
 import { css } from "../../styled-system/css";
 import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
+import type { Presence } from "./presence";
 
 type Props = {
   answer: (answer: PortalAnswer) => void;
   /** Who asks, as the dialog names them; unnamed when the shell asks. */
   asker: string | undefined;
   body: AccessBody;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
 /** A yes/no question from an application. Dismissing it denies. */
-export const AccessDialog = ({ answer, asker, body, screen }: Props) => {
+export const AccessDialog = ({
+  answer,
+  asker,
+  body,
+  presence,
+  screen,
+}: Props) => {
   // One line under the title. The subtitle mostly restates the title, so the
   // body wins when there is one.
   const detail = [body.body, body.subtitle].find((text) => text !== "");
@@ -48,7 +57,7 @@ export const AccessDialog = ({ answer, asker, body, screen }: Props) => {
           answer(Answer.Canceled());
         }
       }}
-      open
+      {...presence}
       screen={screen}
       title={body.title}
     >

@@ -171,24 +171,25 @@ impl<K: Clone + Eq + Hash, F> Imports<K, F> {
         Finished { forget: None, then }
     }
 
-    /// Drops buffer `key`'s imports on every surface, for a destroyed
-    /// `wl_buffer` or a freed upload. An import still running is forgotten
-    /// when it finishes.
-    pub fn forget(&mut self, key: &K) -> Forgotten<F> {
+    /// Drops the imports of every key `of` matches on every surface, for a
+    /// destroyed `wl_buffer` or a freed upload: a buffer is under one key per
+    /// color it was imported in. An import still running is forgotten when it
+    /// finishes.
+    pub fn forget(&mut self, of: impl Fn(&K) -> bool) -> Forgotten<F> {
         for importing in self.importing.values_mut() {
-            if importing.key.as_ref() == Some(key) {
+            if importing.key.as_ref().is_some_and(&of) {
                 importing.key = None;
             }
         }
         Forgotten {
             ids: self
                 .done
-                .extract_if(|(_, of), _| of == key)
+                .extract_if(|(_, key), _| of(key))
                 .map(|((surface, _), id)| (surface, id))
                 .collect(),
             waited: self
                 .waiting
-                .extract_if(|_, (waits_on, _)| waits_on == key)
+                .extract_if(|_, (waits_on, _)| of(waits_on))
                 .map(|(surface, (_, frame))| (surface, frame))
                 .collect(),
         }
@@ -418,7 +419,7 @@ mod tests {
         imports.imported(OTHER, 'a', 12);
         let request = waits(&mut imports, OTHER, 'b', 1).expect("an import starts");
 
-        let mut forgotten = imports.forget(&'a');
+        let mut forgotten = imports.forget(|key| *key == 'a');
 
         forgotten.ids.sort();
         assert_eq!(
@@ -429,7 +430,7 @@ mod tests {
             }
         );
         assert_eq!(
-            imports.forget(&'b'),
+            imports.forget(|key| *key == 'b'),
             Forgotten {
                 ids: vec![],
                 waited: vec![(OTHER, 1)]
@@ -443,6 +444,40 @@ mod tests {
             }
         );
         assert!(!imports.knows(OTHER, &'a') && !imports.knows(OTHER, &'b'));
+    }
+
+    #[test]
+    fn a_buffer_in_a_new_color_is_imported_again_and_forgotten_in_every_color() {
+        // As the session keys them: a buffer, and the color it was imported in.
+        let mut imports = Imports::<(char, u64), u32>::default();
+        let old = match imports.route(SURFACE, ('a', 0), 1) {
+            Route::Wait { start, .. } => start.expect("an import starts"),
+            Route::Submit { .. } => panic!("nothing is imported yet"),
+        };
+        let new = match imports.route(SURFACE, ('a', 1), 2) {
+            Route::Wait { start, replaced } => {
+                assert_eq!(replaced, Some(1));
+                start.expect("the new color is imported too")
+            }
+            Route::Submit { .. } => panic!("the new color is not imported yet"),
+        };
+
+        assert_eq!(
+            imports.finished(old, Some(10)).then,
+            None,
+            "the old color's import does not show the frame drawn in the new"
+        );
+        assert_eq!(
+            imports.finished(new, Some(11)).then,
+            Some(Then::Submit {
+                surface: SURFACE,
+                id: 11,
+                frame: 2
+            })
+        );
+        let mut forgotten = imports.forget(|(buffer, _)| *buffer == 'a');
+        forgotten.ids.sort();
+        assert_eq!(forgotten.ids, vec![(SURFACE, 10), (SURFACE, 11)]);
     }
 
     #[test]

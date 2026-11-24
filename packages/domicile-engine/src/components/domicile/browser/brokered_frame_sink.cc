@@ -19,6 +19,8 @@
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/common/sync_token.h"
+#include "third_party/skia/include/core/SkAlphaType.h"
+#include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/gpu_fence.h"
@@ -34,21 +36,43 @@ namespace {
 constexpr gpu::SharedImageUsageSet kWindowUsage =
     gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
 
+// A viz format and the alpha its pixels carry.
+struct ImportFormat {
+  viz::SharedImageFormat format;
+  SkAlphaType alpha;
+};
+
 // Maps a DRM fourcc to the matching viz format.
 //
 // A mismatch does not fail; it draws the window with permuted channels. DRM
-// names channels from the most significant byte and viz in memory order, so
-// ARGB8888 is BGRA_8888.
-std::optional<viz::SharedImageFormat> FormatFromFourcc(uint32_t fourcc) {
+// names channels from the most significant bit and viz in memory order, so
+// ARGB8888 is BGRA_8888. Viz has no 10-bit or half-float format without
+// alpha, and its twin with alpha, even marked opaque, draws the padding bits
+// as alpha: a window of zeroed padding comes out transparent. Those formats
+// are refused; the compositor copies a wl_shm frame in one into its twin.
+std::optional<ImportFormat> FormatFromFourcc(uint32_t fourcc) {
   switch (fourcc) {
     case 0x34325241:  // DRM_FORMAT_ARGB8888
-      return viz::SinglePlaneFormat::kBGRA_8888;
+      return ImportFormat{viz::SinglePlaneFormat::kBGRA_8888,
+                          kPremul_SkAlphaType};
     case 0x34325258:  // DRM_FORMAT_XRGB8888
-      return viz::SinglePlaneFormat::kBGRX_8888;
+      return ImportFormat{viz::SinglePlaneFormat::kBGRX_8888,
+                          kOpaque_SkAlphaType};
     case 0x34324241:  // DRM_FORMAT_ABGR8888
-      return viz::SinglePlaneFormat::kRGBA_8888;
+      return ImportFormat{viz::SinglePlaneFormat::kRGBA_8888,
+                          kPremul_SkAlphaType};
     case 0x34324258:  // DRM_FORMAT_XBGR8888
-      return viz::SinglePlaneFormat::kRGBX_8888;
+      return ImportFormat{viz::SinglePlaneFormat::kRGBX_8888,
+                          kOpaque_SkAlphaType};
+    case 0x30335241:  // DRM_FORMAT_ARGB2101010
+      return ImportFormat{viz::SinglePlaneFormat::kBGRA_1010102,
+                          kPremul_SkAlphaType};
+    case 0x30334241:  // DRM_FORMAT_ABGR2101010
+      return ImportFormat{viz::SinglePlaneFormat::kRGBA_1010102,
+                          kPremul_SkAlphaType};
+    case 0x48344241:  // DRM_FORMAT_ABGR16161616F
+      return ImportFormat{viz::SinglePlaneFormat::kRGBA_F16,
+                          kPremul_SkAlphaType};
     default:
       return std::nullopt;
   }
@@ -112,7 +136,8 @@ void BrokeredFrameSink::CreateCompositorFrameSink(
 void BrokeredFrameSink::Embed(const viz::FrameSinkId& parent_frame_sink_id,
                               const viz::LocalSurfaceId& local_surface_id,
                               const gfx::Size& size,
-                              double scale) {
+                              double scale,
+                              double zoom) {
   // Drop a late, older id. Several <app> elements for one window share an
   // allocator but use separate pipes, so ids can arrive out of order. Viz
   // closes a sink that submits to an older id, freezing the window.
@@ -135,7 +160,7 @@ void BrokeredFrameSink::Embed(const viz::FrameSinkId& parent_frame_sink_id,
   scale_ = scale > 0 ? static_cast<float>(scale) : 1.f;
 
   if (observer_) {
-    observer_->OnSurfaceEmbedded(local_surface_id, size, scale);
+    observer_->OnSurfaceEmbedded(local_surface_id, size, scale, zoom);
   }
 }
 
@@ -143,8 +168,9 @@ uint64_t BrokeredFrameSink::ImportBuffer(
     gfx::GpuMemoryBufferHandle handle,
     const gfx::Size& size,
     uint32_t fourcc,
+    const gfx::ColorSpace& color_space,
     std::optional<gpu::ExportedSharedImage>* exported) {
-  const std::optional<viz::SharedImageFormat> format = FormatFromFourcc(fourcc);
+  const std::optional<ImportFormat> format = FormatFromFourcc(fourcc);
   if (!format) {
     LOG(ERROR) << "domicile: no SharedImageFormat for DRM fourcc 0x" << std::hex
                << fourcc
@@ -155,7 +181,8 @@ uint64_t BrokeredFrameSink::ImportBuffer(
 
   scoped_refptr<gpu::ClientSharedImage> shared_image;
   gpu::SharedImageInterface* sii = nullptr;
-  if (handle.type == gfx::SHARED_MEMORY_BUFFER) {
+  const bool handle_was_dmabuf = handle.type != gfx::SHARED_MEMORY_BUFFER;
+  if (!handle_was_dmabuf) {
     sii = get_software_shared_image_interface_.Run();
     if (!sii) {
       LOG(ERROR) << "domicile: a window in shared memory, but the browser "
@@ -166,7 +193,8 @@ uint64_t BrokeredFrameSink::ImportBuffer(
     // Viz reads the producer's memory itself: no copy on either side.
     const uint32_t stride = handle.stride;
     shared_image = sii->DomicileCreateSharedImageForSoftwareCompositor(
-        {*format, size, gfx::ColorSpace::CreateSRGB(),
+        {format->format, size, color_space,
+         kTopLeft_GrSurfaceOrigin, format->alpha,
          gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY, "DomicileWindow"},
         std::move(handle).region(), stride);
     if (!shared_image) {
@@ -183,7 +211,8 @@ uint64_t BrokeredFrameSink::ImportBuffer(
     // The part of exo::Buffer this needs. Its caching, fences, protected
     // content and YUV handling are viz's job or not yet supported.
     shared_image = sii->CreateSharedImage(
-        {*format, size, gfx::ColorSpace::CreateSRGB(), kWindowUsage,
+        {format->format, size, color_space,
+         kTopLeft_GrSurfaceOrigin, format->alpha, kWindowUsage,
          "DomicileWindow"},
         std::move(handle));
     if (!shared_image) {
@@ -194,6 +223,7 @@ uint64_t BrokeredFrameSink::ImportBuffer(
 
   ImportedBuffer buffer;
   buffer.size = size;
+  buffer.on_gpu = handle_was_dmabuf;
   buffer.resource = viz::TransferableResource::Make(
       shared_image, viz::TransferableResource::ResourceSource::kUI,
       sii->GenVerifiedSyncToken());
@@ -209,6 +239,15 @@ uint64_t BrokeredFrameSink::ImportBuffer(
   resource_to_buffer_[buffer.resource.id] = buffer_id;
   buffers_[buffer_id] = std::move(buffer);
   return buffer_id;
+}
+
+std::optional<gpu::SyncToken> BrokeredFrameSink::GpuCreationToken(
+    uint64_t buffer_id) const {
+  auto iter = buffers_.find(buffer_id);
+  if (iter == buffers_.end() || !iter->second.on_gpu) {
+    return std::nullopt;
+  }
+  return iter->second.shared_image->creation_sync_token();
 }
 
 bool BrokeredFrameSink::SubmitBuffer(uint64_t buffer_id,
@@ -260,6 +299,15 @@ bool BrokeredFrameSink::SubmitBuffer(uint64_t buffer_id,
   // `size_` is in device pixels at the page's scale.
   frame.metadata.device_scale_factor = scale_;
   frame.metadata.frame_token = ++next_frame_token_;
+  // A window the page does not draw (on another workspace, behind a tab)
+  // still submits a frame now and then, and each goes undrawn. Past a few
+  // undrawn frames viz throttles the BeginFrames that would carry their
+  // failed presentation timing, so the timing never leaves and the sink
+  // observes the BeginFrameSource for good: the display ticks at its refresh
+  // rate, keeping vblank interrupts on and panel self-refresh off, for a
+  // window nobody sees. This sink never asks for BeginFrames to draw, so
+  // there is nothing to throttle; let the timing go.
+  frame.metadata.may_throttle_if_undrawn_frames = false;
   frame.resource_list.push_back(buffer.resource);
   frame.render_pass_list.push_back(std::move(pass));
 
@@ -290,11 +338,15 @@ std::optional<gpu::SyncToken> BrokeredFrameSink::FenceBuffer(
   return sii->GenVerifiedSyncToken();
 }
 
-void BrokeredFrameSink::DestroyBuffer(uint64_t buffer_id) {
+void BrokeredFrameSink::DestroyBuffer(uint64_t buffer_id,
+                                      const gpu::SyncToken& read_done) {
   auto iter = buffers_.find(buffer_id);
   if (iter == buffers_.end()) {
     return;
   }
+  // The GPU destroys the image once viz's read of it lands, as
+  // exo::Buffer::Texture does for a released buffer.
+  iter->second.shared_image->UpdateDestructionSyncToken(read_done);
   resource_to_buffer_.erase(iter->second.resource.id);
   buffers_.erase(iter);
 }

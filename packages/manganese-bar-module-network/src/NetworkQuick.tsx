@@ -90,6 +90,7 @@ export const NetworkTile = ({ interfaces, onMore, wifi }: TileProps) => {
           detail={wifiDetailOf(device)}
           icon={<AnimatedWifiIcon bars={3} off={!device.enabled} size={15} />}
           label="Wi-Fi"
+          lit={device.connection !== undefined}
           onMore={onMore}
         />
       );
@@ -99,6 +100,7 @@ export const NetworkTile = ({ interfaces, onMore, wifi }: TileProps) => {
           detail={cable === undefined ? "No cable" : cableDetailOf(cable)}
           icon={<NetworkIcon size={15} weight="bold" />}
           label="Wired"
+          lit={cable !== undefined}
           onMore={onMore}
         />
       );

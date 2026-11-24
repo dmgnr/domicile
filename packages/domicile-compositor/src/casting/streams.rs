@@ -30,7 +30,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::calloop::channel::Sender;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::utils::Transform;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::buffer_transform::{crop_in_buffer, upright_size, Sampled};
 use crate::casting::audio::Heard;
@@ -48,7 +48,7 @@ use crate::casting::shots::{
     self, compose, desk_of, monitors, Desk, Developed, DevelopedWindow, Shown,
 };
 use crate::casting::{Candidate, Consumer, Event, Listener, Region, Request, Source, StreamId};
-use crate::engine::{CaptureId, CapturedFrame};
+use crate::engine::{BrowserView, BrowserWindow, CaptureId, CapturedFrame};
 
 /// A window's frame, as its commit brought it.
 pub struct Committed<'a> {
@@ -117,12 +117,33 @@ pub struct Streams {
     captures: Captures,
     /// Shots waiting for their monitors' frames.
     shooting: Vec<Shooting>,
-    /// Shots of one browser window alone, by the capture whose first frame
-    /// they wait for.
-    browser_shots: HashMap<CaptureId, DevelopedWindow>,
+    /// Shots of one browser window alone, waiting for their captures' first
+    /// frames.
+    browser_shots: Vec<BrowserShot>,
+    /// The views each browser window holds and shows, bottom first, by its
+    /// id.
+    views: HashMap<String, Vec<BrowserView>>,
     /// The pages browser window streams show, by their capture.
     pages: HashMap<CaptureId, Page>,
     sprite: Sprite,
+}
+
+/// A shot of one browser window alone: its page, with the views it holds
+/// drawn over it.
+struct BrowserShot {
+    /// The window's page first, then each view, bottom first.
+    parts: Vec<ShotPart>,
+    developed: DevelopedWindow,
+}
+
+/// A page a [`BrowserShot`] draws, from its capture's first frame.
+struct ShotPart {
+    capture: CaptureId,
+    /// Where a view is in the window's page, in its CSS pixels; `None` for
+    /// the window's own page.
+    place: Option<Rect>,
+    /// Its first frame, once read.
+    shot: Option<domicile_host::screenshot::Shot>,
 }
 
 /// A shot of the desk, waiting for a frame of every monitor.
@@ -177,6 +198,34 @@ struct Page {
     frame: Option<Frame>,
     /// The engine's frame `frame` samples, if it is sampled in place.
     held: Option<u64>,
+    /// The views the window holds and shows, bottom first, each from a
+    /// capture of its own, drawn over the page.
+    views: Vec<PageView>,
+}
+
+/// A view a cast browser window holds, as its capture last drew it.
+struct PageView {
+    /// The view's id.
+    id: String,
+    capture: CaptureId,
+    /// Where the app placed it in the window's page, in its CSS pixels.
+    place: Rect,
+    frame: Option<Frame>,
+    /// The engine's frame `frame` samples, if it is sampled in place.
+    held: Option<u64>,
+}
+
+impl PageView {
+    /// `view`, captured by `capture`, before its first frame.
+    fn of(view: &BrowserView, capture: CaptureId) -> Self {
+        Self {
+            id: view.id.clone(),
+            capture,
+            place: (view.x, view.y, view.width, view.height),
+            frame: None,
+            held: None,
+        }
+    }
 }
 
 /// One stream.
@@ -244,7 +293,8 @@ impl Streams {
             screens: Vec::new(),
             captures: Captures::default(),
             shooting: Vec::new(),
-            browser_shots: HashMap::new(),
+            browser_shots: Vec::new(),
+            views: HashMap::new(),
             pages: HashMap::new(),
             sprite: arrow(),
         }
@@ -417,10 +467,24 @@ impl Streams {
                 let capture = capturer
                     .start_browser_window(&id, MAX_FRAMERATE)
                     .map_err(Ended::Failed)?;
+                let mut views = Vec::new();
+                for view in self.views.get(&id).into_iter().flatten() {
+                    match capturer.start_browser_window(&view.id, MAX_FRAMERATE) {
+                        Ok(started) => views.push(PageView::of(view, started)),
+                        Err(why) => {
+                            for started in views.iter().map(|view| view.capture) {
+                                capturer.stop(started);
+                            }
+                            capturer.stop(capture);
+                            return Err(Ended::Failed(why));
+                        }
+                    }
+                }
                 self.pages.insert(
                     capture,
                     Page {
                         window: id,
+                        views,
                         ..Page::default()
                     },
                 );
@@ -480,8 +544,52 @@ impl Streams {
         }
     }
 
-    /// Takes a shot of browser window `id` alone, from a capture of its page.
-    /// `developed` hears it with the capture's first frame, or why it failed.
+    /// The browser windows the engine lists, for the views each holds. A
+    /// cast window's views follow: a view it no longer holds stops being
+    /// captured, and one it now holds starts.
+    pub fn browser_windows(
+        &mut self,
+        windows: &[BrowserWindow],
+        capturer: Option<&mut (dyn Capturer + 'static)>,
+    ) {
+        self.views = windows
+            .iter()
+            .map(|window| (window.id.clone(), window.views.clone()))
+            .collect();
+        let Some(capturer) = capturer else {
+            return;
+        };
+        for page in self.pages.values_mut() {
+            let held = self.views.get(&page.window).map_or(&[][..], Vec::as_slice);
+            let mut before = std::mem::take(&mut page.views);
+            for view in held {
+                match before.iter().position(|kept| kept.id == view.id) {
+                    Some(at) => {
+                        let mut kept = before.remove(at);
+                        kept.place = (view.x, view.y, view.width, view.height);
+                        page.views.push(kept);
+                    }
+                    None => match capturer.start_browser_window(&view.id, MAX_FRAMERATE) {
+                        Ok(started) => page.views.push(PageView::of(view, started)),
+                        // The view closed since the list was sent; the next
+                        // list drops it.
+                        Err(why) => {
+                            tracing::error!(%why, view = %view.id, "a cast window's view could not be captured")
+                        }
+                    },
+                }
+            }
+            // Stopping releases the frame each holds.
+            for gone in before {
+                capturer.stop(gone.capture);
+            }
+        }
+    }
+
+    /// Takes a shot of browser window `id` alone, from a capture of its page
+    /// and one of each view it holds, drawn over the page where its app
+    /// placed it. `developed` hears it once every capture has a first frame,
+    /// or why one failed.
     fn shoot_browser_window(
         &mut self,
         id: &str,
@@ -494,12 +602,95 @@ impl Streams {
             ));
             return;
         };
-        match capturer.start_browser_window(id, MAX_FRAMERATE) {
-            Ok(capture) => {
-                self.browser_shots.insert(capture, developed);
+        let pages = std::iter::once((id, None)).chain(
+            self.views.get(id).into_iter().flatten().map(|view| {
+                (
+                    view.id.as_str(),
+                    Some((view.x, view.y, view.width, view.height)),
+                )
+            }),
+        );
+        let mut parts = Vec::new();
+        for (page, place) in pages {
+            match capturer.start_browser_window(page, MAX_FRAMERATE) {
+                Ok(capture) => parts.push(ShotPart {
+                    capture,
+                    place,
+                    shot: None,
+                }),
+                Err(why) => {
+                    for part in parts {
+                        capturer.stop(part.capture);
+                    }
+                    developed(Err(why));
+                    return;
+                }
             }
-            Err(why) => developed(Err(why)),
         }
+        self.browser_shots.push(BrowserShot { parts, developed });
+    }
+
+    /// The browser window shot waiting for a first frame from `capture`.
+    fn shooting_browser_window(&self, capture: CaptureId) -> Option<usize> {
+        self.browser_shots.iter().position(|shot| {
+            shot.parts
+                .iter()
+                .any(|part| part.capture == capture && part.shot.is_none())
+        })
+    }
+
+    /// Keeps `captured` as the first frame of `capture`, a part of browser
+    /// window shot `at`, and stops the capture. Hears the shot once every
+    /// part has a frame, or as soon as one fails.
+    fn shot_part_drawn(
+        &mut self,
+        at: usize,
+        capture: CaptureId,
+        captured: Result<CapturedFrame, String>,
+        renderer: Option<&mut GlesRenderer>,
+        capturer: &mut (dyn Capturer + 'static),
+    ) {
+        let read = captured
+            .map_err(|why| why.to_string())
+            .and_then(|frame| shots::browser_window(&frame, renderer));
+        // Stopping releases the frame, so only once it is read.
+        capturer.stop(capture);
+        match read {
+            Ok(shot) => {
+                let browser_shot = &mut self.browser_shots[at];
+                for part in &mut browser_shot.parts {
+                    if part.capture == capture && part.shot.is_none() {
+                        part.shot = Some(shot);
+                        break;
+                    }
+                }
+                if browser_shot.parts.iter().all(|part| part.shot.is_some()) {
+                    let browser_shot = self.browser_shots.remove(at);
+                    (browser_shot.developed)(Ok(drawn(browser_shot.parts)));
+                }
+            }
+            Err(why) => self.shot_failed(at, capture, why, Some(capturer)),
+        }
+    }
+
+    /// Browser window shot `at` failed on `capture`: its other captures
+    /// still waiting stop, and it hears `why`.
+    fn shot_failed(
+        &mut self,
+        at: usize,
+        capture: CaptureId,
+        why: String,
+        capturer: Option<&mut (dyn Capturer + 'static)>,
+    ) {
+        let browser_shot = self.browser_shots.remove(at);
+        if let Some(capturer) = capturer {
+            for part in &browser_shot.parts {
+                if part.capture != capture && part.shot.is_none() {
+                    capturer.stop(part.capture);
+                }
+            }
+        }
+        (browser_shot.developed)(Err(why));
     }
 
     /// `desk` and its layout, with the captures a shot of it draws from
@@ -814,8 +1005,13 @@ impl Streams {
                     // Stopping releases the frame it holds. A capture the
                     // engine ended is gone already.
                     Some(Shows::BrowserWindow(capture)) => {
-                        if let (Some(_), Some(capturer)) = (self.pages.remove(&capture), capturer) {
+                        if let (Some(page), Some(capturer)) =
+                            (self.pages.remove(&capture), capturer)
+                        {
                             capturer.stop(capture);
+                            for view in page.views {
+                                capturer.stop(view.capture);
+                            }
                         }
                     }
                     None => {}
@@ -884,17 +1080,16 @@ impl Streams {
         capturer: &mut (dyn Capturer + 'static),
         now: Instant,
     ) -> Option<Instant> {
-        if let Some(developed) = self.browser_shots.remove(&capture) {
-            let shot = captured
-                .map_err(|why| why.to_string())
-                .and_then(|frame| shots::browser_window(&frame, renderer));
-            // Stopping releases the frame, so only once it is read.
-            capturer.stop(capture);
-            developed(shot);
+        if let Some(at) = self.shooting_browser_window(capture) {
+            self.shot_part_drawn(at, capture, captured, renderer, capturer);
             return self.next_due();
         }
         if self.pages.contains_key(&capture) {
             self.page_drawn(capture, id, captured, renderer, capturer, now);
+            return self.next_due();
+        }
+        if let Some(page) = self.page_holding(capture) {
+            self.view_drawn(page, capture, id, captured, renderer, capturer, now);
             return self.next_due();
         }
         let Some(display) = self.captures.display_of(capture) else {
@@ -911,7 +1106,7 @@ impl Streams {
             Err(why) => {
                 capturer.release(capture, id);
                 let engine_display = display;
-                warn!(%why, engine_display, "a captured frame could not be kept");
+                tracing::error!(%why, engine_display, "a captured frame could not be kept");
                 for stream in self.captures.streams_of(display) {
                     self.end_or_fail(stream, why.clone(), Some(&mut *capturer));
                 }
@@ -959,6 +1154,78 @@ impl Streams {
             })
     }
 
+    /// The page of a stream showing a view `capture` captures.
+    fn page_holding(&self, capture: CaptureId) -> Option<CaptureId> {
+        self.pages.iter().find_map(|(&page, shown)| {
+            shown
+                .views
+                .iter()
+                .any(|view| view.capture == capture)
+                .then_some(page)
+        })
+    }
+
+    /// Keeps frame `id` of `capture`, a view over `page`, gives back the
+    /// buffer the engine no longer needs to hold, and fills the page's stream.
+    #[allow(clippy::too_many_arguments)] // page_drawn's, and the page.
+    fn view_drawn(
+        &mut self,
+        page: CaptureId,
+        capture: CaptureId,
+        id: u64,
+        captured: Result<CapturedFrame, String>,
+        mut renderer: Option<&mut GlesRenderer>,
+        capturer: &mut (dyn Capturer + 'static),
+        now: Instant,
+    ) {
+        let stream = self
+            .page_cast(page)
+            .expect("a page lives as long as its stream");
+        let kept = captured.map_err(|why| why.to_string()).and_then(|frame| {
+            let (snapshot, kept) = captured::snapshot(&frame, renderer.as_deref_mut())
+                .map_err(|why| why.to_string())?;
+            Ok((frame, snapshot, kept))
+        });
+        let (frame, snapshot, kept) = match kept {
+            Ok(kept) => kept,
+            Err(why) => {
+                capturer.release(capture, id);
+                tracing::error!(%why, "a browser window view's captured frame could not be kept");
+                self.end(stream, Ended::Failed(why), Some(capturer));
+                return;
+            }
+        };
+        let shown = self.pages.get_mut(&page).expect("found above");
+        let view = shown
+            .views
+            .iter_mut()
+            .find(|view| view.capture == capture)
+            .expect("found above");
+        view.frame = Some(Frame {
+            snapshot,
+            content: frame.content,
+        });
+        let held = match kept {
+            Kept::Copied => {
+                capturer.release(capture, id);
+                None
+            }
+            Kept::Sampled => Some(id),
+        };
+        if let Some(before) = std::mem::replace(&mut view.held, held) {
+            capturer.release(capture, before);
+        }
+        let Some(size) = shown.frame.as_ref().map(|frame| page_size(frame.content)) else {
+            return;
+        };
+        self.offer(
+            stream,
+            vec![(0, 0, size.0 as i32, size.1 as i32)],
+            renderer,
+            now,
+        );
+    }
+
     /// Keeps frame `id` of `capture`, a page a stream shows, gives back the
     /// buffer the engine no longer needs to hold, and fills the stream.
     fn page_drawn(
@@ -983,7 +1250,7 @@ impl Streams {
             Ok(kept) => kept,
             Err(why) => {
                 capturer.release(capture, id);
-                warn!(%why, "a browser window's captured frame could not be kept");
+                tracing::error!(%why, "a browser window's captured frame could not be kept");
                 self.end(stream, Ended::Failed(why), Some(capturer));
                 return;
             }
@@ -1030,24 +1297,52 @@ impl Streams {
     pub fn capture_ended(
         &mut self,
         capture: CaptureId,
+        why: Option<String>,
         mut capturer: Option<&mut (dyn Capturer + 'static)>,
     ) {
-        if let Some(developed) = self.browser_shots.remove(&capture) {
-            developed(Err("the engine stopped capturing the browser window".into()));
-        }
-        for stream in self.captures.ended(capture) {
-            self.end_or_fail(
-                stream,
-                "the engine stopped capturing the monitor".into(),
+        let stopped = |what: &str| match &why {
+            Some(why) => format!("the engine stopped capturing the {what}: {why}"),
+            None => format!("the engine stopped capturing the {what}"),
+        };
+        if let Some(at) = self.shooting_browser_window(capture) {
+            self.shot_failed(
+                at,
+                capture,
+                stopped("browser window"),
                 capturer.as_deref_mut(),
             );
         }
+        for stream in self.captures.ended(capture) {
+            self.end_or_fail(stream, stopped("monitor"), capturer.as_deref_mut());
+        }
         if let Some(stream) = self.page_cast(capture) {
-            self.pages.remove(&capture);
+            if let (Some(page), Some(capturer)) =
+                (self.pages.remove(&capture), capturer.as_deref_mut())
+            {
+                for view in page.views {
+                    capturer.stop(view.capture);
+                }
+            }
             self.send(ToPipewire::End {
                 stream,
-                why: Ended::Failed("the engine stopped capturing the browser window".into()),
+                why: Ended::Failed(stopped("browser window")),
             });
+        }
+        if let Some(page) = self.page_holding(capture) {
+            let shown = self.pages.get_mut(&page).expect("found above");
+            shown.views.retain(|view| view.capture != capture);
+            // A view closing ends its capture without a cause; it leaves the
+            // window. One that failed fails the cast.
+            if why.is_some() {
+                let stream = self
+                    .page_cast(page)
+                    .expect("a page lives as long as its stream");
+                self.end(
+                    stream,
+                    Ended::Failed(stopped("browser window's view")),
+                    capturer,
+                );
+            }
         }
     }
 
@@ -1059,8 +1354,8 @@ impl Streams {
         for shooting in self.shooting.drain(..) {
             (shooting.developed)(Err("the engine was replaced".into()));
         }
-        for (_, developed) in self.browser_shots.drain() {
-            developed(Err("the engine was replaced".into()));
+        for browser_shot in self.browser_shots.drain(..) {
+            (browser_shot.developed)(Err("the engine was replaced".into()));
         }
         let captured: Vec<StreamId> = self
             .casts
@@ -1345,7 +1640,7 @@ impl Streams {
     }
 
     fn fail(&mut self, stream: StreamId, why: &FillError) {
-        warn!(?stream, %why, "a cast frame could not be filled");
+        tracing::error!(?stream, %why, "a cast frame could not be filled");
         self.send(ToPipewire::End {
             stream,
             why: Ended::Failed(why.to_string()),
@@ -1387,6 +1682,23 @@ impl Streams {
             .send(request)
             .unwrap_or_else(|_| panic!("the PipeWire thread outlives the compositor's casts"));
     }
+}
+
+/// A browser window's page, the first of `parts`, with the views after it
+/// drawn over it. Every part has its shot.
+fn drawn(parts: Vec<ShotPart>) -> domicile_host::screenshot::Shot {
+    let mut shots = parts.into_iter().map(|part| {
+        (
+            part.shot
+                .expect("a browser window is shot once every part is"),
+            part.place,
+        )
+    });
+    let (page, _) = shots.next().expect("a browser window shot has its page");
+    let views: Vec<_> = shots
+        .map(|(shot, place)| (shot, place.expect("a view has a place")))
+        .collect();
+    shots::with_views(page, &views)
 }
 
 /// The windows among `open`, as a shot names them, and each monitor's
@@ -1482,10 +1794,33 @@ fn view_size(
 }
 
 /// Where `engine` puts the pointer over `page`, `size` stream pixels, or
-/// `None` off it.
+/// `None` off it: over one of its views, the topmost, or else the page.
 fn on_page(engine: &EnginePointer, page: &Page, size: (u32, u32)) -> Option<(f64, f64)> {
-    let (x, y) = engine.pages.get(&page.window)?;
-    Some((x * f64::from(size.0), y * f64::from(size.1)))
+    let over_view = page.views.iter().rev().find_map(|view| {
+        let (x, y) = engine.pages.get(&view.id)?;
+        let (left, top, width, height) = placed(view.place, view.frame.as_ref()?.content);
+        Some((
+            f64::from(left) + x * f64::from(width),
+            f64::from(top) + y * f64::from(height),
+        ))
+    });
+    over_view.or_else(|| {
+        let (x, y) = engine.pages.get(&page.window)?;
+        Some((x * f64::from(size.0), y * f64::from(size.1)))
+    })
+}
+
+/// Where a view `place`d in a window's page, in its CSS pixels, is drawn in
+/// the page's stream pixels, from its frame's `content`: at its own density,
+/// which its content's width over its place's says.
+fn placed(place: Rect, content: Rect) -> Rect {
+    let scale = f64::from(content.2) / f64::from(place.2);
+    (
+        (f64::from(place.0) * scale).round() as i32,
+        (f64::from(place.1) * scale).round() as i32,
+        content.2,
+        content.3,
+    )
 }
 
 /// What a stream's next frame is made of, or `None` until every source it
@@ -1514,16 +1849,34 @@ fn view<'a>(
             let page = pages.get(capture)?;
             let frame = page.frame.as_ref()?;
             let size = page_size(frame.content);
-            Some(View {
+            let views = page
+                .views
+                .iter()
+                .map(|view| {
+                    let frame = view.frame.as_ref()?;
+                    Some(Layer {
+                        snapshot: &frame.snapshot,
+                        from: frame.content,
+                        to: placed(view.place, frame.content),
+                        transform: Transform::Normal,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let whole = (0, 0, size.0 as i32, size.1 as i32);
+            let view = View {
                 size,
-                layers: vec![Layer {
+                layers: std::iter::once(Layer {
                     snapshot: &frame.snapshot,
                     from: frame.content,
-                    to: (0, 0, size.0 as i32, size.1 as i32),
+                    to: whole,
                     transform: Transform::Normal,
-                }],
+                })
+                .chain(views)
+                .collect(),
                 pointer: on_page(engine_pointer, page, size),
-            })
+            };
+            // A view the app placed past the page's edge is cut there.
+            Some(cut(view, whole).0)
         }
         Shows::Desk { target, layout, .. } => {
             let layers = layout
@@ -1718,7 +2071,8 @@ mod tests {
     use smithay::utils::Transform;
 
     use super::{
-        cut, damage_in_view, density, heard, view, Cast, EnginePointer, Shot, Shows, Streams,
+        compose, cut, damage_in_view, density, heard, view, Cast, EnginePointer, Shot, Shows,
+        Streams,
     };
     use crate::buffer_transform::Sampled;
     use crate::casting::audio::Heard;
@@ -1734,10 +2088,12 @@ mod tests {
     use crate::casting::region::Screen;
     use crate::casting::shots::Desk;
     use crate::casting::{Candidate, Consumer, Region, Request, Source, StreamId};
-    use crate::engine::{CaptureId, CapturedFrame, CapturedPixels, SharedFd};
+    use crate::engine::{
+        BrowserView, BrowserWindow, CaptureId, CapturedFrame, CapturedPixels, SharedFd,
+    };
 
     /// An engine that numbers captures by display, captures browser windows
-    /// as 100, and records stops and releases.
+    /// from 100 up, and records stops and releases.
     #[derive(Default)]
     struct Engine {
         started: Vec<i64>,
@@ -1747,7 +2103,8 @@ mod tests {
         released: Vec<(CaptureId, u64)>,
     }
 
-    /// The capture [`Engine`] starts for a browser window.
+    /// The capture [`Engine`] starts for the first browser window, then 101
+    /// and up.
     const BROWSER_WINDOW: CaptureId = 100;
 
     impl Capturer for Engine {
@@ -1757,8 +2114,11 @@ mod tests {
             Ok(display as CaptureId)
         }
         fn start_browser_window(&mut self, window: &str, _: u32) -> Result<CaptureId, String> {
+            if window == "closed" {
+                return Err("no browser window closed".into());
+            }
             self.browser_windows.push(window.into());
-            Ok(BROWSER_WINDOW)
+            Ok(BROWSER_WINDOW + self.browser_windows.len() as CaptureId - 1)
         }
         fn resize(&mut self, _: CaptureId, _: (u32, u32)) {}
         fn stop(&mut self, capture: CaptureId) {
@@ -2194,9 +2554,12 @@ mod tests {
             Some(&mut engine),
         );
 
-        streams.capture_ended(2, Some(&mut engine));
+        streams.capture_ended(2, Some("viz ran out".into()), Some(&mut engine));
 
-        assert!(heard.try_recv().expect("developed").is_err());
+        assert_eq!(
+            heard.try_recv().expect("developed"),
+            Err("the engine stopped capturing the monitor: viz ran out".into())
+        );
         assert_eq!(engine.stopped, [1]);
     }
 
@@ -2235,6 +2598,109 @@ mod tests {
         assert_eq!(engine.stopped, [BROWSER_WINDOW]);
     }
 
+    /// Browser window "1", holding `views` by id at `places`, bottom first.
+    fn holding(views: &[(&str, Rect)]) -> Vec<BrowserWindow> {
+        vec![BrowserWindow {
+            id: "1".into(),
+            title: "Claude".into(),
+            app_id: "claude-desktop".into(),
+            url: String::new(),
+            private: false,
+            views: views
+                .iter()
+                .map(|&(id, (x, y, width, height))| BrowserView {
+                    id: id.into(),
+                    x,
+                    y,
+                    width,
+                    height,
+                })
+                .collect(),
+        }]
+    }
+
+    /// Asks `streams` for a shot of browser window "1".
+    fn shoot_one(
+        streams: &mut Streams,
+        engine: &mut Engine,
+    ) -> mpsc::Receiver<Result<domicile_host::screenshot::Shot, String>> {
+        let (developed, heard) = mpsc::channel();
+        streams.request(
+            Request::ShootBrowserWindow {
+                id: "1".into(),
+                developed: Box::new(move |shot| developed.send(shot).expect("heard")),
+            },
+            Vec::new,
+            None,
+            Some(engine),
+        );
+        heard
+    }
+
+    #[test]
+    fn a_browser_window_shot_draws_the_views_it_holds_over_its_page() {
+        let (mut streams, mut engine) = (streams(), Engine::default());
+        // A title bar page, with the whole chat a view under it.
+        streams.browser_windows(&holding(&[("6", (0, 1, 2, 1))]), None);
+        let heard = shoot_one(&mut streams, &mut engine);
+        assert_eq!(engine.browser_windows, ["1", "6"]);
+
+        streams.captured(
+            BROWSER_WINDOW,
+            1,
+            Ok(painted((2, 2), &[1, 1, 2, 2])),
+            None,
+            &mut engine,
+            Instant::now(),
+        );
+        assert!(
+            heard.try_recv().is_err(),
+            "no shot before every view's frame"
+        );
+        streams.captured(
+            BROWSER_WINDOW + 1,
+            1,
+            Ok(painted((2, 1), &[3, 4])),
+            None,
+            &mut engine,
+            Instant::now(),
+        );
+
+        let shot = heard.try_recv().expect("developed").expect("shot");
+        let blue: Vec<u8> = shot.bgra.chunks(4).map(|pixel| pixel[0]).collect();
+        assert_eq!(blue, [1, 1, 3, 4]);
+        assert_eq!(engine.stopped, [BROWSER_WINDOW, BROWSER_WINDOW + 1]);
+    }
+
+    #[test]
+    fn a_browser_window_shot_fails_when_a_view_cannot_be_captured() {
+        let (mut streams, mut engine) = (streams(), Engine::default());
+        streams.browser_windows(&holding(&[("closed", (0, 0, 1, 1))]), None);
+
+        let heard = shoot_one(&mut streams, &mut engine);
+
+        assert_eq!(
+            heard.try_recv().expect("developed"),
+            Err("no browser window closed".into())
+        );
+        assert_eq!(engine.stopped, [BROWSER_WINDOW], "the page's capture stops");
+    }
+
+    #[test]
+    fn a_browser_window_shot_fails_when_the_engine_stops_a_views_capture() {
+        let (mut streams, mut engine) = (streams(), Engine::default());
+        streams.browser_windows(&holding(&[("6", (0, 0, 1, 1))]), None);
+        let heard = shoot_one(&mut streams, &mut engine);
+
+        streams.capture_ended(BROWSER_WINDOW + 1, None, Some(&mut engine));
+
+        assert_eq!(
+            heard.try_recv().expect("developed"),
+            Err("the engine stopped capturing the browser window".into())
+        );
+        assert_eq!(engine.stopped, [BROWSER_WINDOW], "the page's capture stops");
+    }
+
     #[test]
     fn a_browser_window_shot_fails_when_the_engine_stops_its_capture() {
         let (mut streams, mut engine) = (streams(), Engine::default());
@@ -2249,9 +2715,12 @@ mod tests {
             Some(&mut engine),
         );
 
-        streams.capture_ended(BROWSER_WINDOW, Some(&mut engine));
+        streams.capture_ended(BROWSER_WINDOW, None, Some(&mut engine));
 
-        assert!(heard.try_recv().expect("developed").is_err());
+        assert_eq!(
+            heard.try_recv().expect("developed"),
+            Err("the engine stopped capturing the browser window".into())
+        );
     }
 
     /// The engine's pointer replaces the arrow, as a page changes it; a
@@ -2733,6 +3202,111 @@ mod tests {
             Ok(ToPipewire::Start { size, .. }) => assert_eq!(size, (2, 2)),
             _ => panic!("a stream offered once the page drew"),
         }
+    }
+
+    /// A cast of an Electron window shows the views it holds over its page,
+    /// where the app placed them, once every one has drawn.
+    #[test]
+    fn a_browser_window_cast_draws_the_views_it_holds_over_its_page() {
+        let (to_clients, _heard) = channel();
+        let mut streams = Streams::new(channel().0, to_clients, None);
+        let mut engine = Engine::default();
+        // A view past the page's right edge is cut there.
+        streams.browser_windows(&holding(&[("6", (1, 1, 2, 1))]), None);
+        browser_window_cast(&mut streams, &mut engine);
+        assert_eq!(engine.browser_windows, ["1", "6"]);
+        let shows = Shows::BrowserWindow(BROWSER_WINDOW);
+        let shown = |streams: &Streams| {
+            view(
+                &shows,
+                &streams.shots,
+                &streams.captures,
+                &streams.pages,
+                &streams.screens,
+                None,
+                &EnginePointer::default(),
+            )
+            .map(|view| {
+                let shot = compose(view.size, &view.layers, None).expect("on the CPU");
+                shot.bgra
+                    .chunks(4)
+                    .map(|pixel| pixel[0])
+                    .collect::<Vec<u8>>()
+            })
+        };
+
+        streams.captured(
+            BROWSER_WINDOW,
+            1,
+            Ok(painted((2, 2), &[1, 1, 1, 1])),
+            None,
+            &mut engine,
+            Instant::now(),
+        );
+        assert_eq!(shown(&streams), None, "nothing before the view draws");
+        streams.captured(
+            BROWSER_WINDOW + 1,
+            1,
+            Ok(painted((2, 1), &[3, 4])),
+            None,
+            &mut engine,
+            Instant::now(),
+        );
+
+        assert_eq!(shown(&streams), Some(vec![1, 1, 1, 3]));
+    }
+
+    /// A cast window's views follow the app: one it drops stops being
+    /// captured and drawn, and one it adds starts.
+    #[test]
+    fn a_browser_window_casts_views_follow_the_app() {
+        let mut streams = Streams::new(channel().0, channel().0, None);
+        let mut engine = Engine::default();
+        streams.browser_windows(&holding(&[("6", (0, 0, 1, 1))]), None);
+        browser_window_cast(&mut streams, &mut engine);
+
+        streams.browser_windows(&holding(&[("7", (0, 0, 1, 1))]), Some(&mut engine));
+
+        assert_eq!(engine.browser_windows, ["1", "6", "7"]);
+        assert_eq!(engine.stopped, [BROWSER_WINDOW + 1]);
+        let page = &streams.pages[&BROWSER_WINDOW];
+        assert_eq!(
+            page.views
+                .iter()
+                .map(|view| view.capture)
+                .collect::<Vec<_>>(),
+            [BROWSER_WINDOW + 2]
+        );
+    }
+
+    /// A view that closes leaves its window's cast; one whose capture failed
+    /// fails it.
+    #[test]
+    fn a_closed_view_leaves_a_cast_and_a_failed_one_ends_it() {
+        let (to_clients, heard) = channel();
+        let mut streams = Streams::new(channel().0, to_clients, None);
+        let mut engine = Engine::default();
+        streams.browser_windows(&holding(&[("6", (0, 0, 1, 1)), ("7", (0, 0, 1, 1))]), None);
+        browser_window_cast(&mut streams, &mut engine);
+
+        streams.capture_ended(BROWSER_WINDOW + 1, None, Some(&mut engine));
+        assert_eq!(streams.pages[&BROWSER_WINDOW].views.len(), 1);
+        assert!(heard.try_recv().is_err(), "the cast goes on");
+
+        streams.capture_ended(
+            BROWSER_WINDOW + 2,
+            Some("viz ran out".into()),
+            Some(&mut engine),
+        );
+        // Its consumer hears it start, then end.
+        assert!(matches!(heard.try_recv(), Ok(ToPipewire::Start { .. })));
+        assert!(matches!(
+            heard.try_recv(),
+            Ok(ToPipewire::End {
+                why: Ended::Failed(_),
+                ..
+            })
+        ));
     }
 
     /// A browser window's cast stopped before its page drew still ends

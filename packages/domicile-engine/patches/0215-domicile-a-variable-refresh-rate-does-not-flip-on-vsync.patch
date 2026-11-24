@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a variable refresh rate does not flip on vsync
+
+- With VRR_ENABLED the panel scans out when a flip lands, not on a
+  fixed vsync grid. PageFlipRequest still marked the flip's presentation
+  feedback kVSync, so SkiaOutputSurfaceImpl re-phased viz's begin frame
+  source to every flip. Each frame's interval then grew by the time the
+  last one took to draw, and every animation stuttered.
+- PageFlipRequest takes `on_vsync`; HardwareDisplayController passes
+  false when any of its CRTCs runs a variable refresh rate. The feedback
+  keeps kHWClock and kHWCompletion, and viz ticks at the mode's refresh
+  interval.
+- DrmPageFlipTimeoutTest covers a flip at a fixed and at a variable
+  refresh rate.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ ui/ozone/platform/drm/gpu/hardware_display_controller.cc | 7 ++++++-
+ ui/ozone/platform/drm/gpu/page_flip_request.cc           | 9 ++++++---
+ ui/ozone/platform/drm/gpu/page_flip_request.h            | 9 ++++++++-
+ 3 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
+index 382ae44..e940fca 100644
+--- a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
++++ b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
+@@ -249,7 +249,12 @@ void HardwareDisplayController::SchedulePageFlip(
+   DCHECK(!page_flip_request_);
+   TRACE_EVENT0("drm", "HDC::SchedulePageFlip");
+   scoped_refptr<PageFlipRequest> page_flip_request =
+-      base::MakeRefCounted<PageFlipRequest>(GetRefreshInterval());
++      base::MakeRefCounted<PageFlipRequest>(
++          GetRefreshInterval(),
++          // DOMICILE: a variable refresh rate flips off the vsync grid.
++          std::ranges::none_of(crtc_controllers_, [](const auto& controller) {
++            return controller->vrr_enabled();
++          }));
+   gfx::GpuFenceHandle release_fence;
+ 
+   PageFlipResult result =
+diff --git a/ui/ozone/platform/drm/gpu/page_flip_request.cc b/ui/ozone/platform/drm/gpu/page_flip_request.cc
+index b3b9a2a..868ba62 100644
+--- a/ui/ozone/platform/drm/gpu/page_flip_request.cc
++++ b/ui/ozone/platform/drm/gpu/page_flip_request.cc
+@@ -11,8 +11,9 @@
+ 
+ namespace ui {
+ 
+-PageFlipRequest::PageFlipRequest(const base::TimeDelta& refresh_interval)
+-    : refresh_interval_(refresh_interval) {}
++PageFlipRequest::PageFlipRequest(const base::TimeDelta& refresh_interval,
++                                 bool on_vsync)
++    : refresh_interval_(refresh_interval), on_vsync_(on_vsync) {}
+ 
+ PageFlipRequest::~PageFlipRequest() = default;
+ 
+@@ -33,7 +34,9 @@ void PageFlipRequest::Signal(unsigned int frame, base::TimeTicks timestamp) {
+   // For Ozone DRM, the page flip is aligned with VSYNC, and the timestamp is
+   // provided by kernel DRM driver (kHWClock) and the buffer has been presented
+   // on the screen (kHWCompletion).
+-  const uint32_t kFlags = gfx::PresentationFeedback::Flags::kVSync |
++  // DOMICILE: not with a variable refresh rate; see the constructor.
++  const uint32_t kFlags = (on_vsync_ ? gfx::PresentationFeedback::Flags::kVSync
++                                     : 0u) |
+                           gfx::PresentationFeedback::Flags::kHWClock |
+                           gfx::PresentationFeedback::Flags::kHWCompletion;
+   gfx::PresentationFeedback feedback(timestamp, refresh_interval_, kFlags);
+diff --git a/ui/ozone/platform/drm/gpu/page_flip_request.h b/ui/ozone/platform/drm/gpu/page_flip_request.h
+index 6173b13..f3dbb8e 100644
+--- a/ui/ozone/platform/drm/gpu/page_flip_request.h
++++ b/ui/ozone/platform/drm/gpu/page_flip_request.h
+@@ -20,7 +20,13 @@ class PageFlipRequest : public base::RefCounted<PageFlipRequest> {
+       base::OnceCallback<void(unsigned int /* frame */,
+                               base::TimeTicks /* timestamp */)>;
+ 
+-  explicit PageFlipRequest(const base::TimeDelta& refresh_interval);
++  // DOMICILE: `on_vsync` is false for a flip on a CRTC with a variable
++  // refresh rate, which scans out when the flip lands rather than on a fixed
++  // vsync grid. Its feedback then carries no `kVSync`, so viz keeps ticking at
++  // `refresh_interval` instead of re-phasing to each flip, which would stretch
++  // every frame by the time it took to draw.
++  explicit PageFlipRequest(const base::TimeDelta& refresh_interval,
++                           bool on_vsync = true);
+ 
+   PageFlipRequest(const PageFlipRequest&) = delete;
+   PageFlipRequest& operator=(const PageFlipRequest&) = delete;
+@@ -57,6 +63,7 @@ class PageFlipRequest : public base::RefCounted<PageFlipRequest> {
+   PresentationOnceCallback callback_;
+   int page_flip_count_ = 0;
+   const base::TimeDelta refresh_interval_;
++  const bool on_vsync_;
+ };
+ 
+ }  // namespace ui

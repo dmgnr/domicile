@@ -10,7 +10,7 @@ import { build } from "vite";
 const FROM_DOMICILE = /^(@domicile-desktop\/[^/]+|react|react-dom)(\/.*)?$/;
 
 /** The manganese package directory in a Domicile install. */
-const manganeseIn = (domicile: string): string =>
+export const manganeseIn = (domicile: string): string =>
   path.join(domicile, "packages", "shell-manganese");
 
 /**
@@ -45,7 +45,7 @@ export const bundle = async (
  * Resolve the user's imports of Domicile's packages and React from Domicile's
  * install. Imports inside Domicile's own packages resolve normally.
  */
-const fromDomicile = (domicile: string): Plugin => {
+export const fromDomicile = (domicile: string): Plugin => {
   const manganese = manganeseIn(domicile);
   const anchor = path.join(manganese, "src", "index.tsx");
   const ours = `${path.join(domicile, "packages")}${path.sep}`;

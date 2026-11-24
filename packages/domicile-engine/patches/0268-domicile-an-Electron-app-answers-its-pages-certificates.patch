@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Tue, 24 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an Electron app answers its pages' certificates
+
+An Electron app's page met a certificate error or a site's request for a
+client certificate as Chrome's own pages do, so the app's
+certificate-error and select-client-certificate listeners were never
+asked. ChromeContentBrowserClient asks the app first now, for every
+frame, through chrome/browser/domicile/domicile_electron_certificates.h;
+any other page goes on to Chrome as before.
+---
+ chrome/browser/chrome_content_browser_client.cc | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 095741c..2935537 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/chrome_content_browser_client.h"
+ 
++#include "chrome/browser/domicile/domicile_electron_certificates.h"
+ #include "chrome/browser/domicile/domicile_electron_loader.h"
+ #include "chrome/browser/domicile/domicile_electron_page.h"
+ #include "chrome/browser/domicile/domicile_identity_dialog.h"
+@@ -4059,6 +4060,14 @@ void ChromeContentBrowserClient::AllowCertificateError(
+     bool strict_enforcement,
+     base::OnceCallback<void(content::CertificateRequestResultType)> callback) {
+   CHECK(web_contents, base::NotFatalUntil::M163);
++  // An Electron app answers for its pages, every frame's, as its
++  // `certificate-error`. See chrome/browser/domicile/
++  // domicile_electron_certificates.h.
++  if (domicile::AskElectronAboutCertificateError(
++          web_contents, cert_error, ssl_info, request_url,
++          is_primary_main_frame_request, callback)) {
++    return;
++  }
+   if (!is_primary_main_frame_request) {
+     // A sub-resource has a certificate error. The user doesn't really
+     // have a context for making the right decision, so block the
+@@ -4328,6 +4337,13 @@ base::OnceClosure ChromeContentBrowserClient::SelectClientCertificate(
+     net::SSLCertRequestInfo* cert_request_info,
+     net::ClientCertIdentityList client_certs,
+     std::unique_ptr<content::ClientCertificateDelegate> delegate) {
++  // An Electron app chooses for its pages, as its
++  // `select-client-certificate`. See chrome/browser/domicile/
++  // domicile_electron_certificates.h.
++  if (domicile::AskElectronForClientCertificate(
++          web_contents, *cert_request_info, client_certs, delegate)) {
++    return base::OnceClosure();
++  }
+   prerender::NoStatePrefetchContents* no_state_prefetch_contents =
+       web_contents
+           ? prerender::ChromeNoStatePrefetchContentsDelegate::FromWebContents(

@@ -34,6 +34,21 @@ How CI publishes prebuilt engines and how the flake picks one.
   a Chromium security fix ships. A fix reaches Domicile when the pin moves
   past it.
 
+## Where they are published
+
+- As GitHub releases in
+  [`cprussin/domicile-builds`](https://github.com/cprussin/domicile-builds),
+  not here, so people watching this repository hear only of real releases.
+- `DOMICILE_BUILDS_REPO` overrides the repository.
+- The publish steps need the secret `DOMICILE_BUILDS_TOKEN`: a fine-grained
+  token with Contents read and write on that repository.
+- Releases there are tagged on its default branch; the body names the
+  Domicile commit.
+- `builds-prune.yml` deletes builds older than a week each day, except what
+  `main`, `stable`, a `release-*` tag or an open pull request pins. It also
+  deletes the builds still published here after two days, with the same
+  exceptions.
+
 ## Release names
 
 - A release is tagged `engine-s<identity>`.

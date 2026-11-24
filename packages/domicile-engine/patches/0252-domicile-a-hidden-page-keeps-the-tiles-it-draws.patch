@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 20 Nov 2026 06:51:31 +0000
+Subject: [PATCH] domicile: a hidden page keeps the tiles it draws
+
+A hidden page dropped every tile (CUTOFF_ALLOW_NOTHING, a zero memory
+limit). The shell hides the windows of other workspaces and other tabs
+with `display: none`, so showing one again was a raster of its whole
+viewport. On a laptop's GPU at battery clocks that stalled the desk's
+frames in the middle of a workspace slide, 50-100 ms at a time, worst
+with a heavy page and a busy machine.
+
+- A hidden page keeps its memory limit and takes the absolute minimum
+  policy (CUTOFF_ALLOW_REQUIRED_ONLY): it keeps the tiles its viewport
+  draws, as a hidden native window keeps its buffer. Shown again, it
+  draws from them.
+- TileManager frees every other tile under that policy at once,
+  whatever the limit, so a hidden page holds no prepaint.
+- Its contexts still go invisible and its decodes are still freed, as
+  before.
+- A memory policy of zero from the GPU process still drops them all.
+
+Covered by DomicileHiddenPageTilesTest. Guarded by
+`guard-webview-reshown-tiles.sh`.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+
+Co-Authored-By: Connor Prussin <connor@prussin.net>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LWjcAMeLzLP3yz4yH2gzBk
+---
+ cc/tiles/tile_manager.cc         | 13 +++++++++++++
+ cc/trees/layer_tree_host_impl.cc | 17 +++++++++++++----
+ 2 files changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/cc/tiles/tile_manager.cc b/cc/tiles/tile_manager.cc
+index 6b8eed0..eaaf894 100644
+--- a/cc/tiles/tile_manager.cc
++++ b/cc/tiles/tile_manager.cc
+@@ -1006,6 +1006,19 @@ TileManager::PrioritizedWorkToSchedule TileManager::AssignGpuMemoryToTiles() {
+       std::move(eviction_priority_queue), hard_memory_limit, &memory_usage,
+       &work_to_schedule.required_for_draw_tile_state_changed);
+ 
++  // Domicile: the absolute minimum is the tiles drawn now, which a hidden page
++  // keeps (LayerTreeHostImpl::UpdateTileManagerMemoryPolicy). Every other tile
++  // goes at once, whatever the limit.
++  if (global_state_.memory_limit_policy == ALLOW_ABSOLUTE_MINIMUM) {
++    constexpr TilePriority kDrawnNow =
++        TilePriority(HIGH_RESOLUTION, TilePriority::NOW, 0);
++    eviction_priority_queue =
++        FreeTileResourcesWithLowerPriorityUntilUsageIsWithinLimit(
++            std::move(eviction_priority_queue), MemoryUsage(0, 0), kDrawnNow,
++            &memory_usage,
++            &work_to_schedule.required_for_draw_tile_state_changed);
++  }
++
+   // At this point, if we ran out of memory when allocating resources and we
+   // couldn't go past even the NOW bin, this means we have evicted resources
+   // from all tiles with a lower priority while we still might have resources
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index 1f7f1e4..f6759ad 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -1979,9 +1979,16 @@ void LayerTreeHostImpl::UpdateTileManagerMemoryPolicy(
+ 
+   global_tile_state_.hard_memory_limit_in_bytes = 0;
+   global_tile_state_.soft_memory_limit_in_bytes = 0;
+-  if (visible_ && policy.bytes_limit_when_visible > 0) {
++  // Domicile: a hidden page keeps the tiles its viewport draws, as a hidden
++  // native window keeps its buffer. Windows on other workspaces and behind
++  // other tabs are hidden; shown again without them, a page rasters its whole
++  // viewport, which stalls the desk's frames on a laptop's GPU mid-slide. Its
++  // prepaint tiles still go (TileManager, patch 0252).
++  if (policy.bytes_limit_when_visible > 0) {
+     global_tile_state_.hard_memory_limit_in_bytes =
+         policy.bytes_limit_when_visible;
++  }
++  if (visible_ && policy.bytes_limit_when_visible > 0) {
+     global_tile_state_.soft_memory_limit_in_bytes =
+         (static_cast<int64_t>(global_tile_state_.hard_memory_limit_in_bytes) *
+          settings_.max_memory_for_prepaint_percentage) /
+@@ -1990,10 +1997,10 @@ void LayerTreeHostImpl::UpdateTileManagerMemoryPolicy(
+   global_tile_state_.memory_limit_policy =
+       ManagedMemoryPolicy::PriorityCutoffToTileMemoryLimitPolicy(
+           visible_ ? policy.priority_cutoff_when_visible
+-                   : gpu::MemoryAllocation::CUTOFF_ALLOW_NOTHING);
++                   : gpu::MemoryAllocation::CUTOFF_ALLOW_REQUIRED_ONLY);
+   global_tile_state_.num_resources_limit = policy.num_resources_limit;
+ 
+-  if (global_tile_state_.hard_memory_limit_in_bytes > 0) {
++  if (visible_ && global_tile_state_.hard_memory_limit_in_bytes > 0) {
+     // If |global_tile_state_.hard_memory_limit_in_bytes| is greater than 0, we
+     // consider our contexts visible. Notify the contexts here. We handle
+     // becoming invisible in NotifyAllTileTasksComplete to avoid interrupting
+@@ -2285,7 +2292,9 @@ void LayerTreeHostImpl::NotifyAllTileTasksCompleted() {
+ 
+   // The tile tasks started by the most recent call to PrepareTiles have
+   // completed. Now is a good time to free resources if necessary.
+-  if (global_tile_state_.hard_memory_limit_in_bytes == 0) {
++  // Domicile: a hidden page keeps a memory limit for its tiles, so test
++  // visibility too (UpdateTileManagerMemoryPolicy).
++  if (!visible_ || global_tile_state_.hard_memory_limit_in_bytes == 0) {
+     // Free image decode controller resources before notifying the
+     // contexts of visibility change. This ensures that the imaged decode
+     // controller has released all Skia refs at the time Skia's cleanup

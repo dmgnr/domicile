@@ -36,6 +36,7 @@ import { FakeDomicileHost } from "@domicile-desktop/sdk/fake-host";
 import { KeyAction } from "@domicile-desktop/sdk/key-action";
 import type { ShellKeybindings } from "@domicile-desktop/sdk/own-keybindings";
 import {
+  WEBVIEW_CONTEXT_MENU_EVENT,
   WEBVIEW_DESCRIPTION_CHANGE_EVENT,
   WEBVIEW_FAVICON_CHANGE_EVENT,
   WEBVIEW_GUEST_FOCUS_EVENT,
@@ -53,6 +54,7 @@ import {
   render,
   screen,
   waitFor,
+  waitForElementToBeRemoved,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -64,12 +66,15 @@ import { Shell } from "./Shell";
 // `screens/host-displays.ts`. Two landscape monitors side by side.
 const LEFT: DomicileDisplay = {
   adaptiveSync: "unsupported",
+  hdr: "unsupported",
   height: 1080,
   modeHeight: 1080,
   modeWidth: 1920,
   name: "left",
+  peakLuminance: 0,
   refreshMhz: 60_000,
   scale: 1,
+  sdrWhite: 0,
   transform: "normal",
   width: 1920,
   x: 0,
@@ -78,12 +83,15 @@ const LEFT: DomicileDisplay = {
 
 const RIGHT: DomicileDisplay = {
   adaptiveSync: "unsupported",
+  hdr: "unsupported",
   height: 1024,
   modeHeight: 1024,
   modeWidth: 1280,
   name: "right",
+  peakLuminance: 0,
   refreshMhz: 60_000,
   scale: 1,
+  sdrWhite: 0,
   transform: "normal",
   width: 1280,
   x: 1920,
@@ -401,7 +409,7 @@ const NO_APPLICATIONS: ApplicationsConfig = { bookmarks: [], omit: [] };
 /** The README's sample config. */
 const MANGANESE_KEYS: ShellKeybindings = {
   keybindings: Object.fromEntries([
-    line("Return", false, "send-shell exec kitty"),
+    ["Meta+Return", KeyAction.Exec(["kitty"])],
     line("q", true, "send-shell kill"),
     line("Return", true, "send-shell lock"),
     line("space", false, "send-shell launcher"),
@@ -788,6 +796,7 @@ const browserWindow = (container: HTMLElement): HTMLElement => {
 /** The compositor reports the clipboard history, newest first. */
 const copied = (
   entries: readonly {
+    current: boolean;
     id: number;
     image: boolean;
     preview: string;
@@ -818,6 +827,7 @@ const extensionsInstalled = (popped = true): void => {
         id: CLICKED,
         name: "Clicked",
         popup: null,
+        profile: "default",
         title: "Clicked",
       },
       {
@@ -828,6 +838,7 @@ const extensionsInstalled = (popped = true): void => {
         id: POPPED,
         name: "Popped",
         popup: `chrome-extension://${POPPED}/popup.html`,
+        profile: "default",
         title: "Popped",
       },
     ],
@@ -1231,6 +1242,40 @@ describe("Shell", () => {
     });
   });
 
+  describe("picture-in-picture", () => {
+    const VIDEO = {
+      canNextTrack: false,
+      canPlay: true,
+      canPreviousTrack: false,
+      duration: 0,
+      height: 360,
+      id: "1",
+      playbackRate: 1,
+      playing: true,
+      position: 0,
+      source: null,
+      width: 640,
+      window: "",
+    };
+
+    it("floats a page's video over the windows, but not on the lock screen", async () => {
+      const { container } = await renderShell();
+      act(() => {
+        domicile.fake.set({ pictureInPictureVideos: [VIDEO] });
+      });
+
+      expect(
+        container.querySelector('app[picture-in-picture="1"]'),
+      ).not.toBeNull();
+
+      act(() => {
+        domicile.fake.set({ locked: true });
+      });
+
+      expect(container.querySelector("app[picture-in-picture]")).toBeNull();
+    });
+  });
+
   describe("the lock screen", () => {
     it("says why the compositor refused a passphrase, and how long to wait", async () => {
       await renderShell();
@@ -1276,9 +1321,27 @@ describe("Shell", () => {
       // The compositor pushes the history; the panel does not ask for it.
       await renderShell();
       copied([
-        { id: 3, image: false, preview: "the newest", thumbnail: "" },
-        { id: 2, image: false, preview: "the middle", thumbnail: "" },
-        { id: 1, image: false, preview: "the oldest", thumbnail: "" },
+        {
+          current: true,
+          id: 3,
+          image: false,
+          preview: "the newest",
+          thumbnail: "",
+        },
+        {
+          current: false,
+          id: 2,
+          image: false,
+          preview: "the middle",
+          thumbnail: "",
+        },
+        {
+          current: false,
+          id: 1,
+          image: false,
+          preview: "the oldest",
+          thumbnail: "",
+        },
       ]);
 
       press("v", true);
@@ -1286,9 +1349,10 @@ describe("Shell", () => {
       expect(
         screen.getByRole("group", { name: "On your clipboard" }).textContent,
       ).toContain("the newest");
-      expect(
-        screen.getAllByRole("option").map((row) => row.textContent),
-      ).toStrictEqual(["the middle", "the oldest"]);
+      expect(screen.getAllByRole("option")).toStrictEqual([
+        screen.getByRole("option", { name: "the middle" }),
+        screen.getByRole("option", { name: "the oldest" }),
+      ]);
     });
 
     it("opens on the screen the keyboard is on", async () => {
@@ -1306,8 +1370,20 @@ describe("Shell", () => {
       // on the seat's clipboard.
       await renderShell();
       copied([
-        { id: 8, image: false, preview: "the newest", thumbnail: "" },
-        { id: 7, image: false, preview: "ssh-rsa AAAA", thumbnail: "" },
+        {
+          current: true,
+          id: 8,
+          image: false,
+          preview: "the newest",
+          thumbnail: "",
+        },
+        {
+          current: false,
+          id: 7,
+          image: false,
+          preview: "ssh-rsa AAAA",
+          thumbnail: "",
+        },
       ]);
       press("v", true);
 
@@ -1316,6 +1392,31 @@ describe("Shell", () => {
       });
 
       expect(domicile.calls).toContainEqual(["copyClipboardEntry", 7]);
+    });
+
+    it("removes the row Delete was pressed on", async () => {
+      await renderShell();
+      copied([
+        {
+          current: true,
+          id: 8,
+          image: false,
+          preview: "the newest",
+          thumbnail: "",
+        },
+        {
+          current: false,
+          id: 7,
+          image: false,
+          preview: "ssh-rsa AAAA",
+          thumbnail: "",
+        },
+      ]);
+      press("v", true);
+
+      fireEvent.keyDown(screen.getByRole("combobox"), { key: "Delete" });
+
+      expect(domicile.calls).toContainEqual(["removeClipboardEntry", 7]);
     });
   });
 
@@ -1674,6 +1775,7 @@ describe("Shell", () => {
         "https://inbox.example.com/",
         "fake-chat",
         "focus",
+        "",
       ]);
       await waitFor(() => {
         expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -2481,6 +2583,7 @@ describe("Shell", () => {
         "openBrowserWindow",
         "https://example.com",
         "",
+        "",
       ]);
     });
 
@@ -3001,7 +3104,6 @@ describe("Shell", () => {
       press("e");
       press("v");
       clientAppears("three");
-      press("w");
       // A focused tab lights its whole group too, so only the tint tells
       // the two apart.
       expect(lit(container)).toEqual(["app:two", "app:three"]);
@@ -3023,7 +3125,6 @@ describe("Shell", () => {
       press("e");
       press("v");
       clientAppears("three");
-      press("w");
 
       press("a");
 
@@ -3064,8 +3165,6 @@ describe("Shell", () => {
       press("e");
       press("v");
       clientAppears("three");
-
-      press("w");
 
       // The strip draws the line; the open tab covers it to join its window.
       const covers = css({ marginBlockEnd: "-1px" });
@@ -3867,6 +3966,21 @@ describe("Shell", () => {
       );
       expect(Number(appBox(container, "term").style.zIndex)).toBeGreaterThan(0);
     });
+    it("hides a tab's tooltip as a window it shows slides over the tab", async () => {
+      const { container } = await renderShell();
+      clientAppears("one");
+      clientAppears("two");
+      clientAppears("notes");
+      press("minus", true);
+      motionsPlayOut(container);
+      await userEvent.hover(screen.getByText("one", { selector: "span" }));
+      await screen.findByRole("tooltip");
+
+      press("minus");
+
+      await waitForElementToBeRemoved(() => screen.queryByRole("tooltip"));
+    });
+
     // It hangs from the top edge, so its top corners are square.
     it("hangs a window it shows from the top edge of the screen", async () => {
       const { container } = await renderShell();
@@ -4197,6 +4311,25 @@ describe("the overview", () => {
     expect(appElement(container, "two").hasAttribute("resizing")).toBe(false);
   });
 
+  it("closes a page's menu left open, which would float over it", async () => {
+    const { container } = await renderShell();
+    press("space");
+    await userEvent
+      .setup()
+      .type(screen.getByRole("combobox"), "example.com{Enter}");
+    await launched();
+    const view = container.querySelector("webview");
+    if (view === null) {
+      throw new Error("test: no browser window");
+    }
+    fireEvent(view, pageMenuAsked());
+    await screen.findByRole("menu", { name: "Page" });
+
+    press("o");
+
+    expect(screen.queryByRole("menu", { name: "Page" })).toBeNull();
+  });
+
   it("closes on Escape", async () => {
     await renderShell();
     press("o");
@@ -4204,6 +4337,38 @@ describe("the overview", () => {
     fireEvent.keyDown(overview() ?? document, { key: "Escape" });
 
     expect(overview()).toBeNull();
+  });
+
+  describe("on the lock screen", () => {
+    // Stacking is a style, so this reads the shell's stylesheet.
+    loadEmittedStylesheet(
+      document,
+      new URL("../styled-system/styles.css", import.meta.url),
+    );
+
+    it("stays under it, so it blurs with the rest of the desk", async () => {
+      const { container } = await renderShell();
+      clientAppears("one");
+      press("o");
+      act(() => {
+        domicile.fake.set({ locked: true });
+      });
+      const sheet =
+        container.querySelector("[data-veil]")?.parentElement ?? undefined;
+      if (sheet === undefined) {
+        throw new Error("test: no lock screen");
+      }
+
+      const lock = Number(globalThis.getComputedStyle(sheet).zIndex);
+      const over = [
+        ...container.querySelectorAll<HTMLElement>("[style*='z-index']"),
+      ]
+        .map((part) => Number(part.style.zIndex))
+        .filter((depth) => depth >= lock);
+      expect(overview()).not.toBeNull();
+      expect(Number.isFinite(lock)).toBe(true);
+      expect(over).toEqual([]);
+    });
   });
 });
 
@@ -4498,3 +4663,34 @@ describe("the launcher", () => {
     expect(barFor(container, "app:two").dataset.focus).toBe("focused");
   });
 });
+
+/** The engine's context menu event for a right click on a page's background. */
+const pageMenuAsked = (): Event =>
+  Object.assign(new Event(WEBVIEW_CONTEXT_MENU_EVENT), {
+    canCopy: false,
+    canCut: false,
+    canDelete: false,
+    canPaste: false,
+    canPictureInPicture: false,
+    canRedo: false,
+    canSelectAll: false,
+    canUndo: false,
+    hasImageContents: false,
+    inPictureInPicture: false,
+    isEditable: false,
+    linkText: "",
+    linkUrl: "",
+    mediaType: "none",
+    misspelledWord: "",
+    replaceMisspelling: () => {
+      throw new Error("test: no misspelling to replace");
+    },
+    run: () => {
+      throw new Error("test: no action to run");
+    },
+    selectionText: "",
+    spellingSuggestions: [],
+    srcUrl: "",
+    x: 10,
+    y: 20,
+  });

@@ -41,10 +41,10 @@ covers the skipped flip.
  12 files changed, 126 insertions(+), 133 deletions(-)
 
 diff --git a/base/threading/thread_restrictions.h b/base/threading/thread_restrictions.h
-index b825a58..40defaa 100644
+index 12342fc..e889034 100644
 --- a/base/threading/thread_restrictions.h
 +++ b/base/threading/thread_restrictions.h
-@@ -445,6 +445,7 @@ class FuchsiaPerfettoProducerConnector;
+@@ -443,6 +443,7 @@ class FuchsiaPerfettoProducerConnector;
  namespace ui {
  class DrmThreadProxy;
  class DrmDisplayHostManager;
@@ -52,7 +52,7 @@ index b825a58..40defaa 100644
  class ScopedAllowBlockingForGbmSurface;
  class SelectFileDialogLinux;
  class WindowResizeHelperMac;
-@@ -901,6 +902,7 @@ class BASE_EXPORT
+@@ -897,6 +898,7 @@ class BASE_EXPORT
    friend class mojo::core::ipcz_driver::MojoTrap;
    friend class net::NetworkConfigWatcherAppleThread;
    friend class ::tracing::EmergencyTraceFinalisationCoordinator;
@@ -61,7 +61,7 @@ index b825a58..40defaa 100644
    friend class vr::VrShell;
  
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 1b21cc9..69d6831 100644
+index af8699b..226cb25 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -130,8 +130,8 @@ source_set("gbm") {
@@ -75,7 +75,7 @@ index 1b21cc9..69d6831 100644
      "domicile/drm_modeset.cc",
      "domicile/drm_modeset.h",
      "domicile/drm_pointer_crossing.cc",
-@@ -272,7 +272,6 @@ source_set("gbm_unittests") {
+@@ -274,7 +274,6 @@ source_set("gbm_unittests") {
      "domicile/drm_fullscreen_unittest.cc",
      "domicile/drm_input_controller_unittest.cc",
      "domicile/drm_input_devices_unittest.cc",
@@ -137,10 +137,10 @@ index 078ee43..bb7486b 100644
     * Dumb Buffers
     **************/
 diff --git a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
-index ff44869..103aed3 100644
+index 82fdde7..e6d09ee 100644
 --- a/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
 +++ b/ui/ozone/platform/drm/gpu/drm_gpu_display_manager.cc
-@@ -401,19 +401,10 @@ MovableDisplaySnapshots DrmGpuDisplayManager::GetDisplays() {
+@@ -425,19 +425,10 @@ MovableDisplaySnapshots DrmGpuDisplayManager::GetDisplays() {
  }
  
  bool DrmGpuDisplayManager::TakeDisplayControl() {
@@ -164,7 +164,7 @@ index ff44869..103aed3 100644
    const DrmDeviceVector& devices = drm_device_manager_->GetDrmDevices();
    for (const auto& drm : devices) {
      drm->AssumeMaster(true);
-@@ -440,19 +431,9 @@ bool DrmGpuDisplayManager::RelinquishDisplayControl() {
+@@ -464,19 +455,9 @@ bool DrmGpuDisplayManager::RelinquishDisplayControl() {
      return false;
    }
  
@@ -188,10 +188,10 @@ index ff44869..103aed3 100644
    for (const auto& drm : devices) {
      drm->AssumeMaster(false);
 diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.cc b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
-index 3aeb5ae..ec1ad52 100644
+index 86a4d77..efe58eb 100644
 --- a/ui/ozone/platform/drm/gpu/fake_drm_device.cc
 +++ b/ui/ozone/platform/drm/gpu/fake_drm_device.cc
-@@ -990,6 +990,10 @@ bool FakeDrmDevice::has_master() const {
+@@ -996,6 +996,10 @@ bool FakeDrmDevice::has_master() const {
    return has_master_;
  }
  
@@ -203,10 +203,10 @@ index 3aeb5ae..ec1ad52 100644
    while (!callbacks_.empty()) {
      PageFlipCallback callback = std::move(callbacks_.front());
 diff --git a/ui/ozone/platform/drm/gpu/fake_drm_device.h b/ui/ozone/platform/drm/gpu/fake_drm_device.h
-index 51af3ea..0d70b3d 100644
+index 928933e..2781dd4 100644
 --- a/ui/ozone/platform/drm/gpu/fake_drm_device.h
 +++ b/ui/ozone/platform/drm/gpu/fake_drm_device.h
-@@ -223,6 +223,9 @@ class FakeDrmDevice : public DrmDevice {
+@@ -228,6 +228,9 @@ class FakeDrmDevice : public DrmDevice {
    void set_succeed_drm_master_drop(bool state) {
      succeed_drm_master_drop_ = state;
    }
@@ -216,7 +216,7 @@ index 51af3ea..0d70b3d 100644
  
    uint32_t current_framebuffer() const { return current_framebuffer_; }
  
-@@ -407,6 +410,7 @@ class FakeDrmDevice : public DrmDevice {
+@@ -417,6 +420,7 @@ class FakeDrmDevice : public DrmDevice {
    bool DropMaster() override;
    void AssumeMaster(bool has_master) override;
    bool has_master() const override;
@@ -224,7 +224,7 @@ index 51af3ea..0d70b3d 100644
  
    // There is a circular reference between DrmDevice and
    // HardwareDisplayPlaneManager, as described in https://crbug.com/40263526.
-@@ -522,6 +526,7 @@ class FakeDrmDevice : public DrmDevice {
+@@ -532,6 +536,7 @@ class FakeDrmDevice : public DrmDevice {
    base::flat_map<uint64_t /*modifier*/, int /*overhead*/> modifiers_overhead_;
  
    bool has_master_ = true;
@@ -233,10 +233,10 @@ index 51af3ea..0d70b3d 100644
  
  }  // namespace ui
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
-index 91993cb..27e98e1 100644
+index 06d2b61..8f40bc3 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_controller.cc
-@@ -254,6 +254,20 @@ void HardwareDisplayController::SchedulePageFlip(
+@@ -256,6 +256,20 @@ void HardwareDisplayController::SchedulePageFlip(
      std::move(presentation_callback).Run(gfx::PresentationFeedback::Failure());
      return;
    } else if (PageFlipResult::kFailedCommit == result) {
@@ -258,7 +258,7 @@ index 91993cb..27e98e1 100644
        // If the page flip failed and we see that the buffer has been allocated
        // before the latest modeset, it could mean it was an in-flight buffer
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc b/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
-index 304c7cc..44617dc 100644
+index 83b7385..5597a38 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_controller_unittest.cc
 @@ -985,6 +985,28 @@ TEST_F(HardwareDisplayControllerTest, FailPageFlippingWithSavingModeset) {
@@ -291,7 +291,7 @@ index 304c7cc..44617dc 100644
         RecreateBuffersOnOldPlanesPageFlipFailure) {
    DrmOverlayPlaneList planes;
 diff --git a/ui/ozone/platform/drm/host/drm_display_host_manager.cc b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
-index cbc85f3..6811f97 100644
+index 1daca27..2e1613f 100644
 --- a/ui/ozone/platform/drm/host/drm_display_host_manager.cc
 +++ b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
 @@ -111,7 +111,8 @@ base::FilePath MapDevPathToSysPath(const base::FilePath& device_path) {

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::build_progress::Step;
-use crate::shell_path::Shell;
+use crate::shell_path::{Shell, ShellFiles};
 
 /// The file the page polls, in the splash's root.
 pub const PROGRESS: &str = "progress.json";
@@ -69,6 +69,7 @@ pub fn lay_out(bundle: &Path, splash: &Path) -> io::Result<Shell> {
     Ok(Shell {
         module: PathBuf::from("shell.js"),
         root: splash.to_path_buf(),
+        files: ShellFiles::Directory,
     })
 }
 
@@ -218,6 +219,7 @@ mod tests {
             Shell {
                 module: PathBuf::from("shell.js"),
                 root: splash.clone(),
+                files: ShellFiles::Directory,
             }
         );
         assert_eq!(

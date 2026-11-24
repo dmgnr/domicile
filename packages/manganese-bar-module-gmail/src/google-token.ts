@@ -7,7 +7,7 @@ import type {
 import { z } from "zod";
 
 import type { GoogleClient } from "./consent";
-import { REDIRECT, SCOPE } from "./consent";
+import { REDIRECT, SCOPES } from "./consent";
 import { jsonText } from "./json-text";
 
 /** Google's OAuth token endpoint. */
@@ -50,7 +50,7 @@ export const TokenRefusal = {
   }),
   /**
    * Google no longer takes the refresh token, or it was granted without
-   * {@link SCOPE}: sign in again.
+   * every one of {@link SCOPES}: sign in again.
    */
   Revoked: () => ({ kind: TokenRefusalKind.Revoked as const }),
 };
@@ -82,7 +82,7 @@ export const refreshAccess = async (
         return parsed(answer, accessSchema)
           .mapErr((why): TokenRefusal => TokenRefusal.Failed(why))
           .andThen((fields) =>
-            fields.scope.split(" ").includes(SCOPE)
+            SCOPES.every((scope) => fields.scope.split(" ").includes(scope))
               ? Ok({
                   expiresInMs: fields.expires_in * 1000,
                   token: fields.access_token,

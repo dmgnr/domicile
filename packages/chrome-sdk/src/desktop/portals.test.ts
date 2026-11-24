@@ -71,6 +71,16 @@ describe("portals", () => {
     ]);
   });
 
+  it("asks the user again what an agent reaches", () => {
+    const fake = new FakeDomicileHost();
+    const { portals } = desktop(fake.host);
+    portals.changeAgent(4);
+
+    expect(fake.calls).toStrictEqual([
+      ["answerPortalRequest", 4, JSON.stringify({ kind: "change" })],
+    ]);
+  });
+
   it("pauses, resumes and discards the shell's screen recording", () => {
     const fake = new FakeDomicileHost();
     const { portals } = desktop(fake.host);

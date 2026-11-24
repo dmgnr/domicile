@@ -654,7 +654,8 @@ describe("Launcher", () => {
 
       await panel.user.type(panel.box(), "!");
 
-      expect((await panel.rows()).slice(0, 6)).toStrictEqual([
+      expect((await panel.rows()).slice(0, 7)).toStrictEqual([
+        "!g Search Google",
         "!gh Search GitHub",
         "!im Search Google Images",
         "!maps Search Google Maps",
@@ -673,14 +674,25 @@ describe("Launcher", () => {
       await panel.user.type(panel.box(), "!wi{Tab}");
       expect(panel.box()).toHaveValue("kate bush !yt !wiki ");
 
-      await panel.user.type(panel.box(), "!p");
+      await panel.user.type(panel.box(), "!");
       await panel.user.click(
-        await screen.findByRole("option", {
-          name: "!p Open in a private browser",
-        }),
+        await screen.findByText("Open in a private browser"),
       );
       expect(panel.box()).toHaveValue("kate bush !yt !wiki !p ");
       expect(panel.launched).toStrictEqual([]);
+    });
+
+    it("searches on Enter once a tag after the words is whole", async () => {
+      using panel = launcher();
+
+      await panel.user.type(panel.box(), "kate bush !yt{Enter}");
+
+      expect(panel.launched).toStrictEqual([
+        Launch.Browsed(
+          "https://www.youtube.com/results?search_query=kate%20bush",
+          false,
+        ),
+      ]);
     });
 
     it("explains the highlighted tag in the preview", async () => {
@@ -691,6 +703,18 @@ describe("Launcher", () => {
       expect(
         await within(previewPane()).findByText(
           "Add !yt anywhere in what you type to search YouTube instead of Google. Press Enter or Tab to add it.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("explains that !g skips the other matches", async () => {
+      using panel = launcher();
+
+      await panel.user.type(panel.box(), "!g");
+
+      expect(
+        await within(previewPane()).findByText(
+          "Add !g anywhere in what you type to search Google and skip the other matches. Press Enter or Tab to add it.",
         ),
       ).toBeInTheDocument();
     });

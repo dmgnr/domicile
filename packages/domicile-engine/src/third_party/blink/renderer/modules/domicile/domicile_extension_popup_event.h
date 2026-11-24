@@ -28,11 +28,13 @@ class MODULES_EXPORT DomicileExtensionPopupEvent final : public Event {
       const DomicileExtensionPopupEventInit* initializer);
   DomicileExtensionPopupEvent(const AtomicString& type,
                               const String& extension_id,
-                              const String& popup);
+                              const String& popup,
+                              const String& profile);
   ~DomicileExtensionPopupEvent() override;
 
   const String& extensionId() const { return extension_id_; }
   const String& popup() const { return popup_; }
+  const String& profile() const { return profile_; }
 
   const AtomicString& InterfaceName() const override;
   void Trace(Visitor*) const override;
@@ -40,6 +42,7 @@ class MODULES_EXPORT DomicileExtensionPopupEvent final : public Event {
  private:
   String extension_id_;
   String popup_;
+  String profile_;
 };
 
 }  // namespace blink

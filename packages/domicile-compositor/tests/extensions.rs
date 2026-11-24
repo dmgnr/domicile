@@ -13,7 +13,7 @@ const ONE_EXTENSION: &str = r#"
 {
   "extensions": {
     "web_store": ["ddkjiahejlhfcafbddmgiahcphecmpfh"],
-    "settings": { "ddkjiahejlhfcafbddmgiahcphecmpfh": { "private": true } }
+    "settings": { "ddkjiahejlhfcafbddmgiahcphecmpfh": { "file_access": true } }
   },
   "output": { "displays": [{ "name": "left", "size": [1920, 1080] }] }
 }
@@ -40,7 +40,7 @@ fn the_extensions_the_config_names_reach_the_chrome_and_follow_an_edit() {
                     settings: [(
                         "ddkjiahejlhfcafbddmgiahcphecmpfh".into(),
                         ExtensionSettings {
-                            in_private: Some(true),
+                            file_access: Some(true),
                             ..Default::default()
                         },
                     )]

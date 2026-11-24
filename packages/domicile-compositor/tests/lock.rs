@@ -140,6 +140,14 @@ fn a_locked_desk_refuses_the_keys_and_the_passphrase_starts_them_again() {
         .wait_for(|message| matches!(message, HostMessage::Locked { locked: false }))
         .expect("the passphrase opens the desk and every chrome is told");
 
+    // Locking gave the page the keyboard; a shell gives it back on unlock.
+    chrome
+        .say(&ChromeMessage::FocusApp {
+            app_id: app_id.clone(),
+        })
+        .expect("the chrome socket takes a focus");
+    compositor.wait_for_log_times("keyboard focus -> client", 2);
+
     press_a(&mut chrome, &app_id);
     assert!(
         client.wait_for_trace(A_PRESS_OF_IT, 1),
@@ -290,6 +298,33 @@ fn a_key_held_when_the_desk_locks_is_let_go_of_for_the_client() {
          ever send its release; it traced:\n{}",
         client.trace()
     );
+}
+
+/// Locking takes the keyboard from the window that had it and gives it to the
+/// page, which draws the lock screen.
+///
+/// A seat left on the window kept the engine sending every key there, where
+/// the lock dropped it, so the passphrase field heard nothing.
+#[test]
+fn locking_hands_the_keyboard_to_the_page() {
+    let compositor = Compositor::started_with(A_DESK);
+    let (mut chrome, _client, app_id) = a_client_being_typed_at(&compositor);
+    // The page held the keyboard before the window took it. Taken here, so
+    // the wait after locking cannot match it.
+    chrome
+        .wait_for(|message| matches!(message, HostMessage::FocusChanged { app_id: None }))
+        .expect("a page that says hello is told it holds the keyboard");
+    chrome
+        .wait_for(|message| {
+            matches!(message, HostMessage::FocusChanged { app_id: Some(id) } if *id == app_id)
+        })
+        .expect("the window the chrome focused is said to have the keyboard");
+
+    lock_the_desk(&compositor, &mut chrome);
+
+    chrome
+        .wait_for(|message| matches!(message, HostMessage::FocusChanged { app_id: None }))
+        .expect("the desk locked and left the keyboard with the window under the lock screen");
 }
 
 /// A spawn requested while locked does not run; the same request after

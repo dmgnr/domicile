@@ -172,8 +172,8 @@ impl<W, S> Portals<W, S> {
     }
 
     /// What session `id` takes `answer` with. A stop fits any session; a
-    /// pause, resume or discard fits a recording. A stop or a discard takes
-    /// the session off the list.
+    /// pause, resume or discard fits a recording, and a change an agent. A
+    /// stop or a discard takes the session off the list.
     pub fn control(&mut self, id: u32, answer: &PortalAnswer) -> Result<S, Refusal>
     where
         S: Clone,
@@ -184,8 +184,10 @@ impl<W, S> Portals<W, S> {
             .position(|(session, _)| session.id == id)
             .ok_or(Refusal::Unknown)?;
         let recording = matches!(self.sessions[index].0.kind, CapturingKind::Recording { .. });
+        let agent = matches!(self.sessions[index].0.kind, CapturingKind::Agent(_));
         match answer {
             PortalAnswer::Stop => Ok(self.sessions.remove(index).1),
+            PortalAnswer::Change if agent => Ok(self.sessions[index].1.clone()),
             PortalAnswer::Discard if recording => Ok(self.sessions.remove(index).1),
             PortalAnswer::Pause | PortalAnswer::Resume if recording => {
                 Ok(self.sessions[index].1.clone())

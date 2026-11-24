@@ -85,11 +85,13 @@ describe("ShellWindow", () => {
           false,
         ),
       ).toEqual({
+        appId: "",
         // The view reports these later.
         description: undefined,
         icon: undefined,
         id: browserWindowId("2"),
         isApp: false,
+        isHidden: false,
         isPrivate: true,
         kind: WindowKind.Browser,
         popupWindow: undefined,

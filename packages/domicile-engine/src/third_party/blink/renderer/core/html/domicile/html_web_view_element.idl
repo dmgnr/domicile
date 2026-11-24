@@ -22,6 +22,20 @@
   // stays on its page. Do nothing with nowhere to go.
   [CEReactions] undefined goBackInNewWindow();
   [CEReactions] undefined goForwardInNewWindow();
+
+  // The pages either side of the current one, for a back or forward menu
+  // like Chrome's. Rejects with InvalidStateError before the element has a
+  // page.
+  [CallWith=ScriptState, RaisesException]
+  Promise<DomicileHistory> history();
+
+  // Go to the history entry with id `id`, as picking it from Chrome's back or
+  // forward menu does. Do nothing when the id is no longer in the history,
+  // which changes as the page navigates.
+  [CEReactions] undefined goToHistoryEntry(long id);
+  // As goToHistoryEntry(), in a new browser window with a copy of the
+  // history, as goBackInNewWindow() does.
+  [CEReactions] undefined goToHistoryEntryInNewWindow(long id);
   [CEReactions] undefined stop();
   [CEReactions] undefined reload();
 
@@ -180,4 +194,14 @@
   // gave no number, as when it navigated first.
   [CallWith=ScriptState, RaisesException]
   Promise<long> countMatches(DOMString selector);
+
+  // Clicks the first shown element in the page's main document that matches the
+  // CSS `selector`, as a press of the mouse's main button on its middle does:
+  // scrolled into view, it gets pointerdown, mousedown, pointerup, mouseup and
+  // click, which the page hears as untrusted events. A hidden page is clicked
+  // too. Resolves whether an element matched. Throws SyntaxError for a selector
+  // that does not parse. Rejects with InvalidStateError before the element has
+  // a page, and when the page gave no answer, as when it navigated first.
+  [CallWith=ScriptState, RaisesException]
+  Promise<boolean> clickMatch(DOMString selector);
 };

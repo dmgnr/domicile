@@ -9,7 +9,8 @@ use std::time::Instant;
 use tracing::{debug, error, warn};
 
 use domicile_config::{
-    ExtensionsConfig, IdleConfig, KeyRepeat, KeyboardConfig, Keymap, LockConfig, Omit, ThemeMode,
+    BrowserConfig, ExtensionsConfig, IdleConfig, KeyRepeat, KeyboardConfig, Keymap, LockConfig,
+    Omit, ThemeMode,
 };
 use domicile_host::keymaps::Listed;
 use domicile_host::Host;
@@ -55,6 +56,25 @@ pub fn hand_over_the_extensions(host: &mut Host, extensions: &ExtensionsConfig) 
     );
 }
 
+/// Give the host the config's `browser`, for chromes that connect later.
+pub fn hand_over_the_browser_profiles(host: &mut Host, browser: &BrowserConfig) {
+    host.set_browser_profiles(
+        browser
+            .ordered_profiles()
+            .map(|(id, profile)| domicile_protocol::BrowserProfile {
+                id: id.clone(),
+                name: profile.name.clone(),
+                color: String::from(profile.color),
+                private: profile.private,
+                extensions: profile.extensions.clone(),
+            })
+            .collect(),
+        browser.default_profile.clone(),
+        browser.default_private_profile.clone(),
+        browser.sites.clone(),
+    );
+}
+
 /// One extension's config settings, as [`HostMessage::Extensions`] carries
 /// them.
 fn settings_on_the_wire(
@@ -64,7 +84,6 @@ fn settings_on_the_wire(
     use domicile_protocol::SiteAccess as WireAccess;
     use domicile_protocol::SiteAccessMode as WireMode;
     domicile_protocol::ExtensionSettings {
-        in_private: settings.in_private,
         file_access: settings.file_access,
         user_scripts: settings.user_scripts,
         site_access: settings.site_access.as_ref().map(|access| match access {
@@ -113,6 +132,12 @@ impl DomicileCompositor {
         if let Some(idle) = &restated.idle {
             self.reset_the_idle_clock(idle);
         }
+        if let Some(apps) = &restated.electron_apps {
+            match &self.electron_entries {
+                Some(out) => crate::electron_apps::write_the_electron_entries(out, apps),
+                None => debug!("no --electron-entries, so `electron.apps` changes nothing"),
+            }
+        }
         if let Some(omit) = &restated.omit {
             self.omit_from_the_index(omit);
         }
@@ -128,6 +153,17 @@ impl DomicileCompositor {
                 told.expect("a host that has just been given extensions has them to state"),
             );
         }
+        if let Some(browser) = &restated.browser {
+            // Store then broadcast, like the extensions.
+            let told = {
+                let mut host = self.hub.host.lock().unwrap();
+                hand_over_the_browser_profiles(&mut host, browser);
+                host.describe_browser_profiles()
+            };
+            self.hub.broadcast(
+                told.expect("a host that has just been given profiles has them to state"),
+            );
+        }
         if let Some(sites) = &restated.force_dark {
             // Store then broadcast, like the extensions.
             let told = {
@@ -136,6 +172,20 @@ impl DomicileCompositor {
                 host.describe_force_dark()
             };
             self.hub.broadcast(told);
+        }
+        if let Some(spellcheck) = &restated.spellcheck {
+            // Store then broadcast, like the extensions.
+            let told = {
+                let mut host = self.hub.host.lock().unwrap();
+                host.set_spellcheck(spellcheck.enabled, spellcheck.languages.clone());
+                host.describe_spellcheck()
+            };
+            self.hub.broadcast(
+                told.expect("a host that has just been told how to check spelling has it to state"),
+            );
+        }
+        if let Some(agents) = &restated.agents {
+            self.web_agents.set(agents.web);
         }
         if let Some(lockdown) = &restated.lockdown {
             self.hub.portals.lock_down(lockdown.clone());
@@ -179,7 +229,7 @@ impl DomicileCompositor {
     pub fn take_up_the_keymaps(&mut self, keyboard: &KeyboardConfig) {
         let keymaps = keyboard.keymaps();
         let compiled: Result<Vec<String>, _> = keymaps.iter().map(compiled_keymap).collect();
-        let Ok(compiled) = compiled.map_err(|why| warn!(%why, "{}", grepped::KEYMAP_REFUSED))
+        let Ok(compiled) = compiled.map_err(|why| error!(%why, "{}", grepped::KEYMAP_REFUSED))
         else {
             return;
         };
@@ -225,7 +275,7 @@ impl DomicileCompositor {
         }
         let keymap = self.keymap_named(&name);
         match compiled_keymap(&keymap) {
-            Err(why) => warn!(%why, "{}", grepped::KEYMAP_REFUSED),
+            Err(why) => error!(%why, "{}", grepped::KEYMAP_REFUSED),
             Ok(compiled) => {
                 self.hub.keymaps.list(Listed {
                     keymaps: listed.keymaps,
@@ -303,7 +353,7 @@ impl DomicileCompositor {
     /// [`take_up_the_keymaps`]: DomicileCompositor::take_up_the_keymaps
     pub fn rebind_the_keys(&mut self) {
         match shell_config::keys(&self.keymap_named(&self.active_keymap_name())) {
-            Err(why) => warn!(%why, "{}", grepped::KEYS_REFUSED),
+            Err(why) => error!(%why, "{}", grepped::KEYS_REFUSED),
             Ok(resolved) => {
                 // Store then broadcast, as in `retype_the_desktop`.
                 let told = {
@@ -430,7 +480,7 @@ mod tests {
                     (
                         DARK_READER.to_string(),
                         domicile_config::ExtensionSettings {
-                            in_private: Some(true),
+                            file_access: Some(true),
                             site_access: Some(SiteAccess::Sites(vec!["github.com".into()])),
                             ..Default::default()
                         },
@@ -441,7 +491,6 @@ mod tests {
                             file_access: Some(false),
                             user_scripts: Some(true),
                             site_access: Some(SiteAccess::Mode(SiteAccessMode::OnClick)),
-                            ..Default::default()
                         },
                     ),
                 ]
@@ -457,7 +506,7 @@ mod tests {
                     (
                         DARK_READER.to_string(),
                         ExtensionSettings {
-                            in_private: Some(true),
+                            file_access: Some(true),
                             site_access: Some(domicile_protocol::SiteAccess::Sites(vec![
                                 "github.com".into()
                             ])),
@@ -472,7 +521,6 @@ mod tests {
                             site_access: Some(domicile_protocol::SiteAccess::Mode(
                                 domicile_protocol::SiteAccessMode::OnClick
                             )),
-                            ..Default::default()
                         },
                     ),
                 ]

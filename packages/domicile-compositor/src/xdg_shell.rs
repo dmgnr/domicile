@@ -104,6 +104,8 @@ impl XdgShellHandler for DomicileCompositor {
                 .title
                 .clone()
         });
+        // The title itself is left out: it can say what someone is reading.
+        debug!(%app_id, "a window renamed itself");
         // Separate `let` so the host guard drops at the `;`, before the
         // broadcast. Inside the `if let` it would be held for the whole body.
         let titled = self
@@ -136,6 +138,7 @@ impl XdgShellHandler for DomicileCompositor {
                     .clone()
             })
             .expect("Smithay calls this only after the client set an app id");
+            debug!(%app_id, %desktop_id, "a window named its app");
             self.foreign_toplevels.named(&app_id, &desktop_id);
             // Separate `let` so the host guard drops before the broadcast, as
             // in `title_changed`.
@@ -159,6 +162,7 @@ impl XdgShellHandler for DomicileCompositor {
             return;
         };
         let parent = surface.parent().and_then(|parent| self.app_id_of(&parent));
+        debug!(%app_id, ?parent, "a window became a dialog for another, or stopped being one");
         // Separate `let` so the host guard drops before the broadcast, as in
         // `title_changed`.
         let parented = self
@@ -191,6 +195,7 @@ impl XdgShellHandler for DomicileCompositor {
             .position(|(_, t)| t.wl_surface() == surface.wl_surface())
         {
             let (app_id, _) = self.toplevels.remove(pos);
+            debug!(%app_id, surface = ?surface.wl_surface().id(), "toplevel destroyed");
             self.foreign_toplevels.closed(&app_id);
             self.by_surface.remove(surface.wl_surface());
             self.forget(&app_id);
@@ -222,6 +227,11 @@ impl XdgShellHandler for DomicileCompositor {
         if let Some(at) = self.grabbing.iter().position(|popup| *popup == surface) {
             let root = self.window_under(&surface);
             self.grabbing.remove(at);
+            debug!(
+                ?root,
+                menus = self.grabbing.len(),
+                "a grabbing menu went; the keyboard goes to the menu or window under it"
+            );
             let next = self
                 .grabbing
                 .last()
@@ -237,12 +247,19 @@ impl XdgShellHandler for DomicileCompositor {
         // Configure immediately: a popup cannot attach a buffer until
         // configured, and an unconfigured menu hangs the client silently.
         let geometry = self.kept_on_screen(&surface, positioner);
+        debug!(
+            surface = ?surface.wl_surface().id(),
+            window = ?self.window_under(&surface),
+            asked = ?positioner.get_geometry(),
+            placed = ?geometry,
+            "a new popup"
+        );
         surface.with_pending_state(|state| {
             state.geometry = geometry;
             state.positioner = positioner;
         });
         if let Err(err) = surface.send_configure() {
-            tracing::warn!(%err, "could not configure a popup");
+            tracing::error!(%err, "could not configure a popup");
         }
         // On the displays its window is on, at that window's scale. Nothing
         // else moved.
@@ -256,6 +273,13 @@ impl XdgShellHandler for DomicileCompositor {
         token: u32,
     ) {
         let geometry = self.kept_on_screen(&surface, positioner);
+        debug!(
+            surface = ?surface.wl_surface().id(),
+            window = ?self.window_under(&surface),
+            placed = ?geometry,
+            token,
+            "a popup asked to move"
+        );
         surface.with_pending_state(|state| {
             state.geometry = geometry;
             state.positioner = positioner;
@@ -324,6 +348,12 @@ impl XdgShellHandler for DomicileCompositor {
         if !self.grabbing.contains(&surface) {
             self.grabbing.push(surface.clone());
         }
+        debug!(
+            surface = ?surface.wl_surface().id(),
+            window = ?self.window_under(&surface),
+            menus = self.grabbing.len(),
+            "a menu grabbed the keyboard"
+        );
         let keyboard = self.seat.get_keyboard().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
         keyboard.set_focus(self, Some(surface.wl_surface().clone()), serial);

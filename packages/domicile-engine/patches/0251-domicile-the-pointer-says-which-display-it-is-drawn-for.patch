@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 20 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the pointer says which display it is drawn for and
+ when it is Chromium's
+
+After an undock on lyra (2026-11-19) the pointer stayed Chromium's arrow
+until a new window opened, and the journal (ERROR only) said nothing:
+the cursor loader drew for a display at scale 1 and its other lines are
+quieter than the engine logs.
+
+- views::DesktopNativeCursorManager::SetDisplay logs the display, scale
+  and turn the pointer is drawn for (VLOG 1), and at ERROR when the
+  display is not valid. wm::CursorLoader only takes the rotation and
+  scale since Chromium 160.0.8174.0.
+- wm::CursorLoader logs at ERROR when the platform has no cursor and it
+  falls back to Chromium's art, with the scale.
+- views::DesktopNativeCursorManager logs at ERROR when a cursor changes
+  with no window to show it.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+---
+ .../desktop_native_cursor_manager.cc             | 16 ++++++++++++++++
+ ui/wm/core/cursor_loader.cc                      |  5 ++++-
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
+index bc62c00..497b602 100644
+--- a/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
++++ b/ui/views/widget/desktop_aura/desktop_native_cursor_manager.cc
+@@ -5,6 +5,7 @@
+ #include "ui/views/widget/desktop_aura/desktop_native_cursor_manager.h"
+ 
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/notimplemented.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/trace_event/trace_event.h"
+@@ -45,6 +46,17 @@ void DesktopNativeCursorManager::RemoveHost(aura::WindowTreeHost* host) {
+ void DesktopNativeCursorManager::SetDisplay(
+     const display::Display& display,
+     wm::NativeCursorManagerDelegate* delegate) {
++  // Domicile: the lines to look for when the pointer is the wrong size. A
++  // display that is not valid is one a hotplug passed mid-change; the pointer
++  // is drawn at its scale until the desk's host is fitted again.
++  if (display.is_valid()) {
++    VLOG(1) << "domicile: the pointer is drawn for display " << display.id()
++            << " at scale " << display.device_scale_factor() << ", turned "
++            << display.panel_rotation();
++  } else {
++    LOG(ERROR) << "domicile: the pointer is drawn for no display, at scale "
++               << display.device_scale_factor();
++  }
+   if (cursor_loader_.UpdateRotationAndScale(display.panel_rotation(),
+                                             display.device_scale_factor())) {
+     SetCursor(delegate->GetCursor(), delegate);
+@@ -60,6 +72,10 @@ void DesktopNativeCursorManager::SetCursor(
+   delegate->CommitCursor(new_cursor);
+ 
+   if (delegate->IsCursorVisible()) {
++    // Domicile: a cursor that reaches no window leaves the screen showing the
++    // last one, whatever it was.
++    LOG_IF(ERROR, hosts_.empty())
++        << "domicile: the pointer's cursor changed with no window to show it";
+     for (aura::WindowTreeHost* host : hosts_) {
+       host->SetCursor(new_cursor);
+     }
+diff --git a/ui/wm/core/cursor_loader.cc b/ui/wm/core/cursor_loader.cc
+index 52cc52d..d11f13b 100644
+--- a/ui/wm/core/cursor_loader.cc
++++ b/ui/wm/core/cursor_loader.cc
+@@ -216,7 +216,10 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
+     // The cursor may fail to load if the cursor theme has just been reset.
+     // We will be notified when the theme is loaded, but at this time we have to
+     // fall back to the assets.
+-    LOG(WARNING) << "Failed to load a platform cursor of type " << type;
++    // Domicile: at ERROR, the level the engine logs at, so a pointer that is
++    // Chromium's art says so. Once per type until the cursors unload.
++    LOG(ERROR) << "domicile: the pointer's " << type << " cursor at scale "
++               << scale_ << " is Chromium's: the platform has none";
+   }
+ 
+   // Loads the default Aura cursor bitmap for the cursor type. Falls back on

@@ -218,8 +218,8 @@ monitor off at once. `SystemRequest::SleepDisplays` carries both.
 - **Nothing is shown on it.** It gets no presenter, and the pointer does not
   cross onto it.
 - **It does not host the page.** A CRTC that is off sends no BeginFrames, so
-  the fastest lit monitor hosts it. Sleeping the host moves the page to
-  another monitor's window, as unplugging it does.
+  the fastest lit monitor hosts it. Sleeping the host moves the page's window
+  to that monitor, as unplugging it does, and the shell keeps running.
 
 On hardware, with `RUST_LOG=warn,domicile_compositor=debug`, look for
 `somebody asked to turn this desktop's screens` and, after input,

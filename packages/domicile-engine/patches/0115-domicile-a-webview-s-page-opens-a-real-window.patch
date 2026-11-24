@@ -25,10 +25,10 @@ job builds it on `crux`.
  1 file changed, 11 insertions(+), 4 deletions(-)
 
 diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
-index 861b89b..62f2ca4 100644
+index 7f51e7f..69605be 100644
 --- a/content/browser/web_contents/web_contents_impl.cc
 +++ b/content/browser/web_contents/web_contents_impl.cc
-@@ -5814,9 +5814,14 @@ FrameTree* WebContentsImpl::CreateNewWindow(
+@@ -5823,9 +5823,14 @@ FrameTree* WebContentsImpl::CreateNewWindow(
        base::FeatureList::IsEnabled(features::kGuestViewMPArch)
            ? opener->GetOutermostMainFrame()->frame_tree()->is_guest()
            : IsGuest();
@@ -46,7 +46,7 @@ index 861b89b..62f2ca4 100644
  
    // We usually create the new window in the same BrowsingInstance (group of
    // script-related windows), by passing in the current SiteInstance.  However,
-@@ -5824,7 +5829,9 @@ FrameTree* WebContentsImpl::CreateNewWindow(
+@@ -5833,7 +5838,9 @@ FrameTree* WebContentsImpl::CreateNewWindow(
    // SiteInstance is created in a new BrowsingInstance.
    scoped_refptr<SiteInstance> site_instance;
    if (params.opener_suppressed) {

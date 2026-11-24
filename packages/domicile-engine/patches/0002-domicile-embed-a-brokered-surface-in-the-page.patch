@@ -43,7 +43,7 @@ Edits seven files Chromium owns, five of them Blink's. The design doc's
  7 files changed, 129 insertions(+), 1 deletion(-)
 
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index f0acbd4..cf7a3be 100644
+index 6686394..fc7b4d1 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
 @@ -162,8 +162,9 @@ source_set("browser") {
@@ -57,7 +57,7 @@ index f0acbd4..cf7a3be 100644
      "//components/download/public/common:public",
      "//components/embedder_support",
      "//components/embedder_support:user_agent",
-@@ -970,6 +971,8 @@ source_set("browser") {
+@@ -967,6 +968,8 @@ source_set("browser") {
      "dom_storage/session_storage_namespace_handle_impl.h",
      "domicile/domicile_frame_sink_broker.cc",
      "domicile/domicile_frame_sink_broker.h",
@@ -94,7 +94,7 @@ index 203eded..eb72f30 100644
        registry.get(),
        base::BindRepeating(&RenderProcessHostImpl::BindCompositingModeReporter,
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-index 09c4ad4..f90abb8 100644
+index bfec342..c99533f 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 @@ -27,6 +27,8 @@
@@ -106,7 +106,7 @@ index 09c4ad4..f90abb8 100644
  #include <math.h>
  
  #include <limits>
-@@ -2130,6 +2132,68 @@ bool HTMLCanvasElement::CreateLayer() {
+@@ -2159,6 +2161,68 @@ bool HTMLCanvasElement::CreateLayer() {
    return true;
  }
  
@@ -176,7 +176,7 @@ index 09c4ad4..f90abb8 100644
    SetNeedsCompositingUpdate();
  }
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.h b/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
-index c97d6d2..96c3ecb 100644
+index d00f201..879f1b0 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
 @@ -47,6 +47,7 @@
@@ -232,7 +232,7 @@ index c97d6d2..96c3ecb 100644
    bool ShouldAccelerate() const;
    void ParseAttribute(const AttributeModificationParams&) override;
    void AttributeChanged(const AttributeModificationParams&) override;
-@@ -508,6 +533,10 @@ class CORE_EXPORT HTMLCanvasElement final
+@@ -507,6 +532,10 @@ class CORE_EXPORT HTMLCanvasElement final
    // and for low latency mode.
    std::unique_ptr<::blink::SurfaceLayerBridge> surface_layer_bridge_;
  
@@ -264,10 +264,10 @@ index 30b9f85..9e5ee58 100644
  
  // https://html.spec.whatwg.org/C/#blobcallback
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index cab74e3..ef0f564 100644
+index bb366ef..4c89845 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -305,6 +305,8 @@ group("blink_platform_public_deps") {
+@@ -306,6 +306,8 @@ group("blink_platform_public_deps") {
      "//gpu/command_buffer/common",
      "//gpu/command_buffer/common:gles2_utils",
      "//net",
@@ -276,7 +276,7 @@ index cab74e3..ef0f564 100644
      "//services/device/public/mojom:generic_sensor_blink",
      "//services/device/public/mojom:mojom_blink",
      "//services/network/public/cpp",
-@@ -1035,6 +1037,8 @@ component("platform") {
+@@ -1034,6 +1036,8 @@ component("platform") {
      "graphics/draw_looper_builder.h",
      "graphics/exported_canvas_resource.cc",
      "graphics/exported_canvas_resource.h",
@@ -286,10 +286,10 @@ index cab74e3..ef0f564 100644
      "graphics/filters/distant_light_source.h",
      "graphics/filters/fe_blend.cc",
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-index fadf4c8..28a1b82 100644
+index 1b8e077..9d2295d 100644
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -2753,6 +2753,16 @@
+@@ -2832,6 +2832,16 @@
        name: "DocumentPolicyJSProfilingMode",
        status: "experimental",
      },

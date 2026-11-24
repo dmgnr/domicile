@@ -8,6 +8,13 @@ import { jsonText } from "./json-text";
 /** The Gmail API's messages for the signed-in account. */
 const MESSAGES = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 
+/** The Gmail API's drafts of the signed-in account. */
+const DRAFTS = "https://gmail.googleapis.com/gmail/v1/users/me/drafts";
+
+/** The Gmail API's addresses the account sends from. */
+const SEND_AS =
+  "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
+
 /** The Gmail API's inbox label, which carries its counts. */
 const INBOX = "https://gmail.googleapis.com/gmail/v1/users/me/labels/INBOX";
 
@@ -60,6 +67,29 @@ export const unreadMail = (
 ): Promise<Result<Unread[], string>> =>
   ask(domicile, accessToken, UNREAD, unreadSchema);
 
+/**
+ * Asks the Gmail API for the addresses the account sends from: its own,
+ * then the aliases it verified, in Gmail's order.
+ */
+export const sendAsAddresses = (
+  domicile: Fetch,
+  accessToken: string,
+): Promise<Result<string[], string>> =>
+  ask(domicile, accessToken, SEND_AS, sendAsSchema);
+
+/**
+ * Saves the RFC 5322 message `message` as a new draft. Resolves the draft's
+ * message id: Gmail's hex number, which its web app opens the draft by.
+ */
+export const createDraft = (
+  domicile: Fetch,
+  accessToken: string,
+  message: string,
+): Promise<Result<string, string>> =>
+  ask(domicile, accessToken, DRAFTS, draftSchema, {
+    message: { raw: base64Url(new TextEncoder().encode(message)) },
+  });
+
 /** Asks the Gmail API for message `id`'s sender, subject and arrival. */
 export const mailHeaders = (
   domicile: Fetch,
@@ -77,15 +107,25 @@ export const mailHeaders = (
     headersSchema,
   );
 
-const ask = <T extends object>(
+/** GETs `url`, or POSTs `posted` as JSON to it, and reads the answer. */
+const ask = <T extends {}>(
   domicile: Fetch,
   accessToken: string,
   url: string,
   schema: z.ZodType<T, string>,
+  posted?: object,
 ): Promise<Result<T, string>> =>
   domicile.browser
     .fetch(url, {
-      headers: [{ name: "Authorization", value: `Bearer ${accessToken}` }],
+      headers: [
+        { name: "Authorization", value: `Bearer ${accessToken}` },
+        ...(posted === undefined
+          ? []
+          : [{ name: "Content-Type", value: "application/json" }]),
+      ],
+      ...(posted === undefined
+        ? {}
+        : { body: JSON.stringify(posted), method: "POST" as const }),
     })
     .then(
       (answer): Result<T, string> => {
@@ -129,6 +169,50 @@ const unreadSchema = jsonText.pipe(
     ),
 );
 
+const draftSchema = jsonText.pipe(
+  z
+    .object({ message: z.object({ id: z.string().regex(/^[0-9a-f]+$/) }) })
+    .transform(({ message }) => message.id),
+);
+
+/** `bytes` in base64url, as the Gmail API takes a raw message. */
+const base64Url = (bytes: Uint8Array): string =>
+  btoa(Array.from(bytes, (byte) => String.fromCodePoint(byte)).join(""))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_");
+
+// An alias Gmail has not verified cannot send yet. The primary address has
+// no verification status.
+const sendAsSchema = jsonText.pipe(
+  z
+    .object({
+      sendAs: z.array(
+        z.object({
+          isPrimary: z.boolean().optional(),
+          sendAsEmail: z.string(),
+          verificationStatus: z.string().optional(),
+        }),
+      ),
+    })
+    .transform(({ sendAs }) => [
+      ...sendAs
+        .filter(({ isPrimary }) => isPrimary === true)
+        .map(({ sendAsEmail }) => sendAsEmail),
+      ...sendAs
+        .filter(
+          ({ isPrimary, verificationStatus }) =>
+            isPrimary !== true && verificationStatus === "accepted",
+        )
+        .map(({ sendAsEmail }) => sendAsEmail),
+    ]),
+);
+
+/**
+ * A thread's id: Gmail's hex number, which a press names the thread's row and
+ * link by.
+ */
+const threadIdSchema = z.string().regex(/^[0-9a-f]+$/);
+
 const headersSchema = jsonText.pipe(
   z
     .object({
@@ -138,7 +222,7 @@ const headersSchema = jsonText.pipe(
       payload: z.object({
         headers: z.array(z.object({ name: z.string(), value: z.string() })),
       }),
-      threadId: z.string(),
+      threadId: threadIdSchema,
     })
     .transform(({ id, internalDate, payload, threadId }) => {
       const header = (name: string) =>

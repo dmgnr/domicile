@@ -305,6 +305,23 @@ describe("Wallpaper", () => {
     }
   });
 
+  it("fetches each photograph only as wide as its screen needs", () => {
+    // A 4K photograph decoded for a 1080p screen holds four times the memory
+    // it shows.
+    const { container } = render(
+      <Wallpaper files={NO_FILES} order={inOrder} theme="dark" />,
+      { wrapper: OnOneScreen },
+    );
+
+    const photographs = [
+      ...rotation(container, "dark").querySelectorAll("img[srcset]"),
+    ];
+    expect(photographs.length).toBe(2);
+    for (const photograph of photographs) {
+      expect(photograph.getAttribute("sizes")).toBe("1920px");
+    }
+  });
+
   // Windows hidden behind a tab sit at this depth. A wallpaper above them
   // would show through a window opening or closing in front of one.
   it("sits at the depth a window a tab hides is drawn at", () => {
@@ -338,6 +355,26 @@ describe("Wallpaper", () => {
 
     expect(layer(container, "dark", "current")).toEqual([photo("dark", 1)]);
     expect(layer(container, "dark", "previous")).toEqual([photo("dark", 0)]);
+    jest.useRealTimers();
+  });
+
+  it("keeps the photograph on screen when still", () => {
+    // Nothing redraws an idle desktop: the minute timer doesn't run.
+    jest.useFakeTimers();
+    const { container } = render(
+      <Wallpaper files={NO_FILES} order={inOrder} still theme="dark" />,
+      {
+        wrapper: OnOneScreen,
+      },
+    );
+    loadPhotos(container);
+
+    act(() => {
+      jest.advanceTimersByTime(DWELL_MS * 3);
+    });
+
+    expect(layer(container, "dark", "current")).toEqual([photo("dark", 0)]);
+    expect(jest.getTimerCount()).toBe(0);
     jest.useRealTimers();
   });
 

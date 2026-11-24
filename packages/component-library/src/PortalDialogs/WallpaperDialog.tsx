@@ -8,6 +8,7 @@ import { css } from "../../styled-system/css";
 import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
 import { usePictureUrl } from "../usePictureUrl/usePictureUrl";
+import type { Presence } from "./presence";
 
 type Props = {
   answer: (answer: PortalAnswer) => void;
@@ -15,6 +16,8 @@ type Props = {
   asker: string;
   body: WallpaperBody;
   files: Pick<Files, "read">;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -27,6 +30,7 @@ export const WallpaperDialog = ({
   asker,
   body,
   files,
+  presence,
   screen,
 }: Props) => {
   const url = usePictureUrl(files, body.path);
@@ -57,7 +61,7 @@ export const WallpaperDialog = ({
           answer(Answer.Canceled());
         }
       }}
-      open
+      {...presence}
       screen={screen}
       title={`${asker} wants to change the wallpaper`}
     >

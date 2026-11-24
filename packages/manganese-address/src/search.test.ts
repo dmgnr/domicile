@@ -9,6 +9,12 @@ describe("searchUrl", () => {
     );
   });
 
+  it("sends a !g query to Google without the tag", () => {
+    expect(searchUrl("kate bush !g")).toBe(
+      "https://google.com/search?q=kate%20bush",
+    );
+  });
+
   it("sends a !maps query to Google Maps", () => {
     expect(searchUrl("!maps ferry building")).toBe(
       "https://www.google.com/maps/search/ferry%20building",

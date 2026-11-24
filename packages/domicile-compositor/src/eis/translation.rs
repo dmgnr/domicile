@@ -361,10 +361,13 @@ mod tests {
                 scale: 1.0,
                 transform: Transform::Normal,
                 description: String::new(),
+                edid: String::new(),
+                connector: String::new(),
                 display: None,
                 physical_mm: (0, 0),
                 refresh_mhz: 0,
                 adaptive_sync: crate::engine::AdaptiveSync::Unsupported,
+                hdr: Default::default(),
             }],
             vec![Window {
                 app_id: "1".into(),

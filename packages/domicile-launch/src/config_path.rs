@@ -39,7 +39,7 @@ impl std::fmt::Display for ConfigFile {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Named(path) => write!(out, "{}, because --config names it", path.display()),
-            Self::Found(path) => write!(out, "{}, found where a config lives", path.display()),
+            Self::Found(path) => write!(out, "{}", path.display()),
             Self::Absent(directory) => write!(
                 out,
                 "none -- no domicile.{{{}}} in {} -- so the compositor's defaults",

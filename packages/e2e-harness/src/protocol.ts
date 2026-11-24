@@ -270,6 +270,11 @@ const displayInfoSchema = z.looseObject({
     .enum(["unsupported", "off", "on"])
     .nullish()
     .transform((adaptiveSync) => adaptiveSync ?? "unsupported"),
+  // Whether the monitor is driven in HDR10. See `docs/COLOR.md`.
+  hdr: z
+    .enum(["unsupported", "off", "on"])
+    .nullish()
+    .transform((hdr) => hdr ?? "unsupported"),
   // The scanout mode in physical pixels, before rotation. It cannot be derived
   // from `size` and `scale`, since `scale` is rounded to an integer.
   // Informational only; `[0, 0]` when unknown.
@@ -280,6 +285,12 @@ const displayInfoSchema = z.looseObject({
   // Non-empty: `<Screen name="…">` matches on it, and an empty name would
   // silently match nothing.
   name: z.string().min(1),
+  // The panel's peak luminance from its EDID in cd/m²; zero when unreported.
+  peak_luminance: z
+    .int()
+    .nonnegative()
+    .nullish()
+    .transform((peak) => peak ?? 0),
   // Signed, mirroring `xdg_output.logical_position`.
   position: z.tuple([z.int(), z.int()]),
   // The `wl_output` refresh rate in mHz; zero when unknown.
@@ -291,6 +302,12 @@ const displayInfoSchema = z.looseObject({
   // The integer `wl_output` scale clients draw at. The chrome renders every
   // display at one `devicePixelRatio`.
   scale: z.int().positive(),
+  // While `hdr` is `on`, the cd/m² SDR white is shown at; zero otherwise.
+  sdr_white: z
+    .int()
+    .nonnegative()
+    .nullish()
+    .transform((white) => white ?? 0),
   // Integer, unlike `sizeSchema`, which holds `f64` client sizes.
   size: z.tuple([z.int().positive(), z.int().positive()]),
   // The rotation applied to content, per the `wl_output` convention. Apply it
@@ -309,6 +326,69 @@ const displayInfoSchema = z.looseObject({
 const displaysSchema = z.looseObject({
   displays: z.array(displayInfoSchema),
   type: z.literal("displays"),
+});
+
+// Each lit monitor under the names a display profile can call it by, and
+// whether it is in HDR. Answers `which_monitors` on the asking connection only,
+// for Settings.
+const monitorsSchema = z.looseObject({
+  monitors: z.array(
+    z.looseObject({
+      hdr: z
+        .enum(["unsupported", "off", "on"])
+        .nullish()
+        .transform((hdr) => hdr ?? "unsupported"),
+      names: z.array(z.string().min(1)),
+    }),
+  ),
+  type: z.literal("monitors"),
+});
+
+// Every display, with every name `sleep-displays` takes for it and whether it
+// is lit. Answers `which_displays` on the asking connection only, for
+// `domicile list-displays`.
+const displayListSchema = z.looseObject({
+  displays: z.array(
+    displayInfoSchema.extend({
+      lit: z.boolean(),
+      names: z.array(z.string().min(1)),
+    }),
+  ),
+  type: z.literal("display_list"),
+});
+
+// Every window, native first in the order they opened, then browser windows.
+// Answers `which_windows` on the asking connection only, for
+// `domicile list-windows`.
+const windowListSchema = z.looseObject({
+  type: z.literal("window_list"),
+  windows: z.array(
+    z.looseObject({
+      app: z.string().nullable(),
+      // A browser window's id in the engine, for `domicile devtools`.
+      engine_id: z.string().nullable(),
+      focused: z.boolean(),
+      // The window's `ext-foreign-toplevel-list-v1` identifier.
+      id: z.string().min(1),
+      kind: z.enum(["native", "browser"]),
+      pid: z.int().nullable(),
+      private: z.boolean(),
+      size: sizeSchema.nullable(),
+      title: z.string(),
+      urgent: z.boolean(),
+      // A browser window's address.
+      url: z.string().nullable(),
+      // The views a browser window holds and shows, bottom first: an
+      // Electron app's `WebContentsView`s, for `domicile devtools --view`.
+      views: z.array(
+        z.looseObject({
+          id: z.string().min(1),
+          position: z.tuple([z.int(), z.int()]),
+          size: z.tuple([z.int(), z.int()]),
+        }),
+      ),
+    }),
+  ),
 });
 
 // Each browser window's identifier on `ext-foreign-toplevel-list-v1`, by the
@@ -337,6 +417,17 @@ const appCursorSchema = z.looseObject({
 const appPointerConstraintSchema = z.looseObject({
   app_id: z.string(),
   constraint: z.enum(["lock", "confine"]).nullable(),
+  // Rectangles of the surface the constraint holds; null for the whole window.
+  region: z
+    .array(
+      z.looseObject({
+        height: z.number(),
+        width: z.number(),
+        x: z.number(),
+        y: z.number(),
+      }),
+    )
+    .nullable(),
   type: z.literal("app_pointer_constraint"),
 });
 
@@ -371,7 +462,6 @@ const extensionsSchema = z.looseObject({
     z.string(),
     z.looseObject({
       file_access: z.boolean().optional(),
-      private: z.boolean().optional(),
       site_access: z
         .union([z.enum(["on_click", "all_sites"]), z.array(z.string())])
         .optional(),
@@ -383,12 +473,40 @@ const extensionsSchema = z.looseObject({
   web_store: z.array(z.string()),
 });
 
+// The browser profiles and the profile each site opens in: the config's
+// `browser`. Sent with the handshake and on config reload. The browser process
+// reads it; see `docs/architecture/BROWSER-PROFILES.md`.
+const browserProfilesSchema = z.looseObject({
+  default_private_profile: z.string(),
+  default_profile: z.string(),
+  profiles: z.array(
+    z.looseObject({
+      color: z.string(),
+      extensions: z.array(z.string()).nullable(),
+      id: z.string(),
+      name: z.string(),
+      private: z.boolean(),
+    }),
+  ),
+  sites: z.record(z.string(), z.string()),
+  type: z.literal("browser_profiles"),
+});
+
 // Host names of sites the browser draws dark while the theme is dark: the
 // config's `theme.force_dark`. Sent with the handshake and on config reload.
 // The browser process reads it.
 const forceDarkSchema = z.looseObject({
   sites: z.array(z.string()),
   type: z.literal("force_dark"),
+});
+
+// Whether the browser checks spelling in pages' text fields, and in which
+// languages: the config's `spellcheck`. Sent with the handshake and on config
+// reload. The browser process reads it.
+const spellcheckSchema = z.looseObject({
+  enabled: z.boolean(),
+  languages: z.array(z.string()),
+  type: z.literal("spellcheck"),
 });
 
 // Whether the desk's input method composes for the browser's focused field.
@@ -442,8 +560,10 @@ const foundFilesSchema = z.looseObject({
 // Clipboard history, newest first. Pushed on change and on connect.
 //
 // Entries carry a preview and an id, not the full text, which limits exposure
-// of copied passwords. Copy one back with `copy_clipboard_entry`.
+// of copied passwords. Copy one back with `copy_clipboard_entry`; drop one
+// with `remove_clipboard_entry`. `current` marks what the clipboard holds.
 const clipboardEntrySchema = z.looseObject({
+  current: z.boolean(),
   id: z.number(),
   image: z.boolean(),
   preview: z.string(),
@@ -521,6 +641,122 @@ const portalCapturingSchema = z.looseObject({
   body: z.unknown(),
   id: z.number(),
   kind: z.string(),
+});
+
+// How the desktop is. Answers `which_status` on the asking connection only, for
+// `domicile status`.
+const statusSchema = z.looseObject({
+  capturing: z.array(portalCapturingSchema),
+  held_awake_by: z.array(z.string()),
+  keymap: z.string().nullable(),
+  locked: z.boolean(),
+  screens_off: z.boolean(),
+  theme: z.enum(["dark", "light"]),
+  type: z.literal("status"),
+});
+
+// The commands the shell's pages run for `domicile send-shell`. Answers
+// `which_shell_commands` on the asking connection only, for
+// `domicile list-shell-commands`.
+const shellCommandListSchema = z.looseObject({
+  commands: z.array(
+    z.looseObject({ description: z.string(), usage: z.string() }),
+  ),
+  type: z.literal("shell_command_list"),
+});
+
+// The keys and gestures the shell's pages bind. Answers `which_shell_bindings`
+// on the asking connection only, for `domicile list-bindings`.
+const shellBindingListSchema = z.looseObject({
+  bindings: z.array(
+    z.looseObject({ action: z.string(), chord: z.string(), mode: z.string() }),
+  ),
+  type: z.literal("shell_binding_list"),
+});
+
+// Whole seconds since the last input, or since the compositor started.
+// Answers `which_idle_time` on the asking connection only, for
+// `domicile idle-time`.
+const idleTimeSchema = z.looseObject({
+  seconds: z.number(),
+  type: z.literal("idle_time"),
+});
+
+// The input devices the engine reads. Answers `which_inputs` on the asking
+// connection only, for `domicile list-inputs`.
+const inputListSchema = z.looseObject({
+  inputs: z.array(
+    z.looseObject({
+      connection: z.enum(["internal", "usb", "bluetooth", "unknown"]),
+      id: z.number(),
+      kind: z.enum([
+        "keyboard",
+        "mouse",
+        "touchpad",
+        "touchscreen",
+        "pointing-stick",
+        "tablet",
+        "other",
+      ]),
+      name: z.string(),
+      product: z.number(),
+      sys_path: z.string(),
+      vendor: z.number(),
+    }),
+  ),
+  type: z.literal("input_list"),
+});
+
+// Answers `act_on_window` on the asking connection only, for `domicile
+// focus-window`, `close-window` and `kill-window`: why not, or nothing.
+const windowActedSchema = z.looseObject({
+  refused: z.string().optional(),
+  type: z.literal("window_acted"),
+});
+
+// Answers `configure_display` on the asking connection only, for `domicile
+// configure-display`: why not, or nothing.
+const displayConfiguredSchema = z.looseObject({
+  refused: z.string().optional(),
+  type: z.literal("display_configured"),
+});
+
+// Answers `set_log_levels` on the asking connection only, for `domicile
+// set-log-level`: why not, or nothing.
+const logLevelsSetSchema = z.looseObject({
+  refused: z.string().optional(),
+  type: z.literal("log_levels_set"),
+});
+
+// Answers `shoot_desk` on the asking connection only, for `domicile
+// screenshot --fit`: what the PNG shows, or why there is none.
+const deskShotSchema = z.looseObject({
+  refused: z.string().optional(),
+  shot: z
+    .looseObject({
+      height: z.number(),
+      place: z.looseObject({
+        position: z.tuple([z.number(), z.number()]),
+        size: z.tuple([z.number(), z.number()]),
+      }),
+      width: z.number(),
+    })
+    .optional(),
+  type: z.literal("desk_shot"),
+});
+
+// Answers `exec` on the asking connection only, for `domicile exec` and
+// `domicile open`: why the program did not start, or nothing.
+const executedSchema = z.looseObject({
+  refused: z.string().optional(),
+  type: z.literal("executed"),
+});
+
+// Answers `emulate` on the asking connection only, for `domicile pointer`,
+// `key` and `type`: why not, or nothing.
+const emulatedSchema = z.looseObject({
+  refused: z.string().optional(),
+  type: z.literal("emulated"),
 });
 
 const boundShortcutSchema = z.looseObject({
@@ -690,6 +926,7 @@ const systemEventSchema = z.looseObject({
     z.looseObject({
       command: z.array(z.string()),
       kind: z.literal("shell_command"),
+      sent: z.number(),
     }),
     z.looseObject({
       idle: z.boolean(),
@@ -773,10 +1010,26 @@ export const hostMessageSchema = z.discriminatedUnion("type", [
   appAnchoredSchema,
   appUrgentSchema,
   displaysSchema,
+  monitorsSchema,
+  displayListSchema,
+  windowListSchema,
+  statusSchema,
+  shellCommandListSchema,
+  shellBindingListSchema,
+  inputListSchema,
+  idleTimeSchema,
+  windowActedSchema,
+  displayConfiguredSchema,
+  logLevelsSetSchema,
+  deskShotSchema,
+  emulatedSchema,
+  executedSchema,
   browserToplevelIdsSchema,
   keymapSchema,
+  browserProfilesSchema,
   extensionsSchema,
   forceDarkSchema,
+  spellcheckSchema,
   inputMethodSchema,
   compositionSchema,
   keyPassedSchema,
@@ -827,6 +1080,17 @@ export type AppTransientForMessage = z.infer<typeof appTransientForSchema>;
 export type AppAnchoredMessage = z.infer<typeof appAnchoredSchema>;
 export type AppUrgentMessage = z.infer<typeof appUrgentSchema>;
 export type DisplaysMessage = z.infer<typeof displaysSchema>;
+export type MonitorsMessage = z.infer<typeof monitorsSchema>;
+export type DisplayListMessage = z.infer<typeof displayListSchema>;
+export type WindowListMessage = z.infer<typeof windowListSchema>;
+export type StatusMessage = z.infer<typeof statusSchema>;
+export type ShellCommandListMessage = z.infer<typeof shellCommandListSchema>;
+export type IdleTimeMessage = z.infer<typeof idleTimeSchema>;
+export type ShellBindingListMessage = z.infer<typeof shellBindingListSchema>;
+export type InputListMessage = z.infer<typeof inputListSchema>;
+export type WindowActedMessage = z.infer<typeof windowActedSchema>;
+export type DisplayConfiguredMessage = z.infer<typeof displayConfiguredSchema>;
+export type LogLevelsSetMessage = z.infer<typeof logLevelsSetSchema>;
 export type KeymapMessage = z.infer<typeof keymapSchema>;
 export type FocusChangedMessage = z.infer<typeof focusChangedSchema>;
 export type FocusRequestedMessage = z.infer<typeof focusRequestedSchema>;

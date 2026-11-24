@@ -6,6 +6,8 @@
 //
 //   ?answer=choose&pick=<path>   choose <path>, absolute or relative to home
 //   ?answer=cancel               cancel (the control)
+//   ?hold=first                  never answer the first request, as a
+//                                hidden window's picker; optional
 //   ?prompt=accept               accept each prompt; optional
 //   ?prompt=dismiss              dismiss each prompt (the control)
 //   ?picker=choose&value=<value> choose <value> in each picker; optional
@@ -17,6 +19,7 @@
 //   GUARD chrome-mousedown       a press reached the shell's document
 //   GUARD file-chooser mode=…    the element asked, and for what
 //     suggested=…
+//   GUARD held                   the first request was held unanswered
 //   GUARD answered               the answer did not throw
 //   GUARD prompt kind=… origin=… a prompt reached the shell, and what it
 //     subject=… details=…        carries
@@ -67,12 +70,23 @@ export const HostShell = (_root, host) => {
 
   // Call `preventDefault()` in both runs so the control differs only in the
   // answer, not by falling back to the element's default cancel.
+  const hold = parameters.get("hold");
+  if (hold !== null && hold !== "first") {
+    throw new Error(`guard-webview-file-chooser: ?hold=${hold} is not one`);
+  }
+  // The request held unanswered, kept so it is never collected.
+  let held;
   document.addEventListener("domicile-file-chooser", (event) => {
     say(
       `file-chooser mode=${event.mode} suggested=${event.suggestedName} accept=${event.accept.join(",")} folder=${event.currentFolder}`,
     );
     event.preventDefault();
-    answerIt(event);
+    if (hold === "first" && held === undefined) {
+      held = event;
+      say("held");
+    } else {
+      answerIt(event);
+    }
   });
 
   // Prompts are answered only when `?prompt=` says how. Claimed in both runs,

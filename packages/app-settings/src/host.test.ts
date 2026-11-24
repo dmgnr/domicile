@@ -220,6 +220,55 @@ describe(spawnedHost, () => {
       await stored;
     });
 
+    it("lists the monitors", async () => {
+      const { asked, processes } = await started((host) => host.monitors());
+      const monitors = [{ hdr: "unsupported" as const, names: ["drm-1"] }];
+      expect(processes[0]?.sent.at(-1)).toEqual({ id: 1, type: "monitors" });
+      processes[0]?.answer({ id: 1, monitors, type: "monitors" });
+      expect(await asked).toEqual(monitors);
+    });
+
+    it("lists, stops and forgets agents", async () => {
+      const { asked, host, processes } = await started((host) => host.agents());
+      expect(processes[0]?.sent.at(-1)).toEqual({ id: 1, type: "agents" });
+      processes[0]?.answer({
+        agents: {
+          connected: [
+            { agent: "Claude Code", reach: { type: "desk" }, session: 4 },
+          ],
+          remembered: [{ agent: "Codex", last_used_ms: 9 }],
+        },
+        id: 1,
+        type: "agents",
+      });
+      expect(await asked).toEqual({
+        connected: [
+          { agent: "Claude Code", reach: { type: "desk" }, session: 4 },
+        ],
+        remembered: [{ agent: "Codex", lastUsedMs: 9 }],
+      });
+
+      const stopped = host.stopAgent(4);
+      await settled();
+      expect(processes[0]?.sent.at(-1)).toEqual({
+        id: 2,
+        session: 4,
+        type: "stop_agent",
+      });
+      processes[0]?.answer({ id: 2, type: "done" });
+      await stopped;
+
+      const forgot = host.forgetAgent("Codex");
+      await settled();
+      expect(processes[0]?.sent.at(-1)).toEqual({
+        agent: "Codex",
+        id: 3,
+        type: "forget_agent",
+      });
+      processes[0]?.answer({ id: 3, type: "done" });
+      await forgot;
+    });
+
     it("lists media devices and prefers one", async () => {
       const { asked, host, processes } = await started((host) =>
         host.mediaDevices(),
@@ -308,22 +357,30 @@ describe(spawnedHost, () => {
         enabled: true,
         id: "a".repeat(32),
         name: "uBlock Origin Lite",
-        settings: { private: false, site_access: ["github.com"] },
+        settings: { file_access: false, site_access: ["github.com"] },
         version: "2025.1",
       };
       processes[0]?.answer({
         extensions: [
-          { ...extension, options_url: "chrome-extension://a/options.html" },
-          { ...extension, options_url: null },
+          {
+            ...extension,
+            icon: "data:image/png;base64,iVBORw==",
+            options_url: "chrome-extension://a/options.html",
+          },
+          { ...extension, icon: null, options_url: null },
           extension,
         ],
         id: 1,
         type: "extensions",
       });
       expect(await asked).toEqual([
-        { ...extension, optionsUrl: "chrome-extension://a/options.html" },
-        { ...extension, optionsUrl: undefined },
-        { ...extension, optionsUrl: undefined },
+        {
+          ...extension,
+          icon: "data:image/png;base64,iVBORw==",
+          optionsUrl: "chrome-extension://a/options.html",
+        },
+        { ...extension, icon: undefined, optionsUrl: undefined },
+        { ...extension, icon: undefined, optionsUrl: undefined },
       ]);
     });
 
@@ -380,6 +437,58 @@ describe(spawnedHost, () => {
       await settled();
       processes[0]?.answer({ id: 2, path: null, type: "folder" });
       expect(await canceled).toBeUndefined();
+    });
+
+    it("reads and switches detailed logging", async () => {
+      const { asked, host, processes } = await started((host) =>
+        host.detailedLogging(),
+      );
+      expect(processes[0]?.sent.at(-1)).toEqual({
+        id: 1,
+        type: "detailed_logging",
+      });
+      processes[0]?.answer({ id: 1, on: false, type: "detailed_logging" });
+      expect(await asked).toBe(false);
+
+      const switched = host.setDetailedLogging(true);
+      await settled();
+      expect(processes[0]?.sent.at(-1)).toEqual({
+        id: 2,
+        on: true,
+        type: "set_detailed_logging",
+      });
+      processes[0]?.answer({ id: 2, on: true, type: "detailed_logging" });
+      expect(await switched).toBe(true);
+    });
+
+    it("saves the logs and opens Downloads", async () => {
+      const { asked, host, processes } = await started((host) =>
+        host.exportLogs(false),
+      );
+      expect(processes[0]?.sent.at(-1)).toEqual({
+        id: 1,
+        redact: false,
+        type: "export_logs",
+      });
+      processes[0]?.answer({
+        id: 1,
+        path: "/home/me/Downloads/domicile-logs.txt",
+        type: "exported_logs",
+        unhidden: "web addresses and window titles are not hidden",
+      });
+      expect(await asked).toEqual({
+        path: "/home/me/Downloads/domicile-logs.txt",
+        unhidden: "web addresses and window titles are not hidden",
+      });
+
+      const opened = host.openDownloads();
+      await settled();
+      expect(processes[0]?.sent.at(-1)).toEqual({
+        id: 2,
+        type: "open_downloads",
+      });
+      processes[0]?.answer({ id: 2, type: "opened" });
+      await opened;
     });
 
     it("tells listeners a file changed on disk", async () => {

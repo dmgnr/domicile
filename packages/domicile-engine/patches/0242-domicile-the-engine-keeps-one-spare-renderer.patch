@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the engine keeps one spare renderer
+
+The field trial testing config turns on `MultipleSpareRPHs` with
+`count: 2`, so the browser keeps two warmed-up renderer processes
+waiting for a page to open. Each costs about 35 MiB at rest. Upstream
+Chrome keeps one.
+
+The study now asks for one. Its memory-pressure features stay on, so
+that one spare still goes away under pressure. The rest of the config
+stays, as in 0196.
+
+Guarded by `guard-one-spare-renderer.sh`.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ testing/variations/fieldtrial_testing_config.json | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/testing/variations/fieldtrial_testing_config.json b/testing/variations/fieldtrial_testing_config.json
+index 20bdc7f..61f4047 100644
+--- a/testing/variations/fieldtrial_testing_config.json
++++ b/testing/variations/fieldtrial_testing_config.json
+@@ -13402,7 +13402,7 @@
+                 {
+                     "name": "Enabled2",
+                     "params": {
+-                        "count": "2"
++                        "count": "1"
+                     },
+                     "enable_features": [
+                         "KillSpareRenderOnMemoryPressure",

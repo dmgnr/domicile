@@ -37,6 +37,7 @@ struct AppSurface {
   // for a surface that already has one.
   gfx::Size size;
   double scale = 0;
+  double zoom = 0;
 };
 
 AppSurface& SurfaceForApp(const String& app_id) {
@@ -60,23 +61,25 @@ viz::LocalSurfaceId ExternalSurfaceEmbedder::Embed(
     const viz::FrameSinkId& parent_frame_sink_id,
     const gfx::Size& size,
     double scale,
+    double zoom,
     Allocation allocation,
     EmbeddedCallback callback) {
   // Allocate before the round trip: the browser passes this half of the
   // SurfaceId to the producer, which cannot create one.
   //
-  // An adopt at a different size or scale gets a new id too. A reloaded shell
-  // is a new document in the same renderer, so its first embed is an adopt of
-  // the old document's surface, usually at a new box size. Reusing the id at
-  // that size makes viz close the producer's frame sink.
+  // An adopt at a different size, scale or zoom gets a new id too. A reloaded
+  // shell is a new document in the same renderer, so its first embed is an
+  // adopt of the old document's surface, usually at a new box size. Reusing the
+  // id at that size makes viz close the producer's frame sink.
   AppSurface& surface = SurfaceForApp(app_id);
   viz::ParentLocalSurfaceIdAllocator& allocator = surface.allocator;
   if (allocation == Allocation::kReconfigure ||
       !allocator.HasValidLocalSurfaceId() || surface.size != size ||
-      surface.scale != scale) {
+      surface.scale != scale || surface.zoom != zoom) {
     allocator.GenerateId();
     surface.size = size;
     surface.scale = scale;
+    surface.zoom = zoom;
   }
   const viz::LocalSurfaceId local_surface_id =
       allocator.GetCurrentLocalSurfaceId();
@@ -87,11 +90,11 @@ viz::LocalSurfaceId ExternalSurfaceEmbedder::Embed(
             << local_surface_id.ToString() << " under "
             << parent_frame_sink_id.ToString() << ", " << size.ToString();
 
-  provider_->Embed(
-      app_id, parent_frame_sink_id, local_surface_id, size, scale,
-      base::BindOnce(&ExternalSurfaceEmbedder::OnEmbedded,
-                     base::Unretained(this), std::move(callback), app_id,
-                     local_surface_id));
+  provider_->Embed(app_id, parent_frame_sink_id, local_surface_id, size, scale,
+                   zoom,
+                   base::BindOnce(&ExternalSurfaceEmbedder::OnEmbedded,
+                                  base::Unretained(this), std::move(callback),
+                                  app_id, local_surface_id));
   return local_surface_id;
 }
 

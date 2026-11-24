@@ -14,7 +14,7 @@ use smithay::wayland::{
     compositor::CompositorClientState,
     security_context::{SecurityContext, SecurityContextHandler, SecurityContextListenerSource},
 };
-use tracing::{debug, warn};
+use tracing::debug;
 
 use domicile_protocol::{Owner, Sandbox};
 
@@ -86,7 +86,7 @@ pub fn accept_app_client(mut display: DisplayHandle, stream: UnixStream, sandbox
         Err(err) => {
             // A window whose owner the shell cannot know is refused rather
             // than shown unattributed.
-            warn!(%err, "a client's credentials would not read; refusing it");
+            tracing::error!(%err, "a client's credentials would not read; refusing it");
             return;
         }
     };
@@ -137,7 +137,7 @@ impl SecurityContextHandler for DomicileCompositor {
         if let Err(err) = listening {
             // Dropping the source closes the listener, so the sandbox's
             // clients fail to connect rather than connect unmarked.
-            warn!(%err, "a sandbox's listener would not join the event loop");
+            tracing::error!(%err, "a sandbox's listener would not join the event loop");
         }
     }
 }

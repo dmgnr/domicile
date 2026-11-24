@@ -1,0 +1,15 @@
+<!doctype html>
+<title>served</title>
+<!-- Served by the guard's app for file:///guard-app/: data.js from the app
+     in pieces, api.js from the app in place of the network. The title says
+     everything at once, as the desk may report only its last. -->
+<script src="data.js"></script>
+<script src="https://guard.test/api.js"></script>
+<script>
+  const done = (echo) => {
+    document.title = ["done", window.data, window.api, echo].join("|");
+  };
+  fetch("https://guard.test/echo", { body: "hi", method: "POST" })
+    .then((response) => response.text())
+    .then(done, (error) => done("failed " + error));
+</script>

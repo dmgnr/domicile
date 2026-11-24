@@ -129,5 +129,17 @@ TEST(ExtensionSettingsTest, WhatTheConfigNoLongerNamesGoesBackToChromes) {
             (ExtensionSettingsMap{{kDark, reset}, {kMonkey, gone}}));
 }
 
+TEST(ExtensionSettingsTest, ASettingTheConfigSetsIsNamed) {
+  ExtensionSettings configured;
+  configured.file_access = false;
+  configured.site_access = SiteAccess::kOnClick;
+  ExtensionSettings wanted;
+  wanted.in_private = true;
+  EXPECT_EQ(SetByConfig(wanted, configured), std::nullopt);
+
+  wanted.site_access = SiteAccess::kAllSites;
+  EXPECT_EQ(SetByConfig(wanted, configured), "site_access");
+}
+
 }  // namespace
 }  // namespace domicile

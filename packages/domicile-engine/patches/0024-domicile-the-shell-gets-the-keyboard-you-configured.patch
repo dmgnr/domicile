@@ -52,10 +52,10 @@ the keymap decoding it as `o`/`VKEY_O`.
  2 files changed, 22 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index a0e0632..a716aa8 100644
+index 4756f75..fc3e00b 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2705,10 +2705,11 @@ source_set("browser") {
+@@ -2716,10 +2716,11 @@ source_set("browser") {
      "//components/domain_reliability",
  
      # Domicile's engine fork: serving the shell over domicile://, the
@@ -70,7 +70,7 @@ index a0e0632..a716aa8 100644
      "//components/domicile:web_view_guest",
  
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 3ed96e9..7361aa0 100644
+index 0580433..d36db79 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -4,7 +4,9 @@
@@ -83,7 +83,7 @@ index 3ed96e9..7361aa0 100644
  #include "components/domicile/browser/web_view_guest.h"
  #include "content/public/browser/browser_thread.h"
  #include "mojo/public/cpp/bindings/message.h"
-@@ -528,9 +530,24 @@ void PopulateChromeFrameBinders(
+@@ -560,9 +562,24 @@ void PopulateChromeFrameBinders(
          // On the IO thread: the channel talks to a unix socket through
          // net::SocketPosix, which DCHECKs that it is on a thread with an IO
          // message pump. Binders run on the UI thread, so this has to hop.

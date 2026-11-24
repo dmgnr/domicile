@@ -83,6 +83,12 @@ std::optional<std::string> SitePattern(std::string_view site);
 ExtensionSettingsMap ReconcileSettings(const ExtensionSettingsMap& wanted,
                                        const ExtensionSettingsMap& previous);
 
+// The first setting `wanted` sets that `configured`, the config's, also sets,
+// as the config spells its key; nothing if none. Only the config changes
+// what it sets.
+std::optional<std::string> SetByConfig(const ExtensionSettings& wanted,
+                                       const ExtensionSettings& configured);
+
 }  // namespace domicile
 
 #endif  // COMPONENTS_DOMICILE_BROWSER_EXTENSION_SETTINGS_H_

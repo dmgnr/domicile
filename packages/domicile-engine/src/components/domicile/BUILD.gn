@@ -143,6 +143,8 @@ source_set("shell_windows") {
     "browser/shell_windows.h",
   ]
 
+  deps = [ "//base" ]
+
   public_deps = [
     "//ui/display",
     "//ui/gfx/geometry",
@@ -188,6 +190,24 @@ source_set("pointer_warp") {
 
 source_set("common") {
   sources = [ "common/domicile_scheme.h" ]
+}
+
+# The switch a renderer started for Node.js in an Electron page carries.
+source_set("electron_node_switches") {
+  sources = [ "common/electron_node_switches.h" ]
+}
+
+# Electron apps' own schemes, which every process registers as it starts from
+# the switch the supervisor passes. Its own target beside :common, which is
+# Domicile's scheme and nothing else: the browser, the renderer and
+# chrome/common's scheme registration all read it, and it needs //base.
+source_set("electron_schemes") {
+  sources = [
+    "common/electron_schemes.cc",
+    "common/electron_schemes.h",
+  ]
+
+  public_deps = [ "//base" ]
 }
 
 # The cursors a client can ask for, and the codec between their wire names and
@@ -255,8 +275,17 @@ source_set("held_chords") {
   sources = [ "common/held_chords.h" ]
 }
 
-# Whether an origin is the shell's. Its own target for :web_view_url's reason:
-# the check needs no browser, so its tests need none either.
+# Which pointer move is the shell's own warp landing. Header only, for
+# :held_chords' reason.
+source_set("warp_landing") {
+  sources = [ "common/warp_landing.h" ]
+
+  public_deps = [ "//ui/gfx/geometry" ]
+}
+
+# Whether an origin is the shell's or an app's. Its own target for
+# :web_view_url's reason: the check needs no browser, so its tests need none
+# either.
 source_set("shell_origin") {
   sources = [
     "browser/shell_origin.cc",
@@ -265,16 +294,23 @@ source_set("shell_origin") {
 
   public_deps = [ "//url" ]
 
-  deps = [ ":common" ]
+  deps = [
+    ":app_roots",
+    ":common",
+  ]
 }
 
-# Serving the shell over domicile://.
+# Serving the shell over domicile://, from a directory or, for `domicile dev`,
+# a dev server.
 #
 # A target of its own rather than part of :browser, because this depends on
 # //content and :browser deliberately does not -- that is a property worth
-# keeping, and the one thing here that needs content is its file loader.
+# keeping, and the things here that need content are its file loader and the
+# IO thread the dev server's socket is read on.
 source_set("shell_scheme") {
   sources = [
+    "browser/shell_dev_server.cc",
+    "browser/shell_dev_server.h",
     "browser/shell_url_loader_factory.cc",
     "browser/shell_url_loader_factory.h",
   ]
@@ -287,6 +323,7 @@ source_set("shell_scheme") {
     "//base",
     "//content/public/browser",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/system",
     "//net",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
@@ -403,6 +440,7 @@ source_set("command_protocol") {
   public_deps = [
     ":common",
     ":extension_settings",
+    ":shell_source",
     "//base",
     "//components/domicile/mojom",
     "//url",
@@ -572,7 +610,10 @@ source_set("context_menu") {
     "browser/context_menu.h",
   ]
 
-  public_deps = [ "//components/domicile/mojom" ]
+  public_deps = [
+    ":electron_protocol",
+    "//components/domicile/mojom",
+  ]
 
   deps = [
     "//base",
@@ -580,6 +621,20 @@ source_set("context_menu") {
     "//third_party/blink/public/common",
     "//ui/gfx/geometry",
     "//url",
+  ]
+}
+
+# Energy Saver's frame rate cap, on unfocused <webview>s only. Its own target
+# so its tests need no browser.
+source_set("unfocused_web_views") {
+  sources = [
+    "browser/unfocused_web_views.cc",
+    "browser/unfocused_web_views.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//content/public/browser",
   ]
 }
 
@@ -592,14 +647,19 @@ source_set("web_view_guest") {
   public_deps = [
     ":context_menu",
     ":desk_downloads",
+    ":desk_faults",
+    # Favicons as data: URLs, for the history menus.
+    ":extension_tray_entry",
     ":file_choice",
     ":guest_dialogs",
+    ":history_menu",
     ":page_matches",
     ":placeholder_stage",
     ":render_process",
     ":screen_capture",
     ":shortcut_registry",
     ":site_permissions",
+    ":unfocused_web_views",
     ":web_view_partition",
     ":web_view_url",
     "//base",
@@ -623,16 +683,22 @@ source_set("web_view_guest") {
     # and may pass (ProceedPastWarning).
     "//components/security_interstitials/content:security_interstitial_page",
     "//components/security_interstitials/core",
+    # Chrome's zoom modes, which chrome.tabs.setZoomSettings sets.
+    "//components/zoom",
     "//content/public/browser",
     "//mojo/public/cpp/bindings",
     "//third_party/blink/public/common",
     "//ui/base",
+    # An Electron app's page hears its cursor.
+    "//ui/base/cursor",
     # Context menu actions: the clipboard, and the Accept header for an image
     # save.
     "//content/public/common",
     "//net",
     "//ui/base/clipboard",
     "//ui/events:dom_keycode_converter",
+    # A history entry's favicon, which the history menus show.
+    "//ui/gfx",
     "//ui/gfx/geometry",
     "//url",
   ]
@@ -647,6 +713,30 @@ source_set("guest_dialogs") {
   ]
 
   deps = [ "//base" ]
+}
+
+# A site's "Sign in with" (FedCM) dialogs, asked of the shell. Its own target
+# for the reason :file_choice is one: it needs no guest, which is where its
+# tests are. //chrome/browser/domicile gives it the guest to ask.
+source_set("identity_dialog") {
+  sources = [
+    "browser/identity_dialog.cc",
+    "browser/identity_dialog.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/domicile/mojom",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//skia",
+    "//ui/gfx",
+    # The provider's icon and an account's picture, sent as PNG data: URLs.
+    "//ui/gfx/codec",
+    "//url",
+  ]
 }
 
 # Ids for the devices a <webview>'s device chooser offers. Its own target for
@@ -731,11 +821,45 @@ source_set("browser_page_throttle") {
   public_deps = [ "//content/public/browser" ]
 
   deps = [
+    ":app_navigation_throttle",
     ":browser_pages",
+    ":profile_route_throttle",
     ":web_view_guest",
     ":web_view_url",
     ":will_navigate_throttle",
     "//base",
+  ]
+}
+
+# Moves a browser window's page to the profile of the site the user takes it
+# to. :browser_page_throttle adds it.
+source_set("profile_route_throttle") {
+  sources = [
+    "browser/profile_route_throttle.cc",
+    "browser/profile_route_throttle.h",
+  ]
+
+  public_deps = [ "//content/public/browser" ]
+
+  deps = [
+    ":browser_profiles",
+    ":web_view_guest",
+    "//base",
+    "//ui/base",
+  ]
+}
+
+# The back and forward lists of a guest's history. Its own target beside
+# :web_view_guest for the reason :file_choice is one: it needs no browser.
+source_set("history_menu") {
+  sources = [
+    "browser/history_menu.cc",
+    "browser/history_menu.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/domicile/mojom",
   ]
 }
 
@@ -763,6 +887,163 @@ source_set("web_view_partition") {
   public_deps = [ "//base" ]
 }
 
+# Electron's contextBridge: copying values between a preload's isolated world
+# and its page's main world. Its own target so its tests need only V8.
+source_set("context_bridge") {
+  sources = [
+    "renderer/context_bridge.cc",
+    "renderer/context_bridge.h",
+  ]
+
+  public_deps = [ "//v8" ]
+}
+
+# Node.js in the page of an Electron window that isn't sandboxed, as
+# Electron's renderer has it: Electron's Node, at //third_party/electron_node,
+# linked into the renderer. See "Phase 2" in docs/architecture/ELECTRON-APPS.md.
+source_set("electron_node") {
+  sources = [
+    "renderer/electron_node.cc",
+    "renderer/electron_node.h",
+  ]
+
+  public_deps = [
+    "//components/domicile/mojom",
+    "//third_party/electron_node:libnode",
+    "//v8",
+  ]
+
+  deps = [
+    ":electron_node_switches",
+    "//base",
+    "//components/version_info",
+    "//gin",
+
+    # Node starts each page's environment from scratch, not from a snapshot.
+    "//third_party/electron_node:node_snapshot_stub",
+  ]
+}
+
+# The renderer half of an Electron app window: its preload, in an isolated
+# world, and its IPC. //chrome's renderer client attaches it to every main
+# frame; it acts only on a preload the browser sends.
+source_set("electron_preload") {
+  sources = [
+    "renderer/electron_preload.cc",
+    "renderer/electron_preload.h",
+  ]
+
+  public_deps = [
+    "//components/domicile/mojom",
+    "//content/public/renderer",
+    "//mojo/public/cpp/bindings",
+    "//v8",
+  ]
+
+  deps = [
+    ":context_bridge",
+    ":electron_node",
+    "//base",
+    "//components/version_info",
+    "//gin",
+    "//third_party/blink/public:blink",
+    "//url",
+  ]
+}
+
+# One running Electron app on the Electron socket: its requests to the desk and
+# its windows' events. Its own target for the reason :file_choice is one: it
+# needs no browser, which is where its tests are.
+source_set("electron_app") {
+  sources = [
+    "browser/electron_app.cc",
+    "browser/electron_app.h",
+    "browser/electron_app_sign_ins.cc",
+  ]
+
+  public_deps = [
+    ":browser_window_listing",
+    ":electron_protocol",
+    "//base",
+    "//components/domicile/mojom",
+    "//url",
+  ]
+}
+
+# An Electron app's downloads: the mark on each DownloadItem one of its pages
+# starts, which asks its session's will-download where it goes and tells the
+# app how it goes.
+source_set("electron_downloads") {
+  sources = [
+    "browser/electron_downloads.cc",
+    "browser/electron_downloads.h",
+  ]
+
+  public_deps = [
+    ":electron_app",
+    "//base",
+  ]
+
+  deps = [
+    "//components/download/public/common:public",
+    "//url",
+  ]
+}
+
+# A page's input events and cursor as an Electron app's webContents sees them,
+# and the events sendInputEvent makes. Its own target so it is tested without
+# a browser.
+source_set("electron_input") {
+  sources = [
+    "browser/electron_input.cc",
+    "browser/electron_input.h",
+  ]
+
+  public_deps = [
+    ":electron_protocol",
+    "//base",
+    "//components/input",
+    "//third_party/blink/public/common",
+    "//ui/base/cursor",
+  ]
+
+  deps = [
+    "//skia",
+    "//ui/events:events_base",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
+  ]
+}
+
+# The Electron socket's protocol, which `electron-host` speaks for an Electron
+# app's windows. Its own target for the reason :file_choice is one: it needs no
+# browser, which is where its tests are.
+source_set("electron_protocol") {
+  sources = [
+    "browser/electron_network_calls.cc",
+    "browser/electron_network_calls.h",
+    "browser/electron_page_call.cc",
+    "browser/electron_page_call.h",
+    "browser/electron_page_reports.cc",
+    "browser/electron_page_reports.h",
+    "browser/electron_protocol.cc",
+    "browser/electron_protocol.h",
+    "browser/electron_session_events.cc",
+    "browser/electron_session_events.h",
+    "browser/electron_sign_ins.cc",
+    "browser/electron_sign_ins.h",
+  ]
+
+  public_deps = [
+    ":electron_schemes",
+    ":web_view_partition",
+    "//base",
+    "//url",
+  ]
+
+  deps = [ "//net" ]
+}
+
 # Which of a <webview>'s navigations ask the shell first. Its own target beside
 # :will_navigate_throttle for the reason :file_choice is one: it needs no
 # browser, which is where its tests are.
@@ -773,6 +1054,22 @@ source_set("will_navigate") {
   ]
 
   public_deps = [ "//ui/base" ]
+}
+
+# The throttle that holds an app's page's navigation for the app's answer,
+# as Electron's will-navigate. :browser_page_throttle adds it.
+source_set("app_navigation_throttle") {
+  sources = [
+    "browser/app_navigation_throttle.cc",
+    "browser/app_navigation_throttle.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [ ":web_view_guest" ]
 }
 
 # The throttle that holds a <webview>'s navigation for the shell's answer.
@@ -906,6 +1203,24 @@ source_set("extension_installer") {
   public_deps = [ ":extension_settings" ]
 }
 
+# The desk's browser profiles, as the compositor's `browser_profiles` message
+# carries them, and the extensions each turns on. Its own target for
+# :extension_installer's reason: opening pages in a profile is in
+# //chrome/browser/domicile, where a Profile is.
+source_set("browser_profiles") {
+  sources = [
+    "browser/browser_profiles.cc",
+    "browser/browser_profiles.h",
+  ]
+
+  public_deps = [
+    ":extension_installer",
+    "//base",
+    "//ui/base",
+    "//url",
+  ]
+}
+
 # Each extension's chrome://extensions settings -- private windows, file
 # access, user scripts, site access -- as the config and the Settings app
 # spell them, and which to set so a profile holds the config's. Its own target
@@ -969,6 +1284,21 @@ source_set("desktop_prefs") {
   ]
 }
 
+# How a profile checks spelling: the config's `spellcheck`, in Chrome's prefs.
+# Its own target for :desktop_prefs' reason: a test reaches it with no profile.
+source_set("spellcheck_settings") {
+  sources = [
+    "browser/spellcheck_settings.cc",
+    "browser/spellcheck_settings.h",
+  ]
+
+  deps = [
+    "//base",
+    "//components/prefs",
+    "//components/spellcheck/common",
+  ]
+}
+
 # The shell's control channel, in the browser process.
 #
 # Its own target so the slice can meet a compiler before the Blink half exists,
@@ -992,6 +1322,18 @@ source_set("desk_activity") {
   sources = [
     "browser/desk_activity.cc",
     "browser/desk_activity.h",
+  ]
+
+  public_deps = [ "//base" ]
+}
+
+# Bugs the engine catches in itself, from wherever it caught one to a control
+# channel, which tells the compositor. Its own target for :desk_activity's
+# reason.
+source_set("desk_faults") {
+  sources = [
+    "browser/desk_faults.cc",
+    "browser/desk_faults.h",
   ]
 
   public_deps = [ "//base" ]
@@ -1045,6 +1387,18 @@ source_set("desk_pointer") {
   ]
 }
 
+# Whether the pointer is drawn for the display its window is on. Its own
+# target for :pointer_warp's reason: the decision is here with its tests, and
+# aura's cursor client reaches it from //chrome/browser/domicile.
+source_set("cursor_display") {
+  sources = [
+    "browser/cursor_display.cc",
+    "browser/cursor_display.h",
+  ]
+
+  public_deps = [ "//ui/display" ]
+}
+
 # When the browser hides the pointer, from the `appearance` message to the
 # pointer. Its own target for :desk_activity's reason.
 source_set("desk_pointer_hiding") {
@@ -1069,6 +1423,25 @@ source_set("pointer_hiding") {
     ":desk_pointer_hiding",
     "//base",
     "//ui/events",
+  ]
+}
+
+# The videos in picture-in-picture, as the shell lists and shows them. Its
+# own target for :pointer_warp's reason: the list and the shown surfaces are
+# here, where a test reaches them with no browser, and Chrome's sessions are
+# in //chrome/browser/domicile.
+source_set("picture_in_picture_videos") {
+  sources = [
+    "browser/picture_in_picture_videos.cc",
+    "browser/picture_in_picture_videos.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/domicile/mojom",
+    "//components/viz/common",
+    "//mojo/public/cpp/bindings",
+    "//ui/gfx/geometry",
   ]
 }
 
@@ -1146,9 +1519,11 @@ source_set("control_channel") {
   ]
 
   public_deps = [
+    ":browser_profiles",
     ":common",
     ":cursor_shape",
     ":desk_activity",
+    ":desk_faults",
     ":desk_gestures",
     ":desk_lock",
     ":desk_modifier_taps",
@@ -1161,6 +1536,7 @@ source_set("control_channel") {
     ":portal_request",
     ":shell_swap",
     ":shortcut_registry",
+    ":spellcheck_settings",
     ":system_call",
     ":theme",
     "//base",
@@ -1190,7 +1566,9 @@ source_set("unit_tests") {
     "browser/command_protocol_unittest.cc",
     "browser/context_menu_unittest.cc",
     "browser/control_channel_unittest.cc",
+    "browser/cursor_display_unittest.cc",
     "browser/desk_activity_unittest.cc",
+    "browser/desk_faults_unittest.cc",
     "browser/desk_gestures_unittest.cc",
     "browser/desk_modifier_taps_unittest.cc",
     "browser/desk_pointer_hiding_unittest.cc",
@@ -1203,18 +1581,31 @@ source_set("unit_tests") {
     "browser/display_capture_unittest.cc",
     "browser/display_list_unittest.cc",
     "browser/download_list_unittest.cc",
+    "browser/electron_app_unittest.cc",
+    "browser/electron_page_call_unittest.cc",
+    "browser/electron_input_unittest.cc",
+    "browser/electron_page_reports_unittest.cc",
+    "browser/electron_protocol_unittest.cc",
+    "browser/electron_session_events_unittest.cc",
+    "common/electron_schemes_unittest.cc",
+    "renderer/context_bridge_unittest.cc",
+    "browser/browser_profiles_unittest.cc",
     "browser/extension_installer_unittest.cc",
     "browser/extension_settings_unittest.cc",
     "browser/extension_tray_entry_unittest.cc",
     "browser/force_dark_unittest.cc",
+    "browser/spellcheck_settings_unittest.cc",
     "browser/file_choice_unittest.cc",
     "browser/frame_sink_broker_unittest.cc",
     "browser/guest_dialogs_unittest.cc",
+    "browser/history_menu_unittest.cc",
+    "browser/identity_dialog_unittest.cc",
     "browser/input_method_lines_unittest.cc",
     "browser/line_framer_unittest.cc",
     "browser/notification_window_unittest.cc",
     "browser/page_matches_unittest.cc",
     "browser/placeholder_stage_unittest.cc",
+    "browser/picture_in_picture_videos_unittest.cc",
     "browser/pointer_hiding_unittest.cc",
     "browser/pointer_warp_unittest.cc",
     "browser/portal_request_unittest.cc",
@@ -1230,12 +1621,14 @@ source_set("unit_tests") {
     "browser/shell_fetch_unittest.cc",
     "browser/shell_origin_unittest.cc",
     "browser/shell_death_unittest.cc",
+    "browser/shell_dev_server_unittest.cc",
     "browser/shell_swap_unittest.cc",
     "browser/shell_window_wait_unittest.cc",
     "browser/shell_windows_unittest.cc",
     "browser/shortcut_registry_unittest.cc",
     "browser/site_permissions_unittest.cc",
     "browser/system_call_unittest.cc",
+    "browser/unfocused_web_views_unittest.cc",
     "browser/web_view_partition_unittest.cc",
     "browser/web_view_url_unittest.cc",
     "browser/will_navigate_unittest.cc",
@@ -1250,6 +1643,8 @@ source_set("unit_tests") {
     "common/scroll_metadata_unittest.cc",
     "common/synced_frame_unittest.cc",
     "common/theme_unittest.cc",
+    "common/unaccelerated_motion_unittest.cc",
+    "common/warp_landing_unittest.cc",
     "spike/window_diff_unittest.cc",
   ]
 
@@ -1270,14 +1665,17 @@ source_set("unit_tests") {
     ":app_roots",
     ":browser",
     ":browser_pages",
+    ":browser_profiles",
     ":browser_window_capture_target",
     ":browser_window_listing",
     ":color_scheme",
     ":command_protocol",
     ":context_menu",
     ":control_channel",
+    ":cursor_display",
     ":cursor_shape",
     ":desk_activity",
+    ":desk_faults",
     ":desk_geometry",
     ":desk_gestures",
     ":desk_modifier_taps",
@@ -1289,19 +1687,28 @@ source_set("unit_tests") {
     ":display_capture_target",
     ":display_transform",
     ":download_list",
+    ":electron_app",
+    ":electron_input",
+    ":electron_protocol",
+    ":electron_schemes",
+    ":context_bridge",
     ":extension_installer",
     ":extension_settings",
     ":extension_tray_entry",
     ":file_choice",
     ":force_dark",
+    ":spellcheck_settings",
     ":forwarded_keys",
     ":guest_dialogs",
     ":held_chords",
+    ":history_menu",
+    ":identity_dialog",
     ":input_method_lines",
     ":keyboard_layout",
     ":line_framer",
     ":notification_window",
     ":page_matches",
+    ":picture_in_picture_videos",
     ":placeholder_stage",
     ":pointer_hiding",
     ":pointer_warp",
@@ -1324,12 +1731,15 @@ source_set("unit_tests") {
     ":synced_frame",
     ":system_call",
     ":theme",
+    ":unfocused_web_views",
+    ":warp_landing",
     ":web_view_partition",
     ":web_view_url",
     ":will_navigate",
     "//cc/domicile:display_regions",
     "//cc/domicile:unit_tests",
     "//components/domicile/mojom",
+    "//components/domicile/engine:buffer_color_unit_tests",
     "//components/domicile/engine:event_queue_unit_tests",
     "//components/domicile/engine:probe_wait_unit_tests",
     "//components/domicile/engine:surface_alpha_unit_tests",
@@ -1352,12 +1762,16 @@ source_set("unit_tests") {
     "//dbus",
 
     # TestSharedImageInterface, the broker's GPU in its buffer tests.
+    # The context bridge's tests run two V8 worlds.
+    "//gin:gin_test",
     "//gpu:test_support",
     "//mojo/public/cpp/bindings",
     "//mojo/public/cpp/test_support:test_utils",
     "//media",
     "//media/capture/mojom:video_capture_buffer",
     "//media/mojo/mojom",
+    # TestURLLoaderClient, for the dev server's loader.
+    "//services/network:test_support",
     "//services/viz/privileged/mojom/compositing",
     "//skia",
     "//testing/gmock",
@@ -1368,12 +1782,17 @@ source_set("unit_tests") {
     # declarations `xkb_keyboard_layout_engine.h` includes through
     # `scoped_xkb.h`. //ui/events/ozone/layout:unittests names the same set.
     "//third_party/blink/public/common",
+    # The unaccelerated motion's trip to the renderer, in a WebInputEvent.
+    "//third_party/blink/public/mojom:mojom_platform",
     "//ui/events",
     "//ui/events/blink",
     "//ui/events:dom_keycode_converter",
     "//ui/events:event_constants",
     "//ui/events/keycodes:xkb",
     "//ui/events/ozone/layout",
+    # The provider data :identity_dialog's tests build.
+    "//ui/gfx",
+    "//url",
     "//ui/gfx/geometry",
     # The pointer's colors are views' and live beside it, not here: //ui may
     # not depend on //components. Its tests run with the fork's anyway.
@@ -1385,6 +1804,9 @@ source_set("unit_tests") {
     # beside //ui/base/cursor for the same reason.
     "//ui/base/cursor/domicile:desk_cursor_theme",
     "//ui/base/cursor/domicile:unit_tests",
+    # A channel endpoint's disconnect queued behind its messages, beside the
+    # //ipc code that queues them.
+    "//ipc/domicile:unit_tests",
     # What the shell hides from captures of the desk, beside the viz code
     # that leaves it out.
     "//components/viz/service/display/domicile:unit_tests",
@@ -1400,6 +1822,11 @@ test("domicile_unittests") {
     ":unit_tests",
     "//mojo/core/test:run_all_unittests",
   ]
+
+  # The context bridge's tests start V8, which reads its startup snapshot
+  # beside the binary, as gin_unittests does.
+  configs += [ "//v8:external_startup_data" ]
+  data_deps = [ "//tools/v8_context_snapshot" ]
 }
 
 # THROWAWAY. The spike's producer and its two measurements.

@@ -54,6 +54,17 @@ TEST(SurfaceSubmitsTest, ALaterSubmitWaitsForAnEarlierFence) {
   EXPECT_FALSE(ready[1].sync_token.HasData());
 }
 
+// A redraw waits for a frame still on its way, which shows what it would.
+TEST(SurfaceSubmitsTest, SubmitsAreQueuedOnlyWhileAFenceIsAwaited) {
+  SurfaceSubmits submits;
+  submits.Push(SubmitOf(1));
+  EXPECT_TRUE(submits.empty());
+  const uint64_t ticket = submits.Hold(SubmitOf(2));
+  EXPECT_FALSE(submits.empty());
+  submits.Fenced(ticket, TokenOf(7));
+  EXPECT_TRUE(submits.empty());
+}
+
 TEST(SurfaceSubmitsTest, FencesPutInPlaceOutOfOrderGoInOrder) {
   SurfaceSubmits submits;
   const uint64_t first = submits.Hold(SubmitOf(1));
@@ -96,12 +107,14 @@ TEST(SurfaceBacklogTest, ASubmitWaitsWhileVizIsBehind) {
       backlog.Offer(SubmitOf(1), SurfaceBacklog::kMostInViz);
   EXPECT_FALSE(offered.send.has_value());
   EXPECT_FALSE(offered.replaced.has_value());
+  EXPECT_TRUE(backlog.holding());
   EXPECT_FALSE(backlog.Take(SurfaceBacklog::kMostInViz).has_value());
 
   const std::optional<SurfaceSubmit> taken =
       backlog.Take(SurfaceBacklog::kMostInViz - 1);
   ASSERT_TRUE(taken.has_value());
   EXPECT_EQ(taken->buffer, 1u);
+  EXPECT_FALSE(backlog.holding());
   EXPECT_FALSE(backlog.Take(0).has_value());
 }
 

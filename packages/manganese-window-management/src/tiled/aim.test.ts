@@ -350,11 +350,23 @@ describe("aimAt", () => {
       );
     });
 
-    it("aims a group's only window at nothing over it", () => {
-      const lone = { ...GROUP_TAB, windows: ["b"] };
+    it("aims a group's only window beside the group, by its half", () => {
+      // The group is the first tab, then the last: past it is the only way
+      // out of the strip on that side.
+      const lone = {
+        ...GROUP_TAB,
+        at: 0,
+        rect: tabAt("a", 0).rect,
+        windows: ["b"],
+      };
+      const first = { ...TABS, tabs: [lone, tabAt("a", 1)] };
+      expect(aimAt(first, alone("b"), 50, 10)).toEqual(
+        Aim.Tab(groupOf("b"), Direction.Left, lineAt(0), 0),
+      );
+      const last = { ...GROUP_TAB, windows: ["b"] };
       expect(
-        aimAt({ ...TABS, tabs: [tabAt("a", 0), lone] }, alone("b"), 350, 10),
-      ).toBeUndefined();
+        aimAt({ ...TABS, tabs: [tabAt("a", 0), last] }, alone("b"), 350, 10),
+      ).toEqual(Aim.Tab(groupOf("b"), Direction.Right, lineAt(400), 0));
     });
 
     it("aims a tab over its own group beside the group around it", () => {

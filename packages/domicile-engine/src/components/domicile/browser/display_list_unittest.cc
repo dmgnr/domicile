@@ -154,6 +154,25 @@ TEST(DomicileDisplayListTest, APanelsAdaptiveSyncCrossesWithIt) {
   EXPECT_EQ(list[0]->adaptive_sync, mojom::AdaptiveSync::kOff);
 }
 
+TEST(DomicileDisplayListTest, APanelsHdrCrossesWithIt) {
+  DisplayPanel panel;
+  panel.hdr = mojom::Hdr::kOn;
+  panel.max_luminance = 600.f;
+  panel.max_average_luminance = 350.f;
+  panel.min_luminance = 0.05f;
+  panel.sdr_white_nits = 240.f;
+
+  const std::vector<mojom::DisplayPtr> list =
+      DisplayListFor({Panel()}, {}, {}, {{7, panel}});
+
+  ASSERT_EQ(list.size(), 1u);
+  EXPECT_EQ(list[0]->hdr, mojom::Hdr::kOn);
+  EXPECT_FLOAT_EQ(list[0]->max_luminance, 600.f);
+  EXPECT_FLOAT_EQ(list[0]->max_average_luminance, 350.f);
+  EXPECT_FLOAT_EQ(list[0]->min_luminance, 0.05f);
+  EXPECT_FLOAT_EQ(list[0]->sdr_white_nits, 240.f);
+}
+
 TEST(DomicileDisplayListTest, ADisplayNoPanelNamesCrossesWithNoModes) {
   const std::vector<mojom::DisplayPtr> list =
       DisplayListFor({Panel()}, {}, {}, {});
@@ -161,6 +180,7 @@ TEST(DomicileDisplayListTest, ADisplayNoPanelNamesCrossesWithNoModes) {
   ASSERT_EQ(list.size(), 1u);
   EXPECT_TRUE(list[0]->modes.empty());
   EXPECT_EQ(list[0]->adaptive_sync, mojom::AdaptiveSync::kUnsupported);
+  EXPECT_EQ(list[0]->hdr, mojom::Hdr::kUnsupported);
 }
 
 }  // namespace

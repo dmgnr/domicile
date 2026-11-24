@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/callback_list.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -20,12 +21,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
+#include "chrome/browser/domicile/domicile_cursor_display.h"
 #include "chrome/browser/domicile/domicile_desk_presenters.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
+#include "components/domicile/browser/cursor_display.h"
 #include "components/domicile/browser/desk_geometry.h"
 #include "components/domicile/browser/shell_windows.h"
 #include "components/domicile/common/domicile_scheme.h"
@@ -259,6 +262,13 @@ class ShellWindows : public display::DisplayObserver {
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override {
     if ((changed_metrics & DISPLAY_METRIC_BOUNDS) == 0) {
+      // Bounds are in pixels, so a new scale or turn moves no window. The
+      // pointer is still drawn for the old one until `Present` fits it: after
+      // an undock the panel is added at scale 1 and only then scaled, which
+      // left the pointer at 1x.
+      if (DisplayChangeRefitsPointer(changed_metrics)) {
+        ReconcileSoon();
+      }
       return;
     }
     const std::vector<ShellWindow> held = ShellWindowsNow();
@@ -349,17 +359,30 @@ class ShellWindows : public display::DisplayObserver {
     }
     const ShellWindowPlan plan = ShellWindowsFor(displays, windowed);
 
-    // Open before closing: if every monitor is swapped at once, briefly having
-    // zero windows would exit the browser. See `shell_windows.h`.
+    for (const ShellWindowMove& move : plan.move) {
+      Move(move, displays, held, placed);
+    }
+    // Open before closing: briefly having zero windows would exit the browser.
+    // See `shell_windows.h`.
     for (int64_t id : plan.open) {
       Open(id, displays, held);
     }
+    // Read places again: a window just moved must not be closed as the
+    // window on the display it left.
+    std::vector<int64_t> placed_now;
+    placed_now.reserve(held.size());
+    for (const ShellWindow& one : held) {
+      placed_now.push_back(places_.Of(Identity(one.window)));
+    }
     for (int64_t id : plan.close) {
-      Close(id, held, placed);
+      Close(id, held, placed_now);
     }
     FitMisplaced(held, all);
     Watch();
     Present(desk, all);
+    // See `Move`.
+    ui::OzonePlatform::GetInstance()->SetDomicilePointerStays(
+        gfx::kNullAcceleratedWidget);
   }
 
   // Fits each of `held` that is on one of `all` to that display's rectangle.
@@ -438,12 +461,19 @@ class ShellWindows : public display::DisplayObserver {
     // Route all input, on every monitor, to the host.
     ui::OzonePlatform::GetInstance()->SetDomicileDeskHost(
         window->GetHost()->GetAcceleratedWidget());
+    // And draw the pointer for the host's display, which a hotplug can leave
+    // it drawn for a display that is gone.
+    FitCursorToDisplayOf(window->GetRootWindow());
     const gfx::Rect page = PageBoundsOn(*on_host, desk->geometry.box);
     if (content::GetDomicileDeskPageBounds(window) != page) {
       content::SetDomicileDeskPageBounds(window, page);
-      views::Widget::GetWidgetForNativeWindow(window)
-          ->client_view()
-          ->InvalidateLayout();
+      views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
+      widget->client_view()->InvalidateLayout();
+      // Lays the host out before the screen infos below, which place each
+      // monitor by the page's position on screen. The renderer reads its
+      // regions as those monitors less its own position, so a stale position
+      // shifts every region by the distance the host moved.
+      widget->LayoutRootViewIfNecessary();
     }
     content::WebContents* contents =
         host->GetActiveTabInterface()->GetContents();
@@ -566,6 +596,45 @@ class ShellWindows : public display::DisplayObserver {
     // watches its page. The next one watches it, or presents it if it
     // already committed.
     ReconcileSoon();
+  }
+
+  // Moves the shell window on display `move.from` to `move.to`, keeping its
+  // page. The host moves when its display sleeps, wakes or is unplugged, and a
+  // new window there would restart the shell.
+  //
+  // A window still loading or opening on `move.from` is not in `held`. It is
+  // placed there once it commits or opens, and the next reconciliation moves
+  // it.
+  void Move(const ShellWindowMove& move,
+            const std::vector<display::Display>& displays,
+            const std::vector<ShellWindow>& held,
+            const std::vector<int64_t>& placed) {
+    const auto to = std::ranges::find(displays, move.to, &display::Display::id);
+    CHECK(to != displays.end()) << "planned a move to display " << move.to
+                                << ", which is not on the desk";
+    for (size_t index = 0; index < held.size(); ++index) {
+      if (placed[index] == move.from) {
+        VLOG(1) << "domicile: moving the shell window from display "
+                << move.from << " to display " << move.to;
+        places_.Move(Identity(held[index].window), move.to);
+        // The pointer stays where it is on screen. Carried along with the
+        // window, a pointer on another monitor would land on the host's new
+        // one, and the shell's focus would follow it there. `Reconcile`
+        // clears this once `Present` opened the presenter for the display
+        // the host left, which takes a pointer that was there.
+        ui::OzonePlatform* const platform = ui::OzonePlatform::GetInstance();
+        platform->SetDomicilePointerStays(held[index]
+                                              .window->GetWindow()
+                                              ->GetNativeWindow()
+                                              ->GetHost()
+                                              ->GetAcceleratedWidget());
+        FitTo(held[index].window, to->bounds());
+        return;
+      }
+    }
+    VLOG(1) << "domicile: the shell window for display " << move.from
+            << " is still loading; it moves to display " << move.to
+            << " once it is placed";
   }
 
   void Close(int64_t id,

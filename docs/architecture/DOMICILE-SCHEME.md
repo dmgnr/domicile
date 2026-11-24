@@ -34,8 +34,9 @@ and the binding.
   `fetch()`, `XMLHttpRequest` or `<img>`. Navigations are gated by the scheme
   not being web-safe and by `MayShowInWebView`.
 - Loaded through `ContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory`
-  (navigation) and `RegisterNonNetworkSubresourceURLLoaderFactories`
-  (subresources).
+  (navigation), `RegisterNonNetworkSubresourceURLLoaderFactories`
+  (subresources) and `RegisterNonNetworkWorkerMainResourceURLLoaderFactories`
+  (a dedicated or shared worker's main script, which the browser fetches).
 - `--domicile-shell-root` and `--domicile-shell-module` say what to serve.
 - Requests must resolve inside the shell root. Directory listings are off.
 - Shell files and the document are served `Cache-Control: no-store`. Blink
@@ -63,6 +64,32 @@ The fork writes the shell's HTML document
   rendering until then, so the crossfade is into the shell, not an empty white
   page
 
+## Dev server
+
+`domicile dev <entry>` serves a shell from its source with Vite, for hot
+module replacement
+([WRITING-A-SHELL.md](/docs/WRITING-A-SHELL.md#hot-module-replacement)). The
+page stays on `domicile://shell/`, so it keeps its origin, its CSP and its
+capabilities, and no TCP port opens.
+
+- The builder runs Vite's dev server on a unix socket in `XDG_RUNTIME_DIR`,
+  mode 600 (`packages/domicile-builder/src/serve.ts`).
+- `load_shell` with `"dev_server": true`, or `--domicile-shell-dev-server` at
+  launch, makes the shell root that socket. The supervisor passes the switch
+  again when it restarts the engine.
+- The engine still writes the document. It imports `domicile-dev-shell.js`,
+  which runs what Vite's plugins add to a page (its client, React's Fast
+  Refresh preamble), then exports the entry's `Shell`.
+- Every other request under `domicile://shell/` goes to the socket as one
+  HTTP/1.0 request on its own connection, with its path, query, method and
+  body. The response streams back as it arrives, with `Cache-Control:
+  no-store` (`components/domicile/browser/shell_dev_server.{h,cc}`).
+- A WebSocket to the page's own origin is not possible, so Vite's client gets
+  its updates from one long `GET /@domicile/hmr`, one JSON message per line,
+  and sends its messages with `POST /@domicile/hmr?client=<id>`.
+- When the dev server is gone, the page's imports fail, and the engine logs
+  why.
+
 ## `domicile://home/`
 
 The user's home directory, for launcher previews (an `<img>`, `<video>` or PDF
@@ -86,11 +113,32 @@ An app module's files ([APP-MODULES.md](APP-MODULES.md)), one host per app.
   `DomicileApp` calls its `main`.
 - Files are served `Cache-Control: no-store`, as the shell's are. No
   Content-Security-Policy: an app sets its own.
+- Cross-origin isolated, as the shell is. See
+  [Cross-origin isolation](#cross-origin-isolation).
 - Shown only in the window `run_app` opened for it
   (`WebViewGuest::PinToApp`). `MayShowInWebView` and the guest's navigation
   throttle refuse it in any other `<webview>`.
 - The shell's interfaces bind only for `domicile://shell`'s origin. An app
   binds `AppChannel` instead: system calls only.
+
+## Cross-origin isolation
+
+`domicile://shell` and every `domicile://app-<id>` are cross-origin isolated,
+always, with no headers.
+
+- `crossOriginIsolated` is true and `SharedArrayBuffer` exists, in the page and
+  its workers. Threaded wasm and tools that check `crossOriginIsolated`, such
+  as the TypeScript service, work.
+- Nothing is enforced: no COOP, COEP or Document-Isolation-Policy. What the
+  page loads is not checked for CORP, so images, fetches and iframes from other
+  origins load as before.
+- These pages run with the desktop's trust, as a native program does, so they
+  are trusted with shared memory. `<webview>` pages and `domicile://home` are
+  not isolated.
+- `ContentBrowserClient::IsCrossOriginIsolatedByEmbedder` names the origins
+  (`IsCrossOriginIsolatedOrigin`). `NavigationRequest` then isolates the
+  document as Document-Isolation-Policy does: its own process and a concrete
+  isolation key (patch 0225).
 
 ## The control channel
 

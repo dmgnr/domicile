@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an Electron window's main frame runs its preload
+
+An Electron app window's preload runs in an isolated world before the
+page's own scripts, and its ipcRenderer reaches the app through the
+browser. ChromeContentRendererClient::RenderFrameCreated gives every
+main frame a domicile::ElectronPreload, which does nothing until the
+browser sends it a preload, and RunScriptsAtDocumentStart runs that
+preload ahead of extensions' document_start scripts, and
+RunScriptsAtDocumentEnd tells the preload's process document-end ahead of
+extensions' document_end scripts. See
+components/domicile/renderer/electron_preload.h.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ chrome/renderer/BUILD.gn                      |  1 +
+ .../chrome_content_renderer_client.cc         | 21 +++++++++++++++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+index cb340c1..34907c7 100644
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -154,6 +154,7 @@ static_library("renderer") {
+     "//components/country_codes",
+     "//components/crx_file",
+     "//components/domicile:common",
++    "//components/domicile:electron_preload",
+     "//components/facilitated_payments/content/renderer",
+     "//components/facilitated_payments/core/features",
+     "//components/feed:feature_list",
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index f99854e..5a1ce37 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/renderer/chrome_content_renderer_client.h"
+ 
+ #include "components/domicile/common/domicile_scheme.h"
++#include "components/domicile/renderer/electron_preload.h"
+ 
+ #include <functional>
+ #include <memory>
+@@ -691,6 +692,11 @@ void ChromeContentRendererClient::RenderFrameCreated(
+ 
+   new prerender::NoStatePrefetchRenderFrameObserver(render_frame);
+ 
++  // Domicile's engine fork. An Electron app window's preload and IPC: the
++  // browser sends a main frame its preload before each navigation commits.
++  // See components/domicile/renderer/electron_preload.h.
++  domicile::ElectronPreload::Attach(render_frame);
++
+   auto content_settings_delegate =
+       std::make_unique<ChromeContentSettingsAgentDelegate>(render_frame);
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+@@ -1560,6 +1566,13 @@ ChromeContentRendererClient::CreateSpeechRecognitionClient(
+ 
+ void ChromeContentRendererClient::RunScriptsAtDocumentStart(
+     content::RenderFrame* render_frame) {
++  // Domicile's engine fork. An Electron app window's preload, before the
++  // page's scripts and extensions'. It is the app's script and may end the
++  // frame. See components/domicile/renderer/electron_preload.h.
++  if (!domicile::ElectronPreload::RunAtDocumentStart(render_frame)) {
++    return;
++  }
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   extensions::ExtensionsRendererClient::Get()->RunScriptsAtDocumentStart(
+       render_frame);
+@@ -1569,6 +1582,14 @@ void ChromeContentRendererClient::RunScriptsAtDocumentStart(
+ 
+ void ChromeContentRendererClient::RunScriptsAtDocumentEnd(
+     content::RenderFrame* render_frame) {
++  // Domicile's engine fork. An Electron app window's preload hears
++  // document-end, before extensions' scripts. Its listeners are the app's
++  // script and may end the frame. See
++  // components/domicile/renderer/electron_preload.h.
++  if (!domicile::ElectronPreload::RunAtDocumentEnd(render_frame)) {
++    return;
++  }
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   extensions::ExtensionsRendererClient::Get()->RunScriptsAtDocumentEnd(
+       render_frame);

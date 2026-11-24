@@ -43,6 +43,7 @@ run_block() { # $1 NEGATIVE, then NAME=value overrides
   SAW_ASKED=1
   SAW_SUGGESTED=1
   SAW_FOLDER=1
+  SAW_ASKED_AGAIN=1
   SAW_ANSWERED=1
   SAVED=1
   SAVED_ANYWHERE=1
@@ -106,6 +107,13 @@ expect "the wrong suggested name says so" "yes" \
   "$(blames "wrong name" 0 SAW_SUGGESTED=0)"
 expect "a picker that starts outside the download folder blames the folder" yes \
   "$(blames "wrong folder" 0 SAW_FOLDER=0)"
+expect "a download held behind an unanswered picker is a failure" "fail" \
+  "$(verdict 0 SAW_ASKED_AGAIN=0 SAW_ANSWERED=0 SAVED=0)"
+expect "a download held behind an unanswered picker names the queue" "yes" \
+  "$(blames "HELD THE NEXT DOWNLOAD" 0 SAW_ASKED_AGAIN=0 SAW_ANSWERED=0 SAVED=0)"
+# shellcheck disable=SC2086
+expect "the control holds nothing, so asking once is enough" "pass" \
+  "$(verdict 1 $CONTROL SAW_ASKED_AGAIN=0)"
 expect "an answer that threw blames this guard's page" "yes" \
   "$(blames "threw" 0 SAW_ANSWERED=0)"
 

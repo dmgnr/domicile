@@ -24,6 +24,7 @@ stand_in() { "$repo/stand-in.sh" "\${1%.sh}\${SOFTWARE:+-in-memory}\${HEADLESS:+
 engine_guard() { stand_in "\$@"; }
 engine_guard_and_control() { stand_in "\$@"; }
 engine_guard_and_control_under_wayland() { stand_in "\$@"; }
+engine_guard_under_wayland() { stand_in "\$@"; }
 LIB
 }
 

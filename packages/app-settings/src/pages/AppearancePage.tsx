@@ -1,9 +1,8 @@
 import { Button } from "@domicile-desktop/component-library/Button";
 import { Card } from "@domicile-desktop/component-library/Card";
 import { Select } from "@domicile-desktop/component-library/Select";
-import { useState } from "react";
 
-import { css } from "../../styled-system/css";
+import { ColorWell } from "../ColorWell";
 import type { ConfigPageProps } from "../config-editor";
 import { Page } from "../Page";
 import { SettingRow } from "../SettingRow";
@@ -55,11 +54,13 @@ export const AppearancePage = ({
           hint="The color windows highlight with. Unset, each app picks its own."
           title="Accent color"
         >
-          <ColorSetting
+          <ColorWell
             disabled={disabled}
+            label="Accent color"
             onCommit={(color) => {
               set(["theme", "accent_color"], color);
             }}
+            unsetShownAs={UNSET_SHOWN_AS}
             value={theme.accent_color}
           />
           {theme.accent_color !== undefined && !disabled && (
@@ -134,49 +135,3 @@ export const AppearancePage = ({
     </Page>
   );
 };
-
-type ColorSettingProps = {
-  value: string | undefined;
-  disabled: boolean;
-  onCommit: (color: string) => void;
-};
-
-/**
- * A color well that changes the setting once the picker closes, not on every
- * color the pointer passes.
- */
-const ColorSetting = ({ disabled, onCommit, value }: ColorSettingProps) => {
-  const [draft, setDraft] = useState(value ?? UNSET_SHOWN_AS);
-  const [shown, setShown] = useState(value);
-  if (value !== shown) {
-    setShown(value);
-    setDraft(value ?? UNSET_SHOWN_AS);
-  }
-  return (
-    <input
-      aria-label="Accent color"
-      className={colorStyles}
-      disabled={disabled}
-      onBlur={() => {
-        if (draft !== (value ?? UNSET_SHOWN_AS)) {
-          onCommit(draft);
-        }
-      }}
-      onChange={(event) => {
-        setDraft(event.target.value);
-      }}
-      type="color"
-      value={draft}
-    />
-  );
-};
-
-const colorStyles = css({
-  backgroundColor: "transparent",
-  blockSize: 8,
-  border: "1px solid {colors.border}",
-  borderRadius: "md",
-  cursor: { _disabled: "not-allowed", base: "pointer" },
-  inlineSize: 12,
-  padding: 0.5,
-});

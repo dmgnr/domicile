@@ -77,15 +77,19 @@ mod client_damage;
 mod client_requests;
 mod clients;
 mod clipboard;
+mod color_management;
 mod compositor_casts;
 mod config_adoption;
 mod configure_answers;
+mod configured_displays;
 mod cursor_surface;
 mod decorations;
 mod display_sleep;
 mod dmabuf_descriptor;
 mod dmabuf_import;
 mod eis;
+mod electron_apps;
+mod emulated_input;
 mod engine;
 mod engine_buffers;
 mod engine_damage;
@@ -108,15 +112,18 @@ mod gamma_control;
 mod gbm;
 mod held_frames;
 mod idle;
+mod input_trace;
 mod keymap;
 mod latency;
 mod latency_run;
 mod launches;
 mod lock;
 mod locking;
+mod log_levels;
 mod logind;
 mod memory_frames;
 mod modifiers;
+mod night_light;
 mod notifications;
 mod once_per_window;
 mod outbound;
@@ -130,6 +137,7 @@ mod popups;
 mod portals;
 mod presentations;
 mod primary_node;
+mod protocol_trace;
 mod relative_pointer;
 mod reply;
 mod restatement;
@@ -144,6 +152,7 @@ mod shm_upload;
 mod shortcuts_inhibit;
 mod spawning;
 mod spike_probes;
+mod subsurfaces;
 mod surface_commit;
 mod swipe;
 mod synced_moves;
@@ -157,6 +166,8 @@ mod unlock_backoff;
 mod uploads;
 mod viewport;
 mod virtual_monitors;
+mod watchers;
+mod web_agents;
 mod which_engine;
 mod window_geometry;
 mod windows;
@@ -170,6 +181,7 @@ use crate::frame_publishing::Upload;
 use crate::gbm::Gbm;
 use crate::held_frames::HeldFrames;
 use crate::latency::Latency;
+use crate::log_levels::LogFilter;
 use crate::presentations::Presentations;
 use crate::shm_upload::render_modifiers;
 use crate::uploads::Uploads;
@@ -179,7 +191,8 @@ use crate::chrome_hub::{serve_outbound, ChromeHub};
 use crate::client_requests::ClientRequest;
 use crate::clients::{accept_app_client, sees_privileged_globals, ClientState};
 use crate::config_adoption::{
-    hand_over_the_extensions, hand_over_the_shell_config, theme_on_the_wire,
+    hand_over_the_browser_profiles, hand_over_the_extensions, hand_over_the_shell_config,
+    theme_on_the_wire,
 };
 use crate::configure_answers::ConfigureAnswers;
 use crate::dmabuf_import::{headless_renderer, DmabufImporter};
@@ -193,11 +206,11 @@ use crate::lock::{Lock, Verdict, Verifier};
 use crate::modifiers::Held;
 use crate::once_per_window::OncePerWindow;
 use crate::outputs::{advertise_output, screens_at_startup, LiveOutput};
-use crate::popups::Bubble;
 use crate::portals::{shell_appearance, Selection};
 use crate::restatement::Restatement;
 use crate::screens::{Advertised, Screens};
-use crate::spawning::{chrome_display, home_directory, spawn_client};
+use crate::spawning::{chrome_display, home_directory, start_client};
+use crate::subsurfaces::Subsurface;
 use crate::surface_commit::{LastBuffer, Role};
 use crate::windows::SizeLimits;
 use domicile_config::{Config, ConfigError, ConfigStore};
@@ -334,6 +347,9 @@ struct DomicileCompositor {
     /// Kept so a config reload can be matched against the current monitors, not
     /// only a hotplug.
     engine_displays: Vec<engine::Display>,
+    /// What `domicile configure-display` changed, until the desktop restarts.
+    /// See [`configured_displays`].
+    display_overrides: Vec<domicile_config::DisplayOverride>,
     /// The virtual monitors pages added, in the order they were. See
     /// [`virtual_monitors`].
     virtual_displays: Vec<engine::VirtualDisplay>,
@@ -443,6 +459,9 @@ struct DomicileCompositor {
     /// The clients launched from the chrome, kept for the next compositor;
     /// see [`crate::launches`]. `None` when started without `--launches`.
     launched: Option<Arc<launches::Launches>>,
+    /// Where the entries that run `electron.apps` on the engine go; see
+    /// [`crate::electron_apps`]. `None` writes none.
+    electron_entries: Option<PathBuf>,
     /// Mapped toplevels, paired with the host-assigned app id (Wayland-thread only).
     toplevels: Vec<(String, ToplevelSurface)>,
     /// Where the page last said each window is, in desktop logical units
@@ -451,11 +470,23 @@ struct DomicileCompositor {
     /// keeps its last box here; input and casts read
     /// [`HeldFrames::shown`].
     app_bounds: HashMap<String, domicile_scene::Bounds>,
+    /// Each window's CSS `zoom`, from the engine's configure. Multiplies the
+    /// scale it draws at, and its popups', so a zoomed window stays sharp. A
+    /// window not here is at 1. See [`crate::scale::zoomed`].
+    app_zoom: HashMap<String, f64>,
     /// Each monitor's night light and gamma-control client
     /// (`SystemRequest::SetColorTemperature`, `zwlr_gamma_control_v1`), sent
     /// again to an engine that reports its displays, since a new engine
     /// starts neutral.
     gamma: gamma::Ramps<ZwlrGammaControlV1>,
+    /// The night light the shell set, and its fade into `gamma`.
+    night_light: night_light::NightLight,
+    /// Whether the next frame of the night light's fade is due, so one timer
+    /// draws it.
+    night_light_frame_due: bool,
+    /// The `wp_color_management_output_v1`s clients hold, told when their
+    /// display goes into or out of HDR.
+    display_colors: color_management::DisplayColors,
     /// Frame callbacks of the windows the page hides. See
     /// [`crate::held_frames`].
     held_frames: HeldFrames<WlCallback>,
@@ -482,13 +513,12 @@ struct DomicileCompositor {
     /// They have the keyboard while open. Focus moving anywhere but their
     /// window dismisses them all; see `ClientRequest::KeyboardFocus`.
     grabbing: Vec<PopupSurface>,
-    /// Every announced bubble: a subsurface of a window or popup, placed as a
-    /// popup is.
-    ///
-    /// Chromium draws its bubbles this way, extension popups among them.
-    /// Announced once it has a buffer; see `place_the_bubbles`.
-    bubbles: Vec<Bubble>,
-    /// Bubble moves of the commit transaction being applied, held so each
+    /// Every subsurface of a window, a popup or another subsurface, which
+    /// its parent's frames draw. See `crate::subsurfaces`.
+    subsurfaces: Vec<Subsurface>,
+    /// The number of the last subsurface, for its id.
+    next_subsurface: u64,
+    /// Popup moves of the commit transaction being applied, held so each
     /// names the frames it shows with. See `surface_commit`.
     synced_moves: crate::synced_moves::SyncedMoves,
     /// The app the pointer is currently over, so a `set_cursor` request can be
@@ -498,7 +528,7 @@ struct DomicileCompositor {
     /// asked for one. See `crate::cursor_surface`.
     cursor_surface: Option<WlSurface>,
     /// The surface of `pointer_app` the pointer is over: the window, or a
-    /// bubble over it that takes input. See
+    /// subsurface of it that takes input. See
     /// [`DomicileCompositor::input_target`].
     pointer_surface: Option<WlSurface>,
     /// Pointer buttons the seat was told are down, in the order pressed.
@@ -568,7 +598,7 @@ struct DomicileCompositor {
     /// See `announce_a_new_window`.
     unannounced: HashSet<String>,
     /// Every announced surface's app id and role, kept in step with
-    /// `toplevels`, `popups` and `bubbles`, so a commit finds its window
+    /// `toplevels`, `popups` and `subsurfaces`, so a commit finds its window
     /// without searching them.
     by_surface: HashMap<WlSurface, (String, Role)>,
 
@@ -652,6 +682,8 @@ struct DomicileCompositor {
     /// surface is [`StillThere`] and among
     /// [`surfaces_on_the_desktop`](DomicileCompositor::surfaces_on_the_desktop).
     idle: Idle<WlSurface>,
+    /// `domicile mcp --relay`, while `agents.web` is set.
+    web_agents: crate::web_agents::WebAgents,
     /// Whether somebody put the screens to sleep. Independent of `idle`,
     /// so it works on a desktop with no timeout.
     display_sleep: crate::display_sleep::DisplaySleep,
@@ -742,7 +774,7 @@ fn advertise_dmabuf(
         match DmabufFeedbackBuilder::new(device, formats.clone()).build() {
             Ok(feedback) => Some(feedback),
             Err(err) => {
-                tracing::warn!(%err, "cannot build dmabuf feedback; falling back to v3");
+                tracing::error!(%err, "cannot build dmabuf feedback; falling back to v3");
                 None
             }
         }
@@ -765,7 +797,7 @@ fn advertise_dmabuf(
 /// `None` is logged once here, since it blanks every shm window.
 fn shm_allocator(importer: &DmabufImporter) -> Option<Gbm> {
     let Some(node) = importer.node() else {
-        warn!(
+        error!(
             "EGL renders on no DRM node — a software rasterizer — so there is no GPU to copy \
              shared-memory clients' frames onto; their windows will be blank"
         );
@@ -774,7 +806,7 @@ fn shm_allocator(importer: &DmabufImporter) -> Option<Gbm> {
     match Gbm::open(gbm::LIBRARY, node) {
         Ok(gbm) => Some(gbm),
         Err(err) => {
-            warn!(%err, "shared-memory clients' windows will be blank");
+            error!(%err, "shared-memory clients' windows will be blank");
             None
         }
     }
@@ -796,17 +828,47 @@ fn main() -> ExitCode {
     }
 }
 
+/// Starts tracing, at `RUST_LOG`'s levels or `INFO`, and returns the filter
+/// `domicile set-log-level` reloads.
+///
+/// When stdout is the journal, each event is an entry under
+/// `domicile-compositor` with its level as the priority, so `journalctl -p err`
+/// finds the compositor's errors. Otherwise events are formatted to stdout,
+/// colored only on a terminal: in a file, escape codes break searches like
+/// `grep pid=1234`.
+fn start_logging() -> Result<LogFilter, Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    use std::os::fd::AsFd;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let starting = std::env::var("RUST_LOG")
+        .ok()
+        .filter(|directives| tracing_subscriber::EnvFilter::try_new(directives).is_ok())
+        .unwrap_or_else(|| "info".to_string());
+    let (filter, handle) =
+        tracing_subscriber::reload::Layer::new(tracing_subscriber::EnvFilter::try_new(&starting)?);
+    let stdout = std::io::stdout();
+    let journal = domicile_launch::journal::is_the_journal(stdout.as_fd());
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            journal
+                .then(tracing_journald::layer)
+                .transpose()?
+                .map(|layer| {
+                    layer.with_syslog_identifier(
+                        domicile_launch::component_log::COMPOSITOR.to_string(),
+                    )
+                }),
+        )
+        .with((!journal).then(|| tracing_subscriber::fmt::layer().with_ansi(stdout.is_terminal())))
+        .init();
+    Ok(LogFilter::new(starting, handle))
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // Color only on a terminal. Logs usually go to a file, where escape codes
-    // break searches like `grep pid=1234`.
-    let colored = std::io::IsTerminal::is_terminal(&std::io::stdout());
-    match tracing_subscriber::EnvFilter::try_from_default_env() {
-        Ok(filter) => tracing_subscriber::fmt()
-            .with_ansi(colored)
-            .with_env_filter(filter)
-            .init(),
-        Err(_) => tracing_subscriber::fmt().with_ansi(colored).init(),
-    }
+    let log_filter = start_logging()?;
 
     // Read before any thread is raised, so the processes the desktop starts
     // run at the priority it was started at.
@@ -824,6 +886,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // Every process started from here on is told it; see `desk_terminal`.
     domicile_host::desk_terminal::set(config.terminal.clone());
+    // Before any client starts, so the launcher's first listing has them.
+    if let Some(out) = &arguments.electron_entries {
+        electron_apps::write_the_electron_entries(out, &config.electron.apps);
+    }
 
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
     let display: Display<DomicileCompositor> = Display::new()?;
@@ -857,6 +923,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     screencopy::advertise(&dh);
     // Night-light tools such as gammastep and wl-gammarelay-rs.
     gamma_control::advertise(&dh);
+    color_management::advertise(&dh);
     let foreign_toplevels = foreign_toplevels::ForeignToplevels::new(&dh);
     // Input methods compose text into native windows.
     let text_input = text_input::TextInput::advertise(&dh);
@@ -948,7 +1015,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         Some(Ok(source)) => source,
         Some(Err(err)) => {
-            tracing::warn!(%err, "the last compositor's display would not bind; reconnecting clients will not find this one");
+            tracing::error!(%err, "the last compositor's display would not bind; reconnecting clients will not find this one");
             ListeningSocketSource::new_auto()?
         }
         None => ListeningSocketSource::new_auto()?,
@@ -997,7 +1064,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scoped = arguments.scope_clients;
             let launched = launched.clone();
             Box::new(move |command, token| {
-                spawn_client(
+                start_client(
                     command,
                     &display,
                     scoped,
@@ -1030,7 +1097,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let scoped = arguments.scope_clients;
                 let launched = launched.clone();
                 move |command| {
-                    spawn_client(
+                    start_client(
                         command,
                         &display,
                         scoped,
@@ -1058,6 +1125,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut host = hub.host.lock().unwrap();
         host.describe_displays(screens.outputs().map(Advertised::described).collect());
+        host.describe_monitors(screens.outputs().map(Advertised::monitor).collect());
         hub.portals
             .displays(screens.outputs().map(Zone::from).collect());
         // The keymap, for the browser process to decode keys. Outside ChromeOS
@@ -1069,8 +1137,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // Extensions, which the browser process installs. See
         // `docs/architecture/EXTENSIONS.md`.
         hand_over_the_extensions(&mut host, &config.extensions);
+        // Browser profiles, which the browser process opens pages in. See
+        // `docs/architecture/BROWSER-PROFILES.md`.
+        hand_over_the_browser_profiles(&mut host, &config.browser);
         // Sites the browser draws dark while the theme is dark.
         host.set_force_dark(config.theme.force_dark.clone());
+        // Whether and in which languages the browser checks spelling.
+        host.set_spellcheck(
+            config.spellcheck.enabled,
+            config.spellcheck.languages.clone(),
+        );
         // The theme, so the page paints correctly the first time. Set, not
         // `take_up_the_theme`, since there is nobody to broadcast to yet.
         host.set_theme(theme_on_the_wire(config.theme.mode));
@@ -1083,6 +1159,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // desktop without a session bus still reports one. See `tray`.
     hub.host.lock().unwrap().set_tray(Vec::new());
     let publishing = Arc::clone(&hub);
+    if hub.log_filter.set(log_filter).is_err() {
+        unreachable!("the log filter is set once, here");
+    }
     let _ = hub.tray.set(tray::serve(
         data_dirs(
             std::env::var_os("XDG_DATA_HOME"),
@@ -1202,11 +1281,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         thread::spawn(move || serve_outbound(hub, outbound_rx));
     }
 
-    // Without an EGL renderer (a container, no DRM device), the dmabuf global
-    // is not advertised and clients fall back to `wl_shm`.
-    //
     // The renderer imports client dmabufs and reads back shm buffers, which is
-    // how client frames reach the engine.
+    // how client frames reach the engine. Without one no window shows: EGL or
+    // the graphics driver did not load, as when the driver needs a newer glibc
+    // than Domicile's. That is a bug, so it is an error and the person is told.
+    // The dmabuf global is not advertised.
     let mut gpu = match headless_renderer() {
         Ok((renderer, importer)) => Some(Gpu {
             gbm: shm_allocator(&importer),
@@ -1214,7 +1293,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             renderer: Box::new(renderer),
         }),
         Err(err) => {
-            tracing::warn!(%err, "no EGL renderer: serving wl_shm clients only");
+            tracing::error!(
+                ?err,
+                "no EGL renderer, so no app window can be shown; the graphics driver's own \
+                 error is above"
+            );
+            hub.notifications
+                .get()
+                .expect("the notification server is handed to the hub before the renderer starts")
+                .warn_that_the_renderer_failed();
             None
         }
     };
@@ -1231,6 +1318,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (cast_news, heard_cast_news) = channel::<casting::ToWayland>();
     // Requests for the casts Wayland capture clients take.
     let (screen_copy_requests, heard_screen_copy_requests) = channel::<casting::ToPipewire>();
+
+    // An engine on the CPU shows only 8-bit frames from memory.
+    let shm_formats = gpu
+        .as_ref()
+        .filter(|_| !arguments.software_compositing)
+        .map(|gpu| shm_upload::shm_formats(&gpu.renderer))
+        .unwrap_or_default();
 
     let mut dmabuf_state = DmabufState::new();
     // An engine on the CPU shows no dmabuf, so clients are offered only
@@ -1261,7 +1355,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(session)
         }
         None => {
-            warn!(
+            error!(
                 "no --engine-socket, so no client window will be shown: the engine is what puts \
                  one on the page and the copy path that used to draw them here is gone. The \
                  chrome, input and the desktop all work as before"
@@ -1330,7 +1424,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState::new::<DomicileCompositor>(
             &dh,
         ),
-        shm_state: ShmState::new::<DomicileCompositor>(&dh, vec![]),
+        shm_state: ShmState::new::<DomicileCompositor>(&dh, shm_formats),
         seat_state,
         data_device_state,
         primary_selection_state,
@@ -1345,6 +1439,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         outputs,
         config: ConfigStore::new(config.clone()),
         engine_displays: Vec::new(),
+        display_overrides: Vec::new(),
         virtual_displays: Vec::new(),
         vendors,
         // Toolkits request cursors by name here, which map onto CSS cursor
@@ -1363,9 +1458,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         hub,
         scope_clients: arguments.scope_clients,
         launched: launched.clone(),
+        electron_entries: arguments.electron_entries.clone(),
         toplevels: Vec::new(),
         app_bounds: HashMap::new(),
+        app_zoom: HashMap::new(),
         gamma: gamma::Ramps::default(),
+        night_light: night_light::NightLight::default(),
+        night_light_frame_due: false,
+        display_colors: color_management::DisplayColors::default(),
         held_frames: HeldFrames::new(),
         suspended: HashSet::new(),
         presentations: Presentations::new(),
@@ -1374,7 +1474,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         clock: Clock::new(),
         popups: Vec::new(),
         grabbing: Vec::new(),
-        bubbles: Vec::new(),
+        subsurfaces: Vec::new(),
+        next_subsurface: 0,
         synced_moves: Default::default(),
         pointer_app: None,
         cursor_surface: None,
@@ -1424,6 +1525,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         engine_process: None,
         engine_disconnected: false,
         idle: Idle::after(&config.idle, Instant::now()),
+        web_agents: crate::web_agents::WebAgents::new({
+            let display = socket_name.clone();
+            std::sync::Arc::new(move || {
+                // Beside the compositor, or from the `PATH`.
+                let domicile = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| Some(exe.parent()?.join("domicile")))
+                    .filter(|binary| binary.exists())
+                    .map_or_else(
+                        || "domicile".to_string(),
+                        |binary| binary.display().to_string(),
+                    );
+                // Its own name in the journal: what it says is how the relay
+                // is going, not the compositor's errors.
+                crate::spawning::client_command(
+                    &[domicile, "mcp".into(), "--relay".into()],
+                    &display,
+                    std::env::var_os("LD_LIBRARY_PATH").as_deref(),
+                    None,
+                    0,
+                    None,
+                )
+                .map(|mut relay| {
+                    crate::spawning::own_stream(&mut relay, "domicile-relay");
+                    relay
+                })
+            })
+        }),
         display_sleep: crate::display_sleep::DisplaySleep::default(),
         held_by_portal_apps: Vec::new(),
         held_by_screen_saver: Vec::new(),
@@ -1657,18 +1786,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     // A config that fails to parse keeps the live one and is
                     // recorded as the last error.
                     if let Err(err) = data.state.config.apply_watch(parsed) {
-                        tracing::warn!(%err, "keeping the last config that parsed");
+                        tracing::error!(%err, "keeping the last config that parsed");
                         return;
                     }
                     // Processes started after the reload get the new one.
                     domicile_host::desk_terminal::set(data.state.config.current().terminal.clone());
                     let restated = Restatement::between(&was, data.state.config.current());
-                    let rebuilt = data.state.screens.reloaded_into(
-                        &data.state.config.current().output,
-                        &data.state.engine_displays,
-                        &data.state.vendors,
-                        &data.state.virtual_displays,
-                    );
+                    let rebuilt = data.state.output_settings().and_then(|output| {
+                        data.state.screens.reloaded_into(
+                            &output,
+                            &data.state.engine_displays,
+                            &data.state.vendors,
+                            &data.state.virtual_displays,
+                        )
+                    });
                     match rebuilt {
                         // No change: an undescribed config with no monitors
                         // read. The window controls the desktop, and rebuilding
@@ -1681,7 +1812,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         // A profile matches the plugged-in monitors but cannot
                         // be applied. The config is accepted; the current
                         // desktop stays.
-                        Err(err) => tracing::warn!(
+                        Err(err) => tracing::error!(
                             %err,
                             "keeping the desktop that is up; the reloaded profile does not \
                              describe one these monitors can make"
@@ -1694,7 +1825,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })?;
             }
             Err(err) => {
-                tracing::warn!(%err, "not watching the config; its displays are fixed for this run");
+                tracing::error!(%err, "not watching the config; its displays are fixed for this run");
             }
         },
     }
@@ -1716,7 +1847,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Startup commands, once the desktop is live. Not run on reload; see
     // `StartupConfig`. Not recorded in `launched`: every compositor runs them.
     for command in &config.startup.commands {
-        spawn_client(
+        start_client(
             command,
             &socket_name,
             arguments.scope_clients,
@@ -1725,12 +1856,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             None,
         );
     }
+    data.state.web_agents.set(config.agents.web);
     for command in &left.lost {
         info!(
             ?command,
             "launching again a client the last compositor's crash took"
         );
-        spawn_client(
+        start_client(
             command,
             &socket_name,
             arguments.scope_clients,

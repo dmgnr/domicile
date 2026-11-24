@@ -61,7 +61,7 @@ handed rather than owns.
  3 files changed, 83 insertions(+), 2 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index ae469db..80d0e0f 100644
+index 234de70..6715b5f 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -120,6 +120,8 @@ source_set("gbm") {
@@ -73,7 +73,7 @@ index ae469db..80d0e0f 100644
      "domicile/drm_modeset.cc",
      "domicile/drm_modeset.h",
      "domicile/drm_screen.cc",
-@@ -234,6 +236,7 @@ source_set("gbm_unittests") {
+@@ -236,6 +238,7 @@ source_set("gbm_unittests") {
      "gpu/mock_drm_modifiers_filter.cc",
      "gpu/mock_drm_modifiers_filter.h",
      "gpu/proxy_helpers_unittest.cc",

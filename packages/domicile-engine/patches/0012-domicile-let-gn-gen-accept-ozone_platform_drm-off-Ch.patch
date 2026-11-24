@@ -156,7 +156,7 @@ paragraph.
  15 files changed, 132 insertions(+), 11 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 05f5d16..7821e63 100644
+index 459f049..25fc311 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -10,8 +10,17 @@ import("//gpu/vulkan/features.gni")
@@ -200,16 +200,16 @@ index 05f5d16..7821e63 100644
  
    if (!use_static_angle || is_chromeos) {
      data_deps = [
-@@ -196,7 +211,6 @@ source_set("gbm_unittests") {
-   sources = [
+@@ -197,7 +212,6 @@ source_set("gbm_unittests") {
      "common/drm_util_unittest.cc",
      "common/hardware_display_controller_info_unittest.cc",
+     "gpu/drm_device_unittest.cc",
 -    "gpu/drm_display_unittest.cc",
      "gpu/drm_gpu_display_manager_unittest.cc",
      "gpu/drm_gpu_util_unittest.cc",
      "gpu/drm_overlay_manager_unittest.cc",
-@@ -209,15 +223,30 @@ source_set("gbm_unittests") {
-     "gpu/fake_drm_device_generator.h",
+@@ -211,15 +225,30 @@ source_set("gbm_unittests") {
+     "gpu/gbm_pixmap_unittest.cc",
      "gpu/gbm_surface_factory_unittest.cc",
      "gpu/hardware_display_controller_unittest.cc",
 -    "gpu/hardware_display_plane_manager_unittest.cc",
@@ -308,7 +308,7 @@ index a2dda91..bc25b9e 100644
  #include "components/viz/common/resources/shared_image_format_utils.h"
  #include "ui/base/ui_base_features.h"
 diff --git a/ui/ozone/platform/drm/gpu/drm_thread.cc b/ui/ozone/platform/drm/gpu/drm_thread.cc
-index 945fab7..e1320af 100644
+index 575d6a6..bf2021e 100644
 --- a/ui/ozone/platform/drm/gpu/drm_thread.cc
 +++ b/ui/ozone/platform/drm/gpu/drm_thread.cc
 @@ -10,6 +10,7 @@
@@ -320,7 +320,7 @@ index 945fab7..e1320af 100644
  #include "base/time/time.h"
  #include "base/timer/elapsed_timer.h"
 diff --git a/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc b/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc
-index cea71a9..1a0d30e 100644
+index 50fcbc8..ce7fbde 100644
 --- a/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc
 +++ b/ui/ozone/platform/drm/gpu/drm_thread_proxy.cc
 @@ -8,6 +8,7 @@
@@ -332,7 +332,7 @@ index cea71a9..1a0d30e 100644
  #include "base/threading/thread_restrictions.h"
  #include "base/time/time.h"
 diff --git a/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc b/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc
-index 084d884..4be4f30 100644
+index 5e13f4e..b336b7c 100644
 --- a/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc
 +++ b/ui/ozone/platform/drm/gpu/gbm_surface_factory.cc
 @@ -11,6 +11,7 @@
@@ -425,7 +425,7 @@ index f5fbf06..6422816 100644
        &plane_to_device_matrix,
        &crtc_state.color_temperature_adjustment.srgb_matrix);
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
-index d4866f4..fd451f5 100644
+index 5299e15..6acb954 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
 @@ -21,6 +21,7 @@
@@ -550,7 +550,7 @@ index c948403..ef7f315 100644
    SendCursorMoveLocked();
  }
 diff --git a/ui/ozone/platform/drm/host/drm_display_host_manager.cc b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
-index bb7630a..00e7048 100644
+index 4efc9b5..f7f97f0 100644
 --- a/ui/ozone/platform/drm/host/drm_display_host_manager.cc
 +++ b/ui/ozone/platform/drm/host/drm_display_host_manager.cc
 @@ -17,6 +17,7 @@

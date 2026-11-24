@@ -376,7 +376,9 @@ pub fn refused(asked: Asked) -> Option<Refusal> {
             ClientRequest::CloseApp { .. }
             | ClientRequest::Spawn { .. }
             | ClientRequest::CopyClipboardEntry { .. }
+            | ClientRequest::RemoveClipboardEntry { .. }
             | ClientRequest::ActivateTrayItem { .. }
+            | ClientRequest::TrayMenuClicked { .. }
             | ClientRequest::DismissNotifications { .. }
             | ClientRequest::InvokeNotificationAction { .. }
             | ClientRequest::ReplyToNotification { .. }
@@ -427,10 +429,22 @@ pub fn refused(asked: Asked) -> Option<Refusal> {
             | ClientRequest::ResizeVirtualMonitor { .. }
             // Queued by a `SystemRequest::SleepDisplays` or `WakeDisplays`
             // the lock already judged.
-            | ClientRequest::PowerDisplays { .. },
+            | ClientRequest::PowerDisplays { .. }
+            // Like `sleep-displays`: arranging the monitors shows nothing the
+            // lock hides, and docking a locked laptop may need it.
+            | ClientRequest::ConfigureDisplay { .. },
         )
         | Asked::OnTheConnection(
-            ConnectionRequest::SetTheme { .. } | ConnectionRequest::WhichTheme,
+            ConnectionRequest::SetTheme { .. }
+            | ConnectionRequest::WhichTheme
+            | ConnectionRequest::WhichMonitors
+            | ConnectionRequest::WhichDisplays
+            | ConnectionRequest::WhichWindows
+            | ConnectionRequest::WhichStatus
+            | ConnectionRequest::WhichShellCommands
+            | ConnectionRequest::WhichShellBindings
+            | ConnectionRequest::WhichInputs
+            | ConnectionRequest::WhichIdleTime,
         )
         | Asked::System(
             Reach::ReadsTheKernel
@@ -844,6 +858,8 @@ mod tests {
                     app_id: "app-1".into(),
                     dx: 2.0,
                     dy: 1.0,
+                    dx_unaccel: 1.0,
+                    dy_unaccel: 0.5,
                 },
             ),
             (
@@ -895,6 +911,7 @@ mod tests {
                 "a program being started",
                 ClientRequest::Spawn {
                     command: vec!["foot".into()],
+                    answer: None,
                 },
             ),
             (
@@ -902,11 +919,19 @@ mod tests {
                 ClientRequest::CopyClipboardEntry { entry: 1 },
             ),
             (
+                "a row of the clipboard removed",
+                ClientRequest::RemoveClipboardEntry { entry: 1 },
+            ),
+            (
                 "a tray icon clicked",
                 ClientRequest::ActivateTrayItem {
                     id: ":1.9/StatusNotifierItem".into(),
                     action: TrayAction::Primary,
                 },
+            ),
+            (
+                "a tray menu entry clicked",
+                ClientRequest::TrayMenuClicked { bus: ":1.9".into() },
             ),
             (
                 "notifications cleared",
@@ -1124,6 +1149,14 @@ mod tests {
         for request in [
             ConnectionRequest::SetTheme { theme: Theme::Dark },
             ConnectionRequest::WhichTheme,
+            ConnectionRequest::WhichMonitors,
+            ConnectionRequest::WhichDisplays,
+            ConnectionRequest::WhichWindows,
+            ConnectionRequest::WhichStatus,
+            ConnectionRequest::WhichShellCommands,
+            ConnectionRequest::WhichShellBindings,
+            ConnectionRequest::WhichInputs,
+            ConnectionRequest::WhichIdleTime,
         ] {
             assert_eq!(refused(Asked::OnTheConnection(&request)), None);
         }

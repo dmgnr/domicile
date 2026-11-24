@@ -13,9 +13,12 @@ the shell draws the picker -- see `WebViewGuest::RunFileChooser` and
 
 What this patch carries is the part in files Chromium owns:
 
-- `ChromeDownloadManagerDelegate::ShowFilePickerForDownload` hands a
+- `ChromeDownloadManagerDelegate::ShowFilePickerWithUserTakeover` hands a
   download from a guest to `WebViewGuest::ChooseDownloadPath` instead of
   `DownloadFilePicker`, and `download/BUILD.gn` depends on the target for it.
+  It does so before Chrome's queue, which shows one picker at a time per
+  profile: each window shows its own, so a picker nobody answers (a hidden
+  window's) does not hold every later download.
 - `PostProfileInit` turns on `download.prompt_for_download`, so every download
   asks. A download saved where nobody chose is a file the user never sees
   arrive: this desktop has no download shelf.
@@ -35,10 +38,10 @@ on `crux` with the rest of the engine job.
  6 files changed, 40 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 20f8016..d7ab847 100644
+index 3922e79..eaeae25 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
-@@ -1638,6 +1638,10 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
+@@ -1639,6 +1639,10 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
    // drawn over the desktop. Before any window, so the shell's first page
    // already has none.
    domicile::TurnOffBrowserOffers(*profile->GetPrefs());
@@ -50,7 +53,7 @@ index 20f8016..d7ab847 100644
    for (auto& chrome_extra_part : chrome_extra_parts_) {
      chrome_extra_part->PostProfileInit(profile, is_initial_profile);
 diff --git a/chrome/browser/download/BUILD.gn b/chrome/browser/download/BUILD.gn
-index 18950ad..93f04e9 100644
+index af8e430..fea3651 100644
 --- a/chrome/browser/download/BUILD.gn
 +++ b/chrome/browser/download/BUILD.gn
 @@ -214,6 +214,7 @@ source_set("impl") {
@@ -62,7 +65,7 @@ index 18950ad..93f04e9 100644
      "//components/enterprise/common/proto:connectors_proto_gen",
      "//components/enterprise/connectors/core",
 diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
-index c3785cf..8f83a38 100644
+index 00eb218..7e918f4 100644
 --- a/chrome/browser/download/chrome_download_manager_delegate.cc
 +++ b/chrome/browser/download/chrome_download_manager_delegate.cc
 @@ -4,6 +4,8 @@
@@ -74,14 +77,15 @@ index c3785cf..8f83a38 100644
  #include <algorithm>
  #include <memory>
  #include <optional>
-@@ -1882,6 +1884,34 @@ void ChromeDownloadManagerDelegate::ShowFilePickerForDownload(
+@@ -1797,6 +1799,34 @@ void ChromeDownloadManagerDelegate::ShowFilePickerWithUserTakeover(
+     DownloadItem* download,
      const base::FilePath& suggested_path,
      DownloadTargetDeterminerDelegate::ConfirmationCallback callback) {
-   CHECK(download, base::NotFatalUntil::M161);
-+
 +  // Domicile's engine fork: a download from a page in a <webview> asks the
 +  // shell where to go, rather than opening a save dialog the browser draws
-+  // over the desktop.
++  // over the desktop. Asked before Chrome's one-picker-at-a-time queue: each
++  // window shows its own picker, so one nobody answers (a hidden window's)
++  // does not hold every later download in the profile.
 +  content::WebContents* web_contents =
 +      content::DownloadItemUtils::GetWebContents(download);
 +  if (domicile::WebViewGuest* guest =
@@ -96,8 +100,7 @@ index c3785cf..8f83a38 100644
 +              if (!delegate) {
 +                return;
 +              }
-+              delegate->OnConfirmationCallbackComplete(
-+                  std::move(callback),
++              std::move(callback).Run(
 +                  path ? DownloadConfirmationResult::CONFIRMED
 +                       : DownloadConfirmationResult::CANCELED,
 +                  path ? ui::SelectedFileInfo(*path) : ui::SelectedFileInfo());
@@ -106,11 +109,11 @@ index c3785cf..8f83a38 100644
 +    return;
 +  }
 +
-   DownloadFilePicker::ShowFilePicker(
-       download, suggested_path,
-       base::BindOnce(
+   auto trigger_user_takeover = base::BindOnce(
+       [](base::WeakPtr<ChromeDownloadManagerDelegate> download_manager_delegate,
+          const std::string& guid, const base::FilePath& suggested_path,
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 758a667..828223a 100644
+index 5282c59..93b63b2 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1208,6 +1208,8 @@ generated_interface_sources_in_core = [
@@ -123,7 +126,7 @@ index 758a667..828223a 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_new_window_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index eccfa3a..e9f153b 100644
+index e298878..ca01e64 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -462,6 +462,7 @@ static_idl_files_in_core = [
@@ -135,7 +138,7 @@ index eccfa3a..e9f153b 100644
    "//third_party/blink/renderer/core/html/html_geolocation_element.idl",
    "//third_party/blink/renderer/core/html/html_head_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index ca668d4..32fa09d 100644
+index b35876d..0be81a8 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -98,6 +98,8 @@ blink_core_sources_html = [

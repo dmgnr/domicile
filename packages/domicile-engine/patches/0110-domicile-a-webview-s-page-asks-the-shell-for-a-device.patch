@@ -92,7 +92,7 @@ index d3672a7..3ef3f8a 100644
    auto* contents = content::WebContents::FromRenderFrameHost(owner);
  
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 2b70065..d441c8b 100644
+index f470de3..a17c5b1 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -208,6 +208,8 @@ generated_dictionary_sources_in_core = [
@@ -114,7 +114,7 @@ index 2b70065..d441c8b 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index 30bdd2a..216a749 100644
+index 8f4fa4e..33abee8 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -465,6 +465,8 @@ static_idl_files_in_core = [
@@ -127,7 +127,7 @@ index 30bdd2a..216a749 100644
    "//third_party/blink/renderer/core/html/html_head_element.idl",
    "//third_party/blink/renderer/core/html/html_heading_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 2b14fa2..42a7414 100644
+index 5e0b7df..4aac027 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -104,6 +104,8 @@ blink_core_sources_html = [

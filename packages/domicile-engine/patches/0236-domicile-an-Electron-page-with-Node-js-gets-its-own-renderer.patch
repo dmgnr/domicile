@@ -1,0 +1,264 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 17 Nov 2026 20:00:00 +0000
+Subject: [PATCH] domicile: an Electron page with Node.js gets its own renderer
+
+An Electron app's window with Node.js in its page (nodeIntegration, or
+sandbox: false) runs its preload, and with integration its page, with
+Node. Electron starts such a page's renderer unsandboxed and outside
+the zygote, as only that renderer runs Node. This does the same.
+
+- ContentBrowserClient::MainFrameNavigatesInto: the embedder learns the
+  SiteInstance an outermost main frame's navigation goes to before its
+  renderer starts, as the frame for it may still be speculative (Electron's
+  RegisterPendingSiteInstance).
+- A renderer whose command line has --no-zygote launches without the
+  zygote (Electron's support_mixed_sandbox_with_zygote.patch), and that
+  renderer alone may start setuid programs, as Node's child_process does in Electron
+  (allow_new_privileges_in_unsandboxed_child_processes.patch).
+- ChromeContentBrowserClient: the renderer a Node page's navigation
+  gets (SiteInstanceGotProcessAndSite, when the SiteInstance had none
+  yet) is launched with --no-sandbox, --no-zygote and Domicile's Node
+  switch, takes no spare and no other existing renderer
+  (IsSuitableHost), which started sandboxed, and is never reused for
+  another page (MayReuseHost). See chrome/browser/domicile/domicile_electron_page.h.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+
+Co-Authored-By: Connor Prussin <connor@prussin.net>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011frZat42ZDYcF5LPSUETze
+---
+ .../browser/chrome_content_browser_client.cc  | 35 +++++++++++++++++++
+ .../browser/chrome_content_browser_client.h   |  2 ++
+ .../child_process_launcher_helper_linux.cc    | 13 +++++++
+ .../render_frame_host_manager.cc              |  9 +++++
+ .../renderer_host/render_process_host_impl.cc |  6 ++++
+ ...rer_sandboxed_process_launcher_delegate.cc |  3 ++
+ ...erer_sandboxed_process_launcher_delegate.h | 13 +++++++
+ .../public/browser/content_browser_client.h   |  8 +++++
+ 8 files changed, 89 insertions(+)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 27f9c93..983f7f7 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/chrome_content_browser_client.h"
+ 
+ #include "chrome/browser/domicile/domicile_electron_loader.h"
++#include "chrome/browser/domicile/domicile_electron_page.h"
+ #include "chrome/browser/domicile/domicile_identity_dialog.h"
+ #include "chrome/browser/domicile/domicile_picture_in_picture.h"
+ #include "components/domicile/browser/force_dark.h"
+@@ -2069,6 +2070,13 @@ bool ChromeContentBrowserClient::ShouldUseSpareRenderProcessHost(
+     const GURL& site_url,
+     std::optional<SpareProcessRefusedByEmbedderReason>& refused_reason) {
+   refused_reason = std::nullopt;
++  // Domicile's engine fork. An Electron page with Node.js starts a renderer
++  // of its own: the spare started sandboxed. See
++  // chrome/browser/domicile/domicile_electron_page.h.
++  if (domicile::ElectronPage::RefusesSpareRenderer(site_url)) {
++    refused_reason = SpareProcessRefusedByEmbedderReason::DefaultDisabled;
++    return false;
++  }
+   Profile* profile = Profile::FromBrowserContext(browser_context);
+   if (!profile) {
+     refused_reason = SpareProcessRefusedByEmbedderReason::NoProfile;
+@@ -2473,6 +2481,12 @@ bool ChromeContentBrowserClient::ShouldStayInParentProcessForNTP(
+ bool ChromeContentBrowserClient::IsSuitableHost(
+     content::RenderProcessHost* process_host,
+     const content::SecurityPrincipal& security_principal) {
++  // Domicile's engine fork: an Electron page with Node.js gets a renderer of
++  // its own. See chrome/browser/domicile/domicile_electron_page.h.
++  if (!domicile::ElectronPage::IsSuitableHost(
++          *process_host, security_principal.GetDeprecatedSiteURL())) {
++    return false;
++  }
+   Profile* profile =
+       Profile::FromBrowserContext(process_host->GetBrowserContext());
+   // This may be nullptr during tests. In that case, just assume any site can
+@@ -2529,6 +2543,13 @@ bool ChromeContentBrowserClient::MayReuseHost(
+     return false;
+   }
+ 
++  // Domicile's engine fork. A renderer for an Electron page with Node.js is
++  // that page's alone: it is unsandboxed. See
++  // chrome/browser/domicile/domicile_electron_page.h.
++  if (domicile::ElectronPage::IsForNode(*process_host)) {
++    return false;
++  }
++
+   return true;
+ }
+ 
+@@ -2591,9 +2612,19 @@ class NTPUserData : public base::SupportsUserData::Data {
+ 
+ }  // namespace
+ 
++void ChromeContentBrowserClient::MainFrameNavigatesInto(
++    content::RenderFrameHost* main_frame,
++    SiteInstance* site_instance) {
++  domicile::ElectronPage::MainFrameNavigatesInto(*main_frame, *site_instance);
++}
++
+ void ChromeContentBrowserClient::SiteInstanceGotProcessAndSite(
+     SiteInstance* site_instance) {
+   CHECK(site_instance->HasProcess());
++  // Domicile's engine fork: an Electron page with Node.js marks the renderer
++  // its navigation got, before it starts. See
++  // chrome/browser/domicile/domicile_electron_page.h.
++  domicile::ElectronPage::SiteInstanceGotProcess(*site_instance);
+ 
+   Profile* profile =
+       Profile::FromBrowserContext(site_instance->GetBrowserContext());
+@@ -3186,6 +3217,10 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+       for (auto& part : extra_parts_) {
+         part->AppendExtraRendererCommandLineSwitches(command_line, *process);
+       }
++      // Domicile's engine fork: a renderer for an Electron page with Node.js
++      // starts as Electron starts it. See
++      // chrome/browser/domicile/domicile_electron_page.h.
++      domicile::ElectronPage::AppendRendererSwitches(*process, *command_line);
+     }
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+index 2b5a97d..9acb4af 100644
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -307,6 +307,8 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+       content::RenderFrameHost* outermost_main_frame) override;
+   void SiteInstanceGotProcessAndSite(
+       content::SiteInstance* site_instance) override;
++  void MainFrameNavigatesInto(content::RenderFrameHost* main_frame,
++                              content::SiteInstance* site_instance) override;
+   bool ShouldSwapBrowsingInstancesForNavigation(
+       content::SiteInstance* site_instance,
+       const GURL& current_effective_url,
+diff --git a/content/browser/child_process_launcher_helper_linux.cc b/content/browser/child_process_launcher_helper_linux.cc
+index 84c3f31..1b3f7f8 100644
+--- a/content/browser/child_process_launcher_helper_linux.cc
++++ b/content/browser/child_process_launcher_helper_linux.cc
+@@ -66,6 +66,19 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
+       options->fds_to_remap.emplace_back(sandbox_fd, GetSandboxFD());
+     }
+ 
++    // Domicile's engine fork, as Electron's
++    // allow_new_privileges_in_unsandboxed_child_processes.patch: a child
++    // launched without the zygote while the zygote is in use is unsandboxed,
++    // the renderer of an Electron page with Node.js, and may start setuid
++    // programs, as Node's child_process does in Electron.
++    if (GetProcessType() == switches::kRendererProcess &&
++        command_line()->HasSwitch(switches::kNoZygote) &&
++        !base::CommandLine::ForCurrentProcess()->HasSwitch(
++            switches::kNoZygote) &&
++        delegate_->GetZygote() == nullptr) {
++      options->allow_new_privs = true;
++    }
++
+     options->environment = delegate_->GetEnvironment();
+   } else {
+     CHECK(GetZygoteForLaunch(), base::NotFatalUntil::M159);
+diff --git a/content/browser/renderer_host/render_frame_host_manager.cc b/content/browser/renderer_host/render_frame_host_manager.cc
+index cdc682a..20f11c3 100644
+--- a/content/browser/renderer_host/render_frame_host_manager.cc
++++ b/content/browser/renderer_host/render_frame_host_manager.cc
+@@ -4985,6 +4985,15 @@ RenderFrameHostManager::GetSiteInstanceForNavigationRequest(
+     request->ResetStateForSiteInstanceChange();
+   }
+ 
++  // Domicile's engine fork. The embedder learns which renderer a main
++  // frame's navigation goes to before that renderer starts, so an Electron
++  // page with Node.js can start its own as Electron does. See
++  // chrome/browser/domicile/domicile_electron_page.h.
++  if (frame_tree_node_->IsOutermostMainFrame()) {
++    GetContentClient()->browser()->MainFrameNavigatesInto(
++        render_frame_host_.get(), dest_site_instance.get());
++  }
++
+   return dest_site_instance;
+ }
+ 
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 15ca37d..ea2c83a 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -2157,6 +2157,12 @@ bool RenderProcessHostImpl::Init() {
+     std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
+         std::make_unique<RendererSandboxedProcessLauncherDelegateWin>(
+             *cmd_line, IsPdf(), IsJitDisabled(), GetID());
++#elif BUILDFLAG(USE_ZYGOTE)
++    // Domicile's engine fork. The embedder asked for this renderer without
++    // the zygote: it runs unsandboxed, for an Electron page with Node.js.
++    std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
++        std::make_unique<RendererSandboxedProcessLauncherDelegate>(
++            !cmd_line->HasSwitch(switches::kNoZygote));
+ #else
+     std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
+         std::make_unique<RendererSandboxedProcessLauncherDelegate>();
+diff --git a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc
+index abbae93..5a6ab9d 100644
+--- a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc
++++ b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc
+@@ -36,6 +36,9 @@ namespace content {
+ 
+ #if BUILDFLAG(USE_ZYGOTE)
+ ZygoteCommunication* RendererSandboxedProcessLauncherDelegate::GetZygote() {
++  if (!use_zygote_) {
++    return nullptr;
++  }
+   const base::CommandLine& browser_command_line =
+       *base::CommandLine::ForCurrentProcess();
+   base::CommandLine::StringType renderer_prefix =
+diff --git a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h
+index 99a9fda..fa38175 100644
+--- a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h
++++ b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h
+@@ -25,6 +25,14 @@ class CONTENT_EXPORT RendererSandboxedProcessLauncherDelegate
+  public:
+   RendererSandboxedProcessLauncherDelegate() = default;
+ 
++#if BUILDFLAG(USE_ZYGOTE)
++  // Domicile's engine fork. A renderer launched unsandboxed, for an Electron
++  // page with Node.js, starts without the zygote, whose children are all
++  // sandboxed. See RenderProcessHostImpl::Init.
++  explicit RendererSandboxedProcessLauncherDelegate(bool use_zygote)
++      : use_zygote_(use_zygote) {}
++#endif  // BUILDFLAG(USE_ZYGOTE)
++
+   ~RendererSandboxedProcessLauncherDelegate() override = default;
+ 
+ #if BUILDFLAG(USE_ZYGOTE)
+@@ -37,6 +45,11 @@ class CONTENT_EXPORT RendererSandboxedProcessLauncherDelegate
+ 
+   // sandbox::policy::SandboxDelegate:
+   sandbox::mojom::Sandbox GetSandboxType() override;
++
++#if BUILDFLAG(USE_ZYGOTE)
++ private:
++  bool use_zygote_ = true;
++#endif  // BUILDFLAG(USE_ZYGOTE)
+ };
+ 
+ #if BUILDFLAG(IS_WIN)
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
+index dbdac9e..9fa3b88 100644
+--- a/content/public/browser/content_browser_client.h
++++ b/content/public/browser/content_browser_client.h
+@@ -778,6 +778,14 @@ class CONTENT_EXPORT ContentBrowserClient {
+   // subsequent navigation does.
+   virtual void SiteInstanceGotProcessAndSite(SiteInstance* site_instance) {}
+ 
++  // Domicile's engine fork. `main_frame`'s navigation goes into
++  // `site_instance`, before the renderer it goes to starts, as the frame for
++  // it may still be speculative. An embedder that starts a page's renderer
++  // differently marks that renderer here, for
++  // AppendExtraCommandLineSwitches.
++  virtual void MainFrameNavigatesInto(RenderFrameHost* main_frame,
++                                      SiteInstance* site_instance) {}
++
+   // Returns true if for the navigation from |current_effective_url| to
+   // |destination_effective_url| in |site_instance|, a new SiteInstance and
+   // BrowsingInstance should be created (even if we are in a process model that

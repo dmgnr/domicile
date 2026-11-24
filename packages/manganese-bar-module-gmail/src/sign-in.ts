@@ -25,6 +25,7 @@ export const signIn = async (
   domicile: Desk,
   client: GoogleClient,
   email: string,
+  profile?: string,
   storage?: Parameters<typeof storeToken>[2],
   state: string = randomState(),
 ): Promise<void> => {
@@ -43,7 +44,10 @@ export const signIn = async (
       }
     };
     const stop = browser.on("change", windowsChanged);
-    browser.open(consentAddress(client, email, state));
+    browser.open(
+      consentAddress(client, email, state),
+      profile === undefined ? {} : { profile },
+    );
   });
   const refreshToken = await code.match({
     Err: (why) => {

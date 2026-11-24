@@ -127,6 +127,43 @@ pub fn browser_window(
     .map_err(|why| why.to_string())
 }
 
+/// `page` with `views` drawn over it, bottom first: an Electron app's window
+/// with the `WebContentsView`s it holds. Each view is a shot of its own page
+/// and the rectangle the app placed it at in the window's page, in that
+/// page's CSS pixels; it is drawn at its own density, which its shot's width
+/// over its rectangle's says. What falls off the page is cut.
+pub fn with_views(mut page: Shot, views: &[(Shot, Rect)]) -> Shot {
+    for (view, (x, y, width, _)) in views {
+        let scale = f64::from(view.width) / f64::from(*width);
+        let left = (f64::from(*x) * scale).round() as i64;
+        let top = (f64::from(*y) * scale).round() as i64;
+        for row in 0..i64::from(view.height) {
+            let to_row = top + row;
+            if to_row < 0 || to_row >= i64::from(page.height) {
+                continue;
+            }
+            for column in 0..i64::from(view.width) {
+                let to_column = left + column;
+                if to_column < 0 || to_column >= i64::from(page.width) {
+                    continue;
+                }
+                let from = ((row * i64::from(view.width) + column) * 4) as usize;
+                let to = ((to_row * i64::from(page.width) + to_column) * 4) as usize;
+                over(&view.bgra[from..from + 4], &mut page.bgra[to..to + 4]);
+            }
+        }
+    }
+    page
+}
+
+/// `pixel` drawn over `under`, both premultiplied BGRA.
+fn over(pixel: &[u8], under: &mut [u8]) {
+    let clear = 255 - u32::from(pixel[3]);
+    for (to, &from) in under.iter_mut().zip(pixel) {
+        *to = (u32::from(from) + (u32::from(*to) * clear + 127) / 255) as u8;
+    }
+}
+
 /// The monitors of a shot of `desk` at `scale` shot pixels per logical
 /// pixel, each with what `describe` says of it by name.
 pub fn monitors(
@@ -230,6 +267,36 @@ mod tests {
         assert_eq!((shot.width, shot.height), (6, 4));
         assert_eq!(shot.bgra[3], 0, "off every monitor is transparent");
         assert_eq!(shot.bgra[4 * 4 + 3], 255, "a frame without alpha is opaque");
+    }
+
+    /// A shot of `size` whose pixels' blue bytes are `blues`, row by row,
+    /// opaque but where `blues` is 0.
+    fn shot(size: (u32, u32), blues: &[u8]) -> Shot {
+        Shot {
+            width: size.0,
+            height: size.1,
+            bgra: blues
+                .iter()
+                .flat_map(|&blue| [blue, 0, 0, if blue == 0 { 0 } else { 255 }])
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn views_are_drawn_over_the_page_where_the_app_placed_them_bottom_first() {
+        // A 4x3 page at 2x: 2x1.5 CSS pixels.
+        let page = shot((4, 3), &[1; 12]);
+        let sidebar = (shot((2, 2), &[2; 4]), (0, 0, 1, 1));
+        // Over the sidebar, and off the page's right edge.
+        let chat = (shot((4, 2), &[3; 8]), (1, 0, 2, 1));
+        // Clear but for one pixel.
+        let badge = (shot((2, 2), &[0, 0, 0, 4]), (0, 0, 1, 1));
+
+        let drawn = with_views(page, &[sidebar, chat, badge]);
+
+        let blue: Vec<u8> = drawn.bgra.chunks(4).map(|pixel| pixel[0]).collect();
+        assert_eq!(blue, [[2, 2, 3, 3], [2, 4, 3, 3], [1, 1, 1, 1]].concat());
+        assert_eq!((drawn.width, drawn.height), (4, 3));
     }
 
     #[test]

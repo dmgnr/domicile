@@ -1,4 +1,5 @@
 import type { Option, Result } from "@cprussin/option-result";
+import { Drilldown } from "@domicile-desktop/component-library/Drilldown";
 import { Panel } from "@domicile-desktop/component-library/Panel";
 import { Popover } from "@domicile-desktop/component-library/Popover";
 import { useKeepsKeyboard } from "@domicile-desktop/manganese-bar/panel-keyboard";
@@ -122,15 +123,17 @@ const Item = ({
       }
       wide
     >
-      <Panel title="Network" width="standard">
-        <NetworkPanel
-          actions={actions}
-          addresses={addresses}
-          host={host}
-          wifi={wifi}
-          wired={wired}
-        />
-      </Panel>
+      <Drilldown>
+        <Panel title="Network" width="standard">
+          <NetworkPanel
+            actions={actions}
+            addresses={addresses}
+            host={host}
+            wifi={wifi}
+            wired={wired}
+          />
+        </Panel>
+      </Drilldown>
     </Popover>
   );
 };

@@ -9,6 +9,7 @@
     "@domicile-desktop/sdk": "workspace:*",
     "@domicile-desktop/system-apps": "workspace:*",
     "@pandacss/dev": "catalog:",
+    "@phosphor-icons/react": "catalog:",
     "react": "catalog:",
     "zod": "catalog:"
   },
@@ -32,11 +33,14 @@
     ".": "./src/bar-item.tsx",
     "./extensions/shown": "./src/extensions/shown.ts",
     "./extensions/useExtensions": "./src/extensions/useExtensions.ts",
+    "./extensions/useFocusedProfile": "./src/extensions/useFocusedProfile.ts",
+    "./extensions/useInstalledExtensions": "./src/extensions/useInstalledExtensions.ts",
     "./extensions/useOpenedPopup": "./src/extensions/useOpenedPopup.ts",
     "./tray-context": "./src/tray-context.ts",
     "./tray-entry": "./src/tray-entry.ts",
     "./useTray": "./src/useTray.ts",
-    "./useTrayOrder": "./src/useTrayOrder.ts"
+    "./useTrayOrder": "./src/useTrayOrder.ts",
+    "./useTrayPins": "./src/useTrayPins.ts"
   },
   "files": [
     "src/**",

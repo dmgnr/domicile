@@ -27,7 +27,8 @@ export type LockingWindows = Pick<
  * The compositor offers a lock only for the window under the pointer, so this
  * is the window the user is both pointing at and typing into, as sway grants
  * one. Moving the keyboard elsewhere (a chord, which still reaches the shell)
- * is how the user takes the pointer back. A confinement is not taken yet.
+ * is how the user takes the pointer back. A confinement is taken by
+ * `usePointerConfinement`, which follows the window as it moves.
  */
 export const lockFor = (
   list: readonly ClientWindow[],

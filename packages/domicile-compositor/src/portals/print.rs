@@ -16,7 +16,7 @@ use domicile_host::cups::{Cups, Offered};
 use domicile_host::print_settings::{page_setup, settings as gtk_settings, Preset};
 use domicile_host::save_to_pdf;
 use domicile_protocol::{PortalAnswer, PortalKind, PrintDialog, PrintOptions, Printer};
-use tracing::{debug, warn};
+use tracing::debug;
 use zbus::object_server::ObjectServer;
 use zbus::zvariant::{OwnedFd, OwnedObjectPath, OwnedValue, Value};
 
@@ -146,7 +146,7 @@ impl Print {
                 match printed {
                     Ok(()) => (0, HashMap::new()),
                     Err(why) => {
-                        warn!(%why, "a print job did not reach CUPS or its file");
+                        tracing::error!(%why, "a print job did not reach CUPS or its file");
                         (2, HashMap::new())
                     }
                 }
@@ -230,6 +230,8 @@ impl Print {
             | PortalAnswer::ScreenshotWindow { .. }
             | PortalAnswer::ScreenshotBrowserWindow { .. }
             | PortalAnswer::PickColor { .. }
+            | PortalAnswer::Agent { .. }
+            | PortalAnswer::Change
             | PortalAnswer::GlobalShortcuts { .. }
             | PortalAnswer::Pressed
             | PortalAnswer::Released

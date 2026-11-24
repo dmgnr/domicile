@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 15 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the shell and apps are cross-origin isolated
+
+A shell or an app module (APP-MODULES.md) runs as a program, so it is
+cross-origin isolated with no COOP, COEP or Document-Isolation-Policy
+header: `crossOriginIsolated` is true and SharedArrayBuffer exists, for
+threaded wasm and tools such as the TypeScript service.
+
+- ContentBrowserClient::IsCrossOriginIsolatedByEmbedder names the
+  origins. ChromeContentBrowserClient answers with
+  domicile::IsCrossOriginIsolatedOrigin: `domicile://shell` and
+  `domicile://app-<id>`.
+- NavigationRequest::ComputeCrossOriginIsolationKey isolates such a
+  document as Document-Isolation-Policy does: its own process and a
+  concrete isolation key. It sets no policy, so nothing the document
+  loads is checked for CORP. `<webview>` pages are unaffected.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ chrome/browser/chrome_content_browser_client.cc     | 10 ++++++++++
+ chrome/browser/chrome_content_browser_client.h      |  2 ++
+ content/browser/renderer_host/navigation_request.cc | 11 +++++++++++
+ content/public/browser/content_browser_client.cc    |  6 ++++++
+ content/public/browser/content_browser_client.h     |  9 +++++++++
+ 5 files changed, 38 insertions(+)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index e313249..a893213 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -8,6 +8,7 @@
+ #include "chrome/browser/domicile/domicile_identity_dialog.h"
+ #include "chrome/browser/domicile/domicile_picture_in_picture.h"
+ #include "components/domicile/browser/force_dark.h"
++#include "components/domicile/browser/shell_origin.h"
+ #include "components/domicile/browser/shell_source.h"
+ #include "components/domicile/browser/shell_url_loader_factory.h"
+ #include "components/domicile/common/domicile_scheme.h"
+@@ -6503,6 +6504,15 @@ bool ChromeContentBrowserClient::MayGuestLoadUnsafeScheme(
+   return domicile::MayElectronPageLoad(guest, url);
+ }
+ 
++bool ChromeContentBrowserClient::IsCrossOriginIsolatedByEmbedder(
++    content::BrowserContext* browser_context,
++    const url::Origin& origin) {
++  // Domicile's engine fork. The shell and app modules run with the desktop's
++  // trust, so they get shared memory without COOP and COEP. See
++  // docs/architecture/DOMICILE-SCHEME.md.
++  return domicile::IsCrossOriginIsolatedOrigin(origin);
++}
++
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ ChromeContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+     const std::string& scheme,
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+index 373f817..2b5a97d 100644
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -698,6 +698,8 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+       content::FrameTreeNodeId frame_tree_node_id) override;
+   bool MayGuestLoadUnsafeScheme(content::WebContents* guest,
+                                  const GURL& url) override;
++  bool IsCrossOriginIsolatedByEmbedder(content::BrowserContext* browser_context,
++                                       const url::Origin& origin) override;
+   mojo::PendingRemote<network::mojom::URLLoaderFactory>
+   CreateNonNetworkNavigationURLLoaderFactory(
+       const std::string& scheme,
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+index 71c720d..6c1a0ca 100644
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -12819,6 +12819,17 @@ NavigationRequest::ComputeCrossOriginIsolationKey() {
+     return std::nullopt;
+   }
+ 
++  // Domicile's engine fork. The embedder isolates a document it trusts as a
++  // program, as Document-Isolation-Policy would, but sets no policy, so
++  // nothing the document loads is checked for CORP.
++  if (GetContentClient()->browser()->IsCrossOriginIsolatedByEmbedder(
++          GetNavigationController()->GetBrowserContext(), origin)) {
++    policy_container_builder_->SetCrossOriginIsolationEnabledByDIP();
++    return AgentClusterKey::CrossOriginIsolationKey(
++        origin, blink::mojom::CrossOriginIsolationMode::kConcrete,
++        /*cross_origin_isolated_through_dip=*/true);
++  }
++
+   // If the navigation does not have a Document-Isolation-Policy, return an
+   // empty CrossOriginIsolationKey.
+   // TODO(crbug.com/342365083): Use a CrossOriginIsolationKey when the
+diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
+index 06d0f4c..496e253 100644
+--- a/content/public/browser/content_browser_client.cc
++++ b/content/public/browser/content_browser_client.cc
+@@ -1794,6 +1794,12 @@ bool ContentBrowserClient::MayGuestLoadUnsafeScheme(WebContents* guest,
+   return false;
+ }
+ 
++bool ContentBrowserClient::IsCrossOriginIsolatedByEmbedder(
++    BrowserContext* browser_context,
++    const url::Origin& origin) {
++  return false;
++}
++
+ #if BUILDFLAG(IS_ANDROID)
+ bool ContentBrowserClient::IsContentSchemeURLNavigationAllowed(
+     const GURL& url) {
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
+index 99cdd7d..dbdac9e 100644
+--- a/content/public/browser/content_browser_client.h
++++ b/content/public/browser/content_browser_client.h
+@@ -3014,6 +3014,15 @@ class CONTENT_EXPORT ContentBrowserClient {
+   // schemes only (see NavigationControllerImpl). By default, false.
+   virtual bool MayGuestLoadUnsafeScheme(WebContents* guest, const GURL& url);
+ 
++  // Domicile's engine fork. Whether a document on `origin` is cross-origin
++  // isolated with no Cross-Origin-Opener-Policy, Cross-Origin-Embedder-Policy
++  // or Document-Isolation-Policy header. It gets its own process and
++  // SharedArrayBuffer, as Document-Isolation-Policy gives, and nothing it
++  // loads is checked for CORP or CORS. Only for origins the embedder trusts
++  // as it trusts its own code. By default, false.
++  virtual bool IsCrossOriginIsolatedByEmbedder(BrowserContext* browser_context,
++                                               const url::Origin& origin);
++
+ #if BUILDFLAG(IS_ANDROID)
+   // Returns true if navigation to `url`, which must have a content:// scheme,
+   // is allowed. By default, returns false unless

@@ -4,6 +4,7 @@
 #ifndef COMPONENTS_DOMICILE_BROWSER_FRAME_SINK_BROKER_H_
 #define COMPONENTS_DOMICILE_BROWSER_FRAME_SINK_BROKER_H_
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,6 +18,7 @@
 #include "base/unguessable_token.h"
 #include "components/domicile/browser/brokered_frame_sink.h"
 #include "components/domicile/browser/browser_window_capture_target.h"
+#include "components/domicile/browser/browser_window_listing.h"
 #include "components/domicile/browser/display_capture.h"
 #include "components/domicile/mojom/external_surface.mojom.h"
 #include "components/domicile/mojom/frame_sink_broker.mojom.h"
@@ -27,6 +29,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/gpu_fence_handle.h"
 
@@ -35,6 +38,13 @@ class HostFrameSinkManager;
 }
 
 namespace domicile {
+
+// The windows of `listing` a capture tool lists, as a producer hears them:
+// every window not hidden, titled by its app when the app gave a title, with
+// the views it holds and shows with an area, bottom first. A view is never
+// listed as a window of its own.
+std::vector<mojom::ListedBrowserWindowPtr> ForCaptureTools(
+    const std::vector<ListedBrowserWindow>& listing);
 
 // Brokers viz frame sinks to a non-renderer producer (the compositor) and
 // connects each one to the page that embeds it.
@@ -81,6 +91,12 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
   // is not redrawing would show it only when something next changed.
   // Injected for the same reason. Empty when the embedder has no CRTC.
   using DisplayRedrawer = base::RepeatingCallback<void(int64_t)>;
+  // Sets the color matrix viz draws one display with, 3x3 and row-major, and
+  // redraws it. Injected because finding a display's window needs //ui/aura.
+  // Empty when the embedder has no windows; the matrix is then dropped.
+  using ColorMatrix = std::array<float, 9>;
+  using ColorMatrixSetter =
+      base::RepeatingCallback<void(int64_t, const ColorMatrix&)>;
   // Writes the producer's clipboard into `ui::OzonePlatform`'s clipboard.
   // Injected for the same reason. Empty when the embedder runs inside another
   // session; the contents are then dropped.
@@ -98,6 +114,19 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
   // because the windows are //chrome's. Empty when the embedder has no
   // browser windows; every such capture is then refused.
   using BrowserWindowCaptureTargetGetter = BrowserWindowCaptureTargetFinder;
+  // Whether the GPU can make the dmabufs viz captures into. Injected because
+  // asking needs //ui/ozone. Empty, or false, when it cannot, as nested in a
+  // Wayland session that offers no render node: captures then come in shared
+  // memory.
+  using DmabufCaptureChecker = base::RepeatingCallback<bool()>;
+  // Runs the closure once the browser's GPU channel passes the sync token.
+  // Injected because the channel's context comes from //ui/aura. An import
+  // answers only once its SharedImage exists: the producer's frame reaches
+  // viz on another pipe than the one that made it, and viz drew a frame
+  // naming an image the GPU had not made yet, which left the window blank.
+  // Required whenever `get_shared_image_interface` returns an interface.
+  using SyncTokenSignaler =
+      base::RepeatingCallback<void(const gpu::SyncToken&, base::OnceClosure)>;
 
   // `get_shared_image_interface` gives imported dmabufs a GPU. Injected because
   // this target does not depend on //ui/aura. It returns null when headless.
@@ -123,7 +152,10 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
       GammaSetter set_gamma = GammaSetter(),
       InputInjector inject_input = InputInjector(),
       InputConfigSetter set_input_config = InputConfigSetter(),
-      DisplayRedrawer redraw_display = DisplayRedrawer());
+      DisplayRedrawer redraw_display = DisplayRedrawer(),
+      ColorMatrixSetter set_color_matrix = ColorMatrixSetter(),
+      DmabufCaptureChecker can_capture_into_dmabufs = DmabufCaptureChecker(),
+      SyncTokenSignaler signal_sync_token = SyncTokenSignaler());
 
   FrameSinkBroker(const FrameSinkBroker&) = delete;
   FrameSinkBroker& operator=(const FrameSinkBroker&) = delete;
@@ -163,6 +195,7 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
              const viz::LocalSurfaceId& local_surface_id,
              const gfx::Size& size,
              double scale,
+             double zoom,
              EmbedCallback callback);
 
   // Drops `requester`'s waiting embeds without running their callbacks. For a
@@ -200,6 +233,10 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
   void OnBrowserWindowsChanged(
       std::vector<mojom::ListedBrowserWindowPtr> windows);
 
+  // Forwards the input devices the browser reads to observers, and stores
+  // them for observers that connect later.
+  void OnInputDevicesChanged(std::vector<mojom::ListedInputDevicePtr> devices);
+
   // mojom::FrameSinkBroker implementation.
   void CreateFrameSink(
       mojo::PendingRemote<viz::mojom::CompositorFrameSinkClient> client,
@@ -208,10 +245,16 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
       const std::string& app_id,
       CreateFrameSinkCallback callback) override;
   void DestroyFrameSink(const viz::FrameSinkId& frame_sink_id) override;
+  void EmbedFrameSink(const viz::FrameSinkId& child,
+                      const viz::FrameSinkId& parent,
+                      const viz::LocalSurfaceId& local_surface_id,
+                      const gfx::Size& size,
+                      double scale) override;
   void ImportBuffer(const viz::FrameSinkId& frame_sink_id,
                     gfx::GpuMemoryBufferHandle handle,
                     const gfx::Size& size,
                     uint32_t fourcc,
+                    const gfx::ColorSpace& color_space,
                     ImportBufferCallback callback) override;
   void SubmitBuffer(const viz::FrameSinkId& frame_sink_id,
                     uint64_t buffer_id,
@@ -221,7 +264,8 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
                    gfx::GpuFenceHandle fence,
                    FenceBufferCallback callback) override;
   void DestroyBuffer(const viz::FrameSinkId& frame_sink_id,
-                     uint64_t buffer_id) override;
+                     uint64_t buffer_id,
+                     const gpu::SyncToken& read_done) override;
   void ConfigureDisplays(
       std::vector<mojom::DisplayLayoutPtr> layout) override;
   void ConfigurePointers(
@@ -230,6 +274,8 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
   void ConfigureVirtualDisplays(
       std::vector<mojom::VirtualDisplayPtr> displays) override;
   void SetGamma(int64_t display_id, mojom::GammaRampPtr ramp) override;
+  void SetColorMatrix(int64_t display_id,
+                      const std::vector<float>& matrix) override;
   void InjectInput(mojom::DeskInputPtr input) override;
   void SetClipboard(mojom::Clipboard clipboard,
                     const ClipboardContents& contents) override;
@@ -241,6 +287,8 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
       mojo::PendingRemote<mojom::CompositingObserver> observer) override;
   void ObserveBrowserWindows(
       mojo::PendingRemote<mojom::BrowserWindowListObserver> observer) override;
+  void ObserveInputDevices(
+      mojo::PendingRemote<mojom::InputDeviceListObserver> observer) override;
   void CaptureDisplay(
       int64_t display_id,
       const gfx::Size& size,
@@ -264,6 +312,7 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
                  const viz::LocalSurfaceId& local_surface_id,
                  const gfx::Size& size,
                  double scale,
+                 double zoom,
                  EmbedCallback callback);
     PendingEmbed(PendingEmbed&&);
     PendingEmbed& operator=(PendingEmbed&&);
@@ -275,6 +324,7 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
     viz::LocalSurfaceId local_surface_id;
     gfx::Size size;
     double scale;
+    double zoom;
     EmbedCallback callback;
   };
 
@@ -320,6 +370,12 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
   const InputConfigSetter set_input_config_;
   // See DisplayRedrawer.
   const DisplayRedrawer redraw_display_;
+  // See ColorMatrixSetter.
+  const ColorMatrixSetter set_color_matrix_;
+  // See DmabufCaptureChecker.
+  const DmabufCaptureChecker can_capture_into_dmabufs_;
+  // See SyncTokenSignaler.
+  const SyncTokenSignaler signal_sync_token_;
 
   mojo::ReceiverSet<mojom::FrameSinkBroker> receivers_;
   base::RepeatingClosure producer_gone_;
@@ -372,6 +428,10 @@ class FrameSinkBroker : public mojom::FrameSinkBroker {
   mojo::RemoteSet<mojom::BrowserWindowListObserver> browser_window_observers_;
   // The last browser window list. See OnBrowserWindowsChanged.
   std::vector<mojom::ListedBrowserWindowPtr> browser_windows_;
+
+  mojo::RemoteSet<mojom::InputDeviceListObserver> input_device_observers_;
+  // The last input device list. See OnInputDevicesChanged.
+  std::vector<mojom::ListedInputDevicePtr> input_devices_;
 };
 
 }  // namespace domicile

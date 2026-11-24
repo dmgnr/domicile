@@ -1,0 +1,8 @@
+# Electron's Node, as Electron's DEPS names it for `src/third_party/electron_node`
+# (Electron main 139c603, 2026-11-13). Its patches are in patches/node, from
+# Electron's `patches/node`, in the order `patches/node/.patches` gives.
+# `version` is the release `commit` is, which node-runs-on-the-engine.sh
+# checks the build reports.
+url https://github.com/nodejs/node
+commit e9c277643b0249c50f6e6de5413be8a88ea11b6a
+version 26.13.1

@@ -102,10 +102,14 @@ const slashStyles = cva({
     shown: {
       false: {
         strokeDashoffset: 130,
+        // main-thread animation: draws an icon's stroke; an SVG stroke's dash
+        // has no compositor path.
         transition: "stroke-dashoffset {durations.normal} {easings.in}",
       },
       true: {
         strokeDashoffset: 0,
+        // main-thread animation: draws an icon's stroke; an SVG stroke's dash
+        // has no compositor path.
         transition: "stroke-dashoffset {durations.slow} {easings.out}",
       },
     },

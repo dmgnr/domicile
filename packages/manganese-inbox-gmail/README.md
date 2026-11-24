@@ -30,6 +30,9 @@ export const Shell = runManganese({
 - `email`: the Google account.
 - `nickname`: its name in the drawer.
 - `launcherName`: its name in the launcher. `nickname` if not given.
+- `profile`: the browser profile its Gmail window and sign-in open in, such
+  as `"work"`. Without one, Gmail's site decides, and every account shares
+  that profile.
 
 A press opens the account's own Gmail window, or brings it up, or signs the
 account in. New mail is notified under the nickname, and a press of one opens

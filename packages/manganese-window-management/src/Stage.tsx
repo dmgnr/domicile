@@ -4,6 +4,7 @@ import { Fragment, memo, useCallback, useMemo, useState } from "react";
 
 import { AppWindow } from "./AppWindow";
 import { BrowserWindow } from "./BrowserWindow";
+import { useProfileMark } from "./browser/useBrowserProfile";
 import type { Direction } from "./direction";
 import { FocusGlow } from "./FocusGlow";
 import { FloatBorder } from "./floating/FloatBorder";
@@ -38,6 +39,7 @@ import { SelectionTint } from "./SelectionTint";
 import { SettleHandoffs } from "./SettleHandoffs";
 import type { StageScreen } from "./screens/stage-screens";
 import { useShared } from "./screens/useShared";
+import { SlidingScreen } from "./sliding-screen";
 import { TabStrip } from "./TabStrip";
 import type { Aim, DropTargets, TabTarget, Target } from "./tiled/aim";
 import { bordersOf } from "./tiled/borders";
@@ -53,6 +55,7 @@ import type { NodeRef } from "./tree/path";
 import { focusedWindowIn } from "./tree/tiling";
 import { useCaptured } from "./useCaptured";
 import { keyOf, useFocusGlows } from "./useFocusGlows";
+import { useTabDrop } from "./useTabDrop";
 import type { DrawnWindow, WindowMotions } from "./useWindowMotion";
 import { useWindowMotion } from "./useWindowMotion";
 import { WindowFrame } from "./WindowFrame";
@@ -61,7 +64,12 @@ import type { ShellWindow } from "./window";
 import { browserIdOf, WindowKind } from "./window";
 import type { WindowMotion } from "./window-motion";
 import { barMotion } from "./window-motion";
-import { clippedTo, screenClipStyles, slidAcross } from "./window-styles";
+import {
+  clippedTo,
+  screenClipStyles,
+  slidAcross,
+  slidingAcross,
+} from "./window-styles";
 
 type Props = {
   /** The window the user is working in. */
@@ -127,6 +135,8 @@ type Props = {
   onNewTab: (id: string) => void;
   /** Browser window `id`'s page entered or left fullscreen. */
   onPageFullscreen: (id: string, fullscreen: boolean) => void;
+  /** A page's text, link or image dropped on a tab strip. See `useTabDrop`. */
+  onTabDrop: (target: NodeRef, edge: Direction, url: string) => void;
   /** A float resized to `box`, in the page's pixels, on the screen `on`. */
   onResize: (id: string, box: Rect, on: Geometry) => void;
   /** The user clicked a window or its chrome. */
@@ -194,6 +204,7 @@ export const Stage = memo(
     onNewTab,
     onPageFullscreen,
     onResize,
+    onTabDrop,
     onSelect,
     onStretch,
     overview,
@@ -257,6 +268,7 @@ export const Stage = memo(
       active === undefined ? "resting" : barMotion(active.motion);
     // Drawn over every window, not by the dragged one: see `DropIndicator`.
     const [aim, setAim] = useState<Aim | undefined>(undefined);
+    const tabDrop = useTabDrop({ onAim: setAim, onTabDrop, targets });
     // A border drag or a tiled resize grab resizes in place, so unlike a move
     // it does not fade the window. See `stageStyles`.
     const [stretching, setStretching] = useState(false);
@@ -303,7 +315,7 @@ export const Stage = memo(
     const { onPlayedOut } = motions;
     const tabsShown = motions.tabs.map(({ tab }) => tab);
     return (
-      <main>
+      <main {...tabDrop}>
         <SettleHandoffs>
           {/*
           Before every window, so each float covers its own shadow by document
@@ -576,6 +588,7 @@ export const Stage = memo(
                 <WindowBar
                   crossing={crossing}
                   description={descriptionOf(window)}
+                  domicile={domicile}
                   dragging={stretching || held.has(window.id)}
                   float={desk.floats.get(window.id)}
                   focused={focused}
@@ -1081,6 +1094,8 @@ const WindowContents = memo(
 type WindowBarProps = {
   /** See `DrawnWindow.crossing`. */
   crossing: boolean;
+  /** Where a browser window's page's profile comes from, for its mark. */
+  domicile: Pick<Domicile, "browser">;
   description: string | undefined;
   dragging: boolean;
   float: Float | undefined;
@@ -1118,6 +1133,7 @@ const WindowBar = memo(
   ({
     crossing,
     description,
+    domicile,
     dragging,
     float,
     focused,
@@ -1146,6 +1162,10 @@ const WindowBar = memo(
     window,
   }: WindowBarProps) => {
     const { id } = window;
+    const mark = useProfileMark(
+      domicile,
+      window.kind === WindowKind.Browser ? engineWindowOf(id) : undefined,
+    );
     const hovered = useCallback(
       (at: Spot) => {
         onHover(id, at);
@@ -1212,6 +1232,7 @@ const WindowBar = memo(
           frame={placement.frame}
           fullscreen={fullscreen}
           icon={icon}
+          mark={mark}
           motion={barMotion(motion)}
           onAim={onAim}
           onClose={closed}
@@ -1377,7 +1398,8 @@ const ContainerTab = memo(
 
 /**
  * Gives its children the distances that slide `frame` off screen `on`, and
- * clips them to it during a workspace switch. See `screenClipStyles`. In the
+ * clips them to it during a workspace switch, outside and inside the slide
+ * (see `clippedAlong`). See `screenClipStyles`. In the
  * overview, shows them through their tile; see `seenAt`.
  */
 const Sliding = ({
@@ -1413,11 +1435,20 @@ const Sliding = ({
     <div
       className={seenStyles({
         arriving: seen?.arriving !== undefined,
+        seen: seen !== undefined,
         shut: seen?.shut ?? false,
       })}
       style={seenAt(seen, on?.geometry.screen)}
     >
-      {children}
+      <SlidingScreen
+        value={
+          on === undefined
+            ? undefined
+            : slidingAcross(on.geometry.screen, motion)
+        }
+      >
+        {children}
+      </SlidingScreen>
     </div>
   </div>
 );
@@ -1682,8 +1713,9 @@ const windowNamed = (
 };
 
 /**
- * A window's icon URL: a client's from its desktop entry, a browser window's
- * page icon.
+ * A window's icon URL: a client's from its desktop entry, an app window's
+ * from its app's (an Electron app's, whose page icon isn't its own), else a
+ * browser window's page icon.
  */
 const iconOf = (
   window: ShellWindow,
@@ -1691,7 +1723,8 @@ const iconOf = (
 ): string | undefined =>
   window.kind === WindowKind.App
     ? clientIcons.get(window.desktopId)
-    : window.icon;
+    : ((window.appId === "" ? undefined : clientIcons.get(window.appId)) ??
+      window.icon);
 
 /** A browser window's page description; a client's window has none. */
 const descriptionOf = (window: ShellWindow): string | undefined =>

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 
-import { ORDER_KEY, rememberOrder } from "./remembered-order";
+import { ORDER_KEY, rememberKeys } from "./remembered-keys";
 import { useTrayOrder } from "./useTrayOrder";
 
 beforeEach(() => {
@@ -10,7 +10,7 @@ beforeEach(() => {
 
 describe("useTrayOrder", () => {
   it("starts from the order last remembered", () => {
-    rememberOrder(["b", "a"]);
+    rememberKeys(ORDER_KEY, ["b", "a"]);
 
     const { result } = renderHook(() => useTrayOrder([]));
 
@@ -63,7 +63,7 @@ describe("useTrayOrder", () => {
   });
 
   it("ignores what another page writes under another key", () => {
-    rememberOrder(["a"]);
+    rememberKeys(ORDER_KEY, ["a"]);
     const { result } = renderHook(() => useTrayOrder([]));
 
     act(() => {

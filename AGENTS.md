@@ -51,6 +51,14 @@ If the right fix needs the engine, make the engine change in the same pull
 request. See [RELEASES.md](/packages/domicile-engine/docs/RELEASES.md) for how
 CI builds and pins it.
 
+## Release notes
+
+Every pull request adds a line to the `_Unreleased_` entry of
+[docs/RELEASE-NOTES.md](/docs/RELEASE-NOTES.md) (Domicile, for shell authors)
+or [docs/use/RELEASE-NOTES.md](/docs/use/RELEASE-NOTES.md) (manganese, for
+users), or carries a `Release-notes: none` trailer on a commit. CI fails it
+otherwise. See [RELEASING.md](/docs/contributing/RELEASING.md#release-notes).
+
 ## Rebasing pull requests
 
 This rule overrides any instruction to rebase open pull requests whenever a
@@ -187,6 +195,9 @@ not rules, and carry no authority level. Read the one for the area you work in.
 | [/docs/architecture/TEXT-INPUT.md](/docs/architecture/TEXT-INPUT.md) | Input methods (fcitx5, IBus) composing into native windows, pages and the shell through one relay per seat. The plan. |
 | [/docs/architecture/COLOR.md](/docs/architecture/COLOR.md) | 10-bit client formats and scanout, `wp_color_management_v1`, and opt-in HDR per display on Chromium's color pipeline. The plan. |
 | [/docs/architecture/APP-MODULES.md](/docs/architecture/APP-MODULES.md) | Apps as modules: `domicile open --app <entry.js>` calls `main(root, host)` on `domicile://app-<id>/`; History and Settings as app modules instead of extensions. |
+| [/docs/architecture/ELECTRON-APPS.md](/docs/architecture/ELECTRON-APPS.md) | Electron apps on the engine: `electron-host` runs the main process with a stand-in `electron` module, windows are app windows, preload and IPC over the Electron socket. The plan. |
+| [/docs/architecture/BROWSER-PROFILES.md](/docs/architecture/BROWSER-PROFILES.md) | Browser profiles: a Chrome profile per profile, sites mapped to profiles, moving a page between them. The plan. |
+| [/docs/architecture/MOTION.md](/docs/architecture/MOTION.md) | Shader effects for shells (SkSL as a `filter` function run in viz) and the motion pass over manganese: springs, interruptible motion, per-surface changes. The plan. |
 
 [`/docs/KNOWN-GAPS.md`](/docs/KNOWN-GAPS.md) lists known gaps, each pointing at the doc
 with the detail. Read it before substantial work. Remove a gap when it's fixed.
@@ -218,6 +229,7 @@ How to use, configure and debug Domicile. No authority level.
 | [/docs/IDLE.md](/docs/IDLE.md) | Idle blanking, `HostMessage::Idle`, idle inhibitors, sleeping the monitors on demand, and log lines to check on hardware. |
 | [/docs/LOCK.md](/docs/LOCK.md) | The screen lock: where it is enforced, request categories, ordering, verifiers, passphrase checks, fail-closed PAM, log lines. |
 | [/docs/TTY-SESSION.md](/docs/TTY-SESSION.md) | DRM master, console switching through logind, suspend, and input from logind. |
+| [/docs/LOGGING.md](/docs/LOGGING.md) | Where logs go: journal entries with priorities and a name per part, or plain lines on a terminal; reading them with `journalctl`. |
 | [/docs/TTY-DEBUGGING.md](/docs/TTY-DEBUGGING.md) | Seeing a modeset in logs, black screens with a clean log, and hosts where scanout and render cards differ. |
 | [/docs/contributing/COMPOSITOR-DEBUGGING.md](/docs/contributing/COMPOSITOR-DEBUGGING.md) | The compositor's frame report and slow-launch logs; rendering, Smithay and test-client pitfalls. |
 | [/docs/HARDWARE-CHECKS.md](/docs/HARDWARE-CHECKS.md) | Steps and expected log lines for each check that needs a lit panel (suspend, console switch, crashes, idle, PAM lock, latency, several monitors). |

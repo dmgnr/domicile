@@ -632,19 +632,49 @@ describe("window previews", () => {
 describe("shell commands", () => {
   it("streams each command `domicile send-shell` sends until it is stopped", async () => {
     const host = new FakeHost();
-    const listening = system(host).shellCommands();
+    const lock = { description: "Lock the desktop.", usage: "lock" };
+    const bound = {
+      action: "send-shell lock",
+      chord: "Meta+l",
+      mode: "default",
+    };
+    const listening = system(host).shellCommands([lock], [bound]);
     host.reply(1, { kind: "started" });
     const commands = started(await listening);
-    host.event(1, { command: ["focus", "right"], kind: "shell_command" });
+    host.event(1, {
+      command: ["focus", "right"],
+      kind: "shell_command",
+      sent: 4,
+    });
     commands.stop();
     host.end(1, { kind: "stopped" });
 
     expect(host.calls).toStrictEqual([
-      [1, { call: "shell_commands" }],
+      [1, { bindings: [bound], call: "shell_commands", commands: [lock] }],
       [1, { call: "unwatch" }],
     ]);
     expect(await Array.fromAsync(commands.items)).toStrictEqual([
-      ["focus", "right"],
+      { sent: 4, words: ["focus", "right"] },
+    ]);
+  });
+
+  it("says whether this page ran a command, what it printed, and why not", async () => {
+    const host = new FakeHost();
+    const calls = system(host);
+    const ran = calls.answerShellCommand(4, Ok("ran"));
+    host.reply(1, { kind: "set" });
+    const refused = calls.answerShellCommand(5, Err("no command `x`"));
+    host.reply(2, { kind: "set" });
+    const printed = calls.answerShellCommand(6, Ok({ output: "[]" }));
+    host.reply(3, { kind: "set" });
+
+    expect(await ran).toStrictEqual(Ok("set"));
+    expect(await refused).toStrictEqual(Ok("set"));
+    expect(await printed).toStrictEqual(Ok("set"));
+    expect(host.calls).toStrictEqual([
+      [1, { call: "answer_shell_command", sent: 4 }],
+      [2, { call: "answer_shell_command", refused: "no command `x`", sent: 5 }],
+      [3, { call: "answer_shell_command", output: "[]", sent: 6 }],
     ]);
   });
 });
@@ -1118,5 +1148,66 @@ describe("keymaps", () => {
     ]);
     expect(await next).toStrictEqual(Ok("set"));
     expect(await named).toStrictEqual(Ok("set"));
+  });
+});
+
+describe("agents", () => {
+  it("lists the agents in now and those remembered", async () => {
+    const host = new FakeHost();
+    const listing = system(host).agents();
+    host.reply(1, {
+      connected: [
+        { agent: "Claude Code", reach: { type: "desk" }, session: 4 },
+      ],
+      kind: "agents",
+      remembered: [{ agent: "Codex", last_used_ms: 9 }],
+    });
+
+    expect(host.calls).toStrictEqual([[1, { call: "agents" }]]);
+    expect(await listing).toStrictEqual(
+      Ok({
+        connected: [
+          { agent: "Claude Code", reach: { kind: "desk" }, session: 4 },
+        ],
+        remembered: [{ agent: "Codex", lastUsedMs: 9 }],
+      }),
+    );
+  });
+
+  it("forgets a remembered agent", async () => {
+    const host = new FakeHost();
+    const forgetting = system(host).forgetAgent("Codex");
+    host.reply(1, { kind: "set" });
+
+    expect(host.calls).toStrictEqual([
+      [1, { agent: "Codex", call: "forget_agent" }],
+    ]);
+    expect(await forgetting).toStrictEqual(Ok("set"));
+  });
+});
+
+describe("links", () => {
+  it("streams each link of the claimed schemes until it is stopped", async () => {
+    const host = new FakeHost();
+    const listening = system(host).claimLinks(["mailto"]);
+    host.reply(1, { kind: "started" });
+    const links = started(await listening);
+    host.event(1, {
+      app_id: "slack",
+      kind: "link",
+      url: "mailto:a@example.com",
+    });
+    host.event(1, { kind: "link", url: "mailto:b@example.com" });
+    links.stop();
+    host.end(1, { kind: "stopped" });
+
+    expect(host.calls).toStrictEqual([
+      [1, { call: "claim_links", schemes: ["mailto"] }],
+      [1, { call: "unwatch" }],
+    ]);
+    expect(await Array.fromAsync(links.items)).toStrictEqual([
+      { appId: "slack", url: "mailto:a@example.com" },
+      { appId: undefined, url: "mailto:b@example.com" },
+    ]);
   });
 });

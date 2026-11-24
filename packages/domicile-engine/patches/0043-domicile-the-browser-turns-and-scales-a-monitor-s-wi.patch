@@ -196,7 +196,7 @@ index e44d0c5..b808407 100644
      window_manager_ = std::make_unique<DrmWindowHostManager>();
      cursor_ = std::make_unique<DrmCursor>(window_manager_.get());
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 2a598b2..ed30405 100644
+index cdbb550..bf09ed2 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -77,6 +77,15 @@ struct DomicileDisplayLayout {
@@ -215,7 +215,7 @@ index 2a598b2..ed30405 100644
  };
  
  // Base class for Ozone platform implementations.
-@@ -276,6 +285,13 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -263,6 +272,13 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
      // always fires on a healthy one.
      bool presents_every_window = true;
  
@@ -230,7 +230,7 @@ index 2a598b2..ed30405 100644
      static SupportsForTest override_supports_per_window_scaling_for_test;
  
 diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
-index fb96d56..dbb8671 100644
+index 2ca10f8..6954fee 100644
 --- a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
 +++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
 @@ -17,6 +17,7 @@
@@ -268,7 +268,7 @@ index fb96d56..dbb8671 100644
  ui::PlatformWindowOpacity GetPlatformWindowOpacity(
      Widget::InitParams::WindowOpacity opacity) {
    switch (opacity) {
-@@ -960,6 +974,26 @@ bool DesktopWindowTreeHostPlatform::AreScreenshotsAllowed() {
+@@ -974,6 +988,26 @@ bool DesktopWindowTreeHostPlatform::AreScreenshotsAllowed() {
  }
  
  gfx::Transform DesktopWindowTreeHostPlatform::GetRootTransform() const {
@@ -295,7 +295,7 @@ index fb96d56..dbb8671 100644
    // TODO(crbug.com/40218466): This can use wrong scale during initialization.
    // Revisit this as a part of 'use dip' work.
  
-@@ -996,7 +1030,65 @@ void DesktopWindowTreeHostPlatform::HideImpl() {
+@@ -1010,7 +1044,65 @@ void DesktopWindowTreeHostPlatform::HideImpl() {
  }
  
  gfx::Rect DesktopWindowTreeHostPlatform::CalculateRootWindowBounds() const {
@@ -362,7 +362,7 @@ index fb96d56..dbb8671 100644
  }
  
  gfx::Rect DesktopWindowTreeHostPlatform::GetBoundsInDIP() const {
-@@ -1244,7 +1336,7 @@ gfx::PointF DesktopWindowTreeHostPlatform::ConvertScreenPointToLocalDIP(
+@@ -1258,7 +1350,7 @@ gfx::PointF DesktopWindowTreeHostPlatform::ConvertScreenPointToLocalDIP(
  
  gfx::Insets DesktopWindowTreeHostPlatform::ConvertInsetsToPixels(
      const gfx::Insets& insets_dip) const {
@@ -371,7 +371,7 @@ index fb96d56..dbb8671 100644
    return gfx::ScaleToCeiledInsets(insets_dip, scale.x(), scale.y());
  }
  
-@@ -1254,7 +1346,7 @@ void DesktopWindowTreeHostPlatform::OnWorkspaceChanged() {
+@@ -1268,7 +1360,7 @@ void DesktopWindowTreeHostPlatform::OnWorkspaceChanged() {
  
  gfx::Rect DesktopWindowTreeHostPlatform::ToDIPRect(
      const gfx::Rect& rect_in_pixels) const {
@@ -380,7 +380,7 @@ index fb96d56..dbb8671 100644
        .InverseMapRect(rect_in_pixels)
        .value_or(rect_in_pixels);
  }
-@@ -1262,7 +1354,7 @@ gfx::Rect DesktopWindowTreeHostPlatform::ToDIPRect(
+@@ -1276,7 +1368,7 @@ gfx::Rect DesktopWindowTreeHostPlatform::ToDIPRect(
  gfx::Rect DesktopWindowTreeHostPlatform::ToPixelRect(
      const gfx::Rect& rect_in_dip) const {
    gfx::RectF rect_in_pixels_f =
@@ -390,7 +390,7 @@ index fb96d56..dbb8671 100644
    // error, the converted result may become slightly larger than expected value,
    // such as 3000.0005. Allow error to round down in such case. This is
 diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
-index e8926ee..54afd9e 100644
+index 6a3589c..bd3a9ed 100644
 --- a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
 +++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
 @@ -153,6 +153,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform

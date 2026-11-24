@@ -32,6 +32,11 @@ meters.meter(new Map([[id, audio.meters.get(id)]]));
   microphone records it: call `stop` when the meters are not shown.
 - The library's own meters, other mixers' meters and PipeWire filter streams
   are left out of the stream lists.
+- A filter device (e.g. speaker correction) lists what it passes through in
+  `through` and reads as `muted` when any of it is. `setMuted(id, false)`
+  reads the server and unmutes the whole chain; muting mutes only `id`.
+  While locked, a muted filter stream in the chain stays muted (`locked`).
+  Devices behind a filter are `filtered`: hide them from pickers.
 - While the desktop is locked, only `watch`, and `setVolume` and `setMuted` on
   an output, work ([LOCK.md](/docs/LOCK.md)). Everything else fails with
   `locked`.

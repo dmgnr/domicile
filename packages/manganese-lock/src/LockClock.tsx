@@ -1,5 +1,8 @@
 import type { wallClock } from "@domicile-desktop/manganese-bar-module-clock/useNow";
-import { useNow } from "@domicile-desktop/manganese-bar-module-clock/useNow";
+import {
+  MINUTE_MS,
+  useNow,
+} from "@domicile-desktop/manganese-bar-module-clock/useNow";
 import { css } from "../styled-system/css";
 import { vstack } from "../styled-system/patterns";
 
@@ -11,11 +14,16 @@ const DIGITS = 2;
 
 type Props = {
   now?: typeof wallClock | undefined;
+  /**
+   * Whether the desktop is locked. The lock sheet stays mounted to fade, so
+   * the clock stops while unlocked rather than ticking on a hidden sheet.
+   */
+  locked: boolean;
 };
 
 /** The large clock on the lock screen. */
-export const LockClock = ({ now }: Props) => {
-  const time = useNow(now);
+export const LockClock = ({ locked, now }: Props) => {
+  const time = useNow(now, MINUTE_MS, locked);
 
   return (
     <time className={clockStyles} dateTime={time.toISOString()}>

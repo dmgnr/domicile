@@ -117,7 +117,8 @@ const subscribe = async (
       return first.map(() => "ended" as const);
     });
 
-const readServer = async (
+/** Reads the server's whole state once. */
+export const readServer = async (
   domicile: AudioDesktop,
 ): Promise<Result<Audio, AudioError>> => {
   const info = await pactl(domicile, ["-f", "json", "info"]);

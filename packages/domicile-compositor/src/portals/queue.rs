@@ -8,7 +8,7 @@
 //! until it ends, and the shell stops it with [`PortalAnswer::Stop`]. A screen
 //! recording, listed with [`Queue::begin_controlled`], also takes
 //! [`PortalAnswer::Pause`], [`PortalAnswer::Resume`] and
-//! [`PortalAnswer::Discard`].
+//! [`PortalAnswer::Discard`], and an agent's [`PortalAnswer::Change`].
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -32,7 +32,8 @@ struct Listener {
 /// Hears the dialogs and the sessions on each change.
 type Publish = dyn Fn(Vec<PortalRequest>, Vec<Capturing>) + Send + Sync;
 
-/// Takes the shell's stop, or a recording's pause, resume or discard.
+/// Takes the shell's stop, a recording's pause, resume or discard, or an
+/// agent's change.
 type Controller = Arc<dyn Fn(&PortalAnswer) + Send + Sync>;
 
 /// Resolves a `parent_window` to an app id.
@@ -73,7 +74,11 @@ impl Queue {
     pub fn answer(&self, id: u32, answer: PortalAnswer) {
         if matches!(
             answer,
-            PortalAnswer::Stop | PortalAnswer::Pause | PortalAnswer::Resume | PortalAnswer::Discard
+            PortalAnswer::Stop
+                | PortalAnswer::Change
+                | PortalAnswer::Pause
+                | PortalAnswer::Resume
+                | PortalAnswer::Discard
         ) {
             // Outside the lock: controlling a session changes the queue
             // again.
@@ -265,9 +270,22 @@ pub async fn ask_unbidden(
     parent_window: &str,
     kind: PortalKind,
 ) -> PortalAnswer {
+    ask_noting(queue, app_id, parent_window, kind, |_| ()).await
+}
+
+/// [`ask_unbidden`], handing `noted` the dialog's id once it is queued, so
+/// the caller can [`Queue::withdraw`] it.
+pub async fn ask_noting(
+    queue: &Queue,
+    app_id: String,
+    parent_window: &str,
+    kind: PortalKind,
+    noted: impl FnOnce(u32),
+) -> PortalAnswer {
     let (replier, answered) = reply();
     match queue.submit(app_id, parent_window, kind, replier) {
-        Ok(_) => {
+        Ok(id) => {
+            noted(id);
             queue.publish();
             answered.await.unwrap_or(PortalAnswer::Refused)
         }

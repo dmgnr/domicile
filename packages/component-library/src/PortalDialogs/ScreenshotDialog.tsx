@@ -11,6 +11,8 @@ import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
 import type { App } from "../useApps/useApps";
 import { onFrame } from "./on-frame";
+import { usePicking } from "./picking";
+import type { Presence } from "./presence";
 import type { Region } from "./RegionPicker";
 import { RegionPicker } from "./RegionPicker";
 import type { Choice } from "./SourcePicker";
@@ -32,6 +34,8 @@ type Props = {
   /** Who asks, as the dialog names them; absent when the shell itself asks. */
   asker: string | undefined;
   body: FrozenDesk;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   /** The desktop's browser windows, as the engine lists them. */
   browserWindows: readonly BrowserWindow[];
   screen: string | undefined;
@@ -93,6 +97,7 @@ export const ScreenshotDialog = ({
   body,
   browserWindows,
   pageIcon,
+  presence,
   previewWindow,
   screen,
   shownWindows,
@@ -119,12 +124,13 @@ export const ScreenshotDialog = ({
       ),
       pick: Pick.Window(id),
     })),
-    ...browserWindows.map(({ id, title }) => ({
+    ...browserWindows.map(({ appId, id, title }) => ({
       ...browserChoice(
         id,
         title,
         pageIcon(id),
         shownArea(body, shown, ShownWindowKind.Browser, id),
+        appId === "" ? undefined : apps(appId),
       ),
       pick: Pick.BrowserWindow(id),
     })),
@@ -140,10 +146,10 @@ export const ScreenshotDialog = ({
       ? partOf(pickAt(choices, picked).pick, part)
       : Pick.Area(picked);
   // Whether the area is being selected on screen, over the frozen desk.
-  const [drawing, setDrawing] = useState(false);
+  const { dialog, picker, setPicking } = usePicking(presence);
   useEffect(() => {
     const copy = (event: KeyboardEvent) => {
-      if (!drawing && isCopy(event)) {
+      if (dialog.open && isCopy(event)) {
         event.preventDefault();
         answer(answerOf(pick, true));
       }
@@ -152,114 +158,120 @@ export const ScreenshotDialog = ({
     return () => {
       document.removeEventListener("keydown", copy);
     };
-  }, [answer, drawing, pick]);
-  return drawing ? (
-    <RegionPicker
-      actions={[
-        {
-          label: "Copy",
-          pick: (region) => {
-            answer(Answer.Screenshot(onFrameOf(body, region), true));
-          },
-          shortcut: isCopy,
-        },
-        {
-          label: "Save",
-          pick: (region) => {
-            answer(Answer.Screenshot(onFrameOf(body, region), false));
-          },
-        },
-      ]}
-      back={() => {
-        setDrawing(false);
-      }}
-      cancel={() => {
-        answer(Answer.Canceled());
-      }}
-      frozen={body}
-    />
-  ) : (
-    <ModalDialog
-      closeButton={false}
-      footer={
-        <>
-          <Button
-            onClick={() => {
-              setDrawing(true);
-            }}
-            variant="ghost"
-          >
-            Select on screen
-          </Button>
-          <Button
-            onClick={() => {
-              answer(Answer.Canceled());
-            }}
-            variant="outline"
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              answer(answerOf(pick, true));
-            }}
-            variant="outline"
-          >
-            Copy
-          </Button>
-          <Button
-            onClick={() => {
-              answer(answerOf(pick, false));
-            }}
-          >
-            Save
-          </Button>
-        </>
-      }
-      onOpenChange={(open) => {
-        if (!open) {
-          answer(Answer.Canceled());
+  }, [answer, dialog.open, pick]);
+  return (
+    <>
+      {picker !== undefined && (
+        <RegionPicker
+          actions={[
+            {
+              label: "Copy",
+              pick: (region) => {
+                answer(Answer.Screenshot(onFrameOf(body, region), true));
+              },
+              shortcut: isCopy,
+            },
+            {
+              label: "Save",
+              pick: (region) => {
+                answer(Answer.Screenshot(onFrameOf(body, region), false));
+              },
+            },
+          ]}
+          back={() => {
+            setPicking(false);
+          }}
+          cancel={() => {
+            answer(Answer.Canceled());
+          }}
+          frozen={body}
+          {...picker}
+        />
+      )}
+      <ModalDialog
+        closeButton={false}
+        footer={
+          <>
+            <Button
+              onClick={() => {
+                setPicking(true);
+              }}
+              variant="ghost"
+            >
+              Select on screen
+            </Button>
+            <Button
+              onClick={() => {
+                answer(Answer.Canceled());
+              }}
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                answer(answerOf(pick, true));
+              }}
+              variant="outline"
+            >
+              Copy
+            </Button>
+            <Button
+              onClick={() => {
+                answer(answerOf(pick, false));
+              }}
+            >
+              Save
+            </Button>
+          </>
         }
-      }}
-      open
-      screen={screen}
-      size="xl"
-      title="Take a screenshot"
-    >
-      {asker !== undefined && <p className={askerStyles}>{`${asker} asks`}</p>}
-      <SourcePicker
-        caption={caption(
-          typeof picked === "number" &&
-            pickAt(choices, picked).area === undefined,
-          part,
-        )}
-        desk={body}
-        dragged={typeof picked === "number" ? undefined : picked}
-        draggedPart={part}
-        label="What to save"
-        multiple={false}
-        onDrag={(area) => {
-          setPicked(area);
-          setPart(undefined);
-        }}
-        onDragPart={setPart}
-        onPick={([index]) => {
-          if (index === undefined) {
-            throw new Error("a screenshot pick of nothing");
-          } else {
-            setPicked(index);
-            setPart(undefined);
+        onOpenChange={(open) => {
+          if (!open) {
+            answer(Answer.Canceled());
           }
         }}
-        picked={typeof picked === "number" ? [picked] : []}
-        previewWindow={previewWindow}
-        sections={[
-          { choices: [whole], label: undefined },
-          { choices: screens, label: "Screens" },
-          { choices: windows, label: "Windows" },
-        ]}
-      />
-    </ModalDialog>
+        {...dialog}
+        screen={screen}
+        size="xl"
+        title="Take a screenshot"
+      >
+        {asker !== undefined && (
+          <p className={askerStyles}>{`${asker} asks`}</p>
+        )}
+        <SourcePicker
+          caption={caption(
+            typeof picked === "number" &&
+              pickAt(choices, picked).area === undefined,
+            part,
+          )}
+          desk={body}
+          dragged={typeof picked === "number" ? undefined : picked}
+          draggedPart={part}
+          label="What to save"
+          multiple={false}
+          onDrag={(area) => {
+            setPicked(area);
+            setPart(undefined);
+          }}
+          onDragPart={setPart}
+          onPick={([index]) => {
+            if (index === undefined) {
+              throw new Error("a screenshot pick of nothing");
+            } else {
+              setPicked(index);
+              setPart(undefined);
+            }
+          }}
+          picked={typeof picked === "number" ? [picked] : []}
+          previewWindow={previewWindow}
+          sections={[
+            { choices: [whole], label: undefined },
+            { choices: screens, label: "Screens" },
+            { choices: windows, label: "Windows" },
+          ]}
+        />
+      </ModalDialog>
+    </>
   );
 };
 

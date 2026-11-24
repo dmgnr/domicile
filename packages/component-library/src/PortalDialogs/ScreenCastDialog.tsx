@@ -16,6 +16,8 @@ import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
 import type { App } from "../useApps/useApps";
 import { onDesk } from "./on-frame";
+import { usePicking } from "./picking";
+import type { Presence } from "./presence";
 import { RegionPicker } from "./RegionPicker";
 import type { Choice } from "./SourcePicker";
 import { SourcePicker } from "./SourcePicker";
@@ -40,6 +42,8 @@ type Props = {
   browserWindows: readonly BrowserWindow[];
   /** The TV a cast that asked shows the pick on, titling the dialog for it. */
   castTo?: string | undefined;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
   /** A browser window's page icon URL, if its page has one. */
   pageIcon: (id: string) => string | undefined;
@@ -78,6 +82,7 @@ export const ScreenCastDialog = ({
   pageIcon,
   previewWindow,
   record = false,
+  presence,
   screen,
   shownWindows,
 }: Props) => {
@@ -108,7 +113,7 @@ export const ScreenCastDialog = ({
   const [part, setPart] = useState<
     { index: number; area: ShotRect } | undefined
   >(undefined);
-  const [drawing, setDrawing] = useState(false);
+  const { dialog, picker, setPicking } = usePicking(presence);
   const screens: Offered[] = body.sources.flatMap((source) =>
     source.kind === CastSourceKind.Monitor
       ? [
@@ -141,134 +146,139 @@ export const ScreenCastDialog = ({
         : [],
     ),
     ...(body.browserWindows
-      ? browserWindows.map(({ id, title }) => ({
+      ? browserWindows.map(({ appId, id, title }) => ({
           ...browserChoice(
             id,
             title,
             pageIcon(id),
             shownArea(body.desk, shown, ShownWindowKind.Browser, id),
+            appId === "" ? undefined : apps(appId),
           ),
           source: Source.BrowserWindow({ id, title }),
         }))
       : []),
   ];
   const offered = [...whole, ...screens, ...windows];
-  return drawing ? (
-    <RegionPicker
-      actions={[
-        {
-          label: action(castTo, record),
-          pick: (region) => {
-            answer(Answer.ScreenCast([Source.Region(region)]));
-          },
-        },
-      ]}
-      back={() => {
-        setDrawing(false);
-      }}
-      cancel={() => {
-        answer(Answer.Canceled());
-      }}
-    />
-  ) : (
-    <ModalDialog
-      closeButton={false}
-      footer={
-        <>
-          {body.region ? (
+  return (
+    <>
+      {picker !== undefined && (
+        <RegionPicker
+          actions={[
+            {
+              label: action(castTo, record),
+              pick: (region) => {
+                answer(Answer.ScreenCast([Source.Region(region)]));
+              },
+            },
+          ]}
+          back={() => {
+            setPicking(false);
+          }}
+          cancel={() => {
+            answer(Answer.Canceled());
+          }}
+          {...picker}
+        />
+      )}
+      <ModalDialog
+        closeButton={false}
+        footer={
+          <>
+            {body.region ? (
+              <Button
+                onClick={() => {
+                  setPicking(true);
+                }}
+                variant="ghost"
+              >
+                Select on screen
+              </Button>
+            ) : undefined}
             <Button
               onClick={() => {
-                setDrawing(true);
+                answer(Answer.Canceled());
               }}
-              variant="ghost"
+              variant="outline"
             >
-              Select on screen
+              Cancel
             </Button>
-          ) : undefined}
-          <Button
-            onClick={() => {
-              answer(Answer.Canceled());
-            }}
-            variant="outline"
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={picked.length === 0 && dragged === undefined}
-            onClick={() => {
-              answer(
-                Answer.ScreenCast(
-                  desk !== undefined && dragged !== undefined
-                    ? [Source.Region(onDesk(desk, dragged))]
-                    : offered.flatMap(({ source }, index) =>
-                        picked.includes(index)
-                          ? [
-                              part?.index === index
-                                ? partOf(source, part.area)
-                                : source,
-                            ]
-                          : [],
-                      ),
-                ),
-              );
-            }}
-          >
-            {action(castTo, record)}
-          </Button>
-        </>
-      }
-      onOpenChange={(open) => {
-        if (!open) {
-          answer(Answer.Canceled());
+            <Button
+              disabled={picked.length === 0 && dragged === undefined}
+              onClick={() => {
+                answer(
+                  Answer.ScreenCast(
+                    desk !== undefined && dragged !== undefined
+                      ? [Source.Region(onDesk(desk, dragged))]
+                      : offered.flatMap(({ source }, index) =>
+                          picked.includes(index)
+                            ? [
+                                part?.index === index
+                                  ? partOf(source, part.area)
+                                  : source,
+                              ]
+                            : [],
+                        ),
+                  ),
+                );
+              }}
+            >
+              {action(castTo, record)}
+            </Button>
+          </>
         }
-      }}
-      open
-      screen={screen}
-      size="xl"
-      title={
-        heading(castTo, record) ??
-        title(body.multiple, windows.length > 0, screens.length > 0)
-      }
-    >
-      {castTo === undefined && !record && (
-        <p className={askerStyles}>{`${asker} wants to record`}</p>
-      )}
-      <SourcePicker
-        caption={caption(offered, picked, dragged, part, body.region, record)}
-        desk={desk}
-        dragged={dragged}
-        draggedPart={part?.area}
-        label={record ? "What to record" : "What to share"}
-        multiple={body.multiple}
-        onDrag={
-          body.region
-            ? (area) => {
-                setDragged(area);
-                setPicked([]);
-                setPart(undefined);
-              }
-            : undefined
-        }
-        onDragPart={(area) => {
-          const index = picked.at(-1);
-          if (index !== undefined) {
-            setPart({ area, index });
+        onOpenChange={(open) => {
+          if (!open) {
+            answer(Answer.Canceled());
           }
         }}
-        onPick={(indices) => {
-          setPicked(indices);
-          setDragged(undefined);
-          setPart(undefined);
-        }}
-        picked={picked}
-        previewWindow={previewWindow}
-        sections={[
-          { choices: whole, label: undefined },
-          { choices: screens, label: "Screens" },
-          { choices: windows, label: "Windows" },
-        ]}
-      />
-    </ModalDialog>
+        {...dialog}
+        screen={screen}
+        size="xl"
+        title={
+          heading(castTo, record) ??
+          title(body.multiple, windows.length > 0, screens.length > 0)
+        }
+      >
+        {castTo === undefined && !record && (
+          <p className={askerStyles}>{`${asker} wants to record`}</p>
+        )}
+        <SourcePicker
+          caption={caption(offered, picked, dragged, part, body.region, record)}
+          desk={desk}
+          dragged={dragged}
+          draggedPart={part?.area}
+          label={record ? "What to record" : "What to share"}
+          multiple={body.multiple}
+          onDrag={
+            body.region
+              ? (area) => {
+                  setDragged(area);
+                  setPicked([]);
+                  setPart(undefined);
+                }
+              : undefined
+          }
+          onDragPart={(area) => {
+            const index = picked.at(-1);
+            if (index !== undefined) {
+              setPart({ area, index });
+            }
+          }}
+          onPick={(indices) => {
+            setPicked(indices);
+            setDragged(undefined);
+            setPart(undefined);
+          }}
+          picked={picked}
+          previewWindow={previewWindow}
+          sections={[
+            { choices: whole, label: undefined },
+            { choices: screens, label: "Screens" },
+            { choices: windows, label: "Windows" },
+          ]}
+        />
+      </ModalDialog>
+    </>
   );
 };
 

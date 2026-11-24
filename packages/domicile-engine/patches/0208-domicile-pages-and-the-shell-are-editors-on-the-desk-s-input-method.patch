@@ -18,12 +18,12 @@ for it.
 Verified: not built. This repository cannot build Chromium; the engine
 job builds it on `crux`.
 ---
- ui/ozone/platform/drm/BUILD.gn              | 25 ++++++++++++++++++
- ui/ozone/platform/drm/ozone_platform_drm.cc | 39 +++++++++++++++++++++++++----
+ ui/ozone/platform/drm/BUILD.gn              | 25 +++++++++++++
+ ui/ozone/platform/drm/ozone_platform_drm.cc | 39 ++++++++++++++++++---
  2 files changed, 59 insertions(+), 5 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 6116e45..6157c98 100644
+index 75c5fc2..b1fdabb 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
 @@ -231,6 +231,18 @@ source_set("gbm") {
@@ -45,7 +45,7 @@ index 6116e45..6157c98 100644
    }
  
    if (!use_static_angle || is_chromeos) {
-@@ -336,6 +348,10 @@ source_set("gbm_unittests") {
+@@ -338,6 +350,10 @@ source_set("gbm_unittests") {
      ]
    }
  
@@ -56,7 +56,7 @@ index 6116e45..6157c98 100644
    deps = [
      ":gbm",
      "//base/test:test_support",
-@@ -393,6 +409,15 @@ source_set("gbm_unittests") {
+@@ -395,6 +411,15 @@ source_set("gbm_unittests") {
      "//ui/base/cursor/domicile:desk_cursor_theme",
      "//ui/base/cursor/domicile:xcursor_theme",
    ]

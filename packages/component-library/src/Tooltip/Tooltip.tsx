@@ -1,12 +1,13 @@
 import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
 import type { ReactElement, ReactNode } from "react";
-import { useContext } from "react";
+import { useContext, useRef } from "react";
 
 import { css } from "../../styled-system/css";
 import type { ExtendProps } from "../extend-props";
 import type { Alignment, Side, Tone } from "../Popover/Popover";
 import { PopoverContainer } from "../Popover/Popover";
 import { usePopupBoundary } from "../PopupBoundary/PopupBoundary";
+import { useClosedWithScene } from "../PopupScene/PopupScene";
 import "../stylesheet";
 
 type Props = ExtendProps<
@@ -34,7 +35,8 @@ type Props = ExtendProps<
  * title. Use `Popover` for anything the user acts on.
  *
  * Stays inside its `PopupBoundary` or its trigger's `<Screen>` region, as
- * `Popover` does, and draws in the same container.
+ * `Popover` does, and draws in the same container. Closes when its
+ * `PopupScene` changes.
  */
 export const Tooltip = ({
   align = "center",
@@ -48,8 +50,11 @@ export const Tooltip = ({
 }: Props) => {
   const { attach, boundary } = usePopupBoundary(spansWindows);
   const container = useContext(PopoverContainer);
+  const ownActions = useRef<BaseTooltip.Root.Actions | null>(null);
+  const actions = rootProps.actionsRef ?? ownActions;
+  const heard = useClosedWithScene(actions, rootProps);
   return (
-    <BaseTooltip.Root {...rootProps}>
+    <BaseTooltip.Root {...rootProps} actionsRef={actions} onOpenChange={heard}>
       <BaseTooltip.Trigger delay={delay} ref={attach} render={trigger} />
       <BaseTooltip.Portal container={container}>
         <BaseTooltip.Positioner

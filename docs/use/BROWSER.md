@@ -12,9 +12,11 @@ tiles beside your apps like any other.
 - Links clicked in your apps open here too, and so do PDFs, images and videos
   you open from the launcher.
 - `domicile open <address>` opens one from a terminal.
+- Drag text, a link or an image onto a group's tabs: a blue bar shows where
+  the new tab goes. Text is searched, or opened if it is an address.
 
 A new tab is a new window: it opens beside the one you were in, in the same
-group. Meta+W puts a group in tabs.
+group. Meta+W merges groups side by side into one group of tabs.
 
 ## The address bar
 
@@ -30,6 +32,53 @@ Each browser window has one, with:
 
 Right-click a page for its menu: open a link in a new window, copy or save an
 image, search for the selection.
+
+## Profiles
+
+A profile keeps a part of your life apart, such as work and personal. Each has
+its own sign-ins, site data and extensions, and opens the sites you give it.
+Sites you haven't given a profile open in your default one.
+
+The button at the start of the address bar shows the page's profile. Click it
+to:
+
+- Move the page to another profile, or open it in a new window of one.
+  Middle-click or Ctrl+click a profile to open the page in a new window of it.
+- Open this site in a profile from now on.
+- Switch the profile's extensions on and off.
+
+Tabs outside your default profile carry a dot of their profile's color.
+Following a link to another profile's site moves the page there.
+
+<!-- tab: Settings app -->
+
+Open **Settings**, then **Profiles**: a card for each profile with its color
+and extension switches, and the sites that open outside your default profile.
+The arrows on a card move the profile up or down, in Settings and in the
+profile menu. The rainbow circle after the colors picks any color.
+
+<!-- tab: Config file -->
+
+```json
+{
+  "browser": {
+    "profiles": {
+      "personal": { "name": "Personal", "color": "#0d9488" },
+      "work": { "name": "Work", "color": "#d97706" },
+      "private": { "name": "Private", "color": "#a78bfa", "private": true }
+    },
+    "order": ["personal", "work", "private"],
+    "default_profile": "personal",
+    "default_private_profile": "private",
+    "sites": { "*.acme.com": "work" }
+  }
+}
+```
+
+`order` is the order the profile menu and Settings list the profiles in.
+Profiles it leaves out follow, by id.
+
+<!-- /tabs -->
 
 ## Private windows
 
@@ -90,6 +139,28 @@ Listed extensions install without asking. Taking one off the list uninstalls
 it.
 
 <!-- /tabs -->
+
+## Spelling
+
+Text fields in pages, web apps and Electron apps underline misspelled words.
+Right-click one for suggestions, or **Add to dictionary** to stop it being
+marked.
+
+Spelling is checked in American English unless you choose other languages in
+your config file:
+
+```json
+{ "spellcheck": { "languages": ["en-US", "de-DE"] } }
+```
+
+On NixOS:
+
+```nix
+programs.domicile.settings.spellcheck.languages = ["en-US" "de-DE"];
+```
+
+Set `enabled` to `false` to turn it off. Dictionaries come with the desktop,
+and your words are never sent anywhere to be checked.
 
 ## Differences from Chrome
 

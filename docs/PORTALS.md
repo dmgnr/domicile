@@ -173,7 +173,10 @@ One request channel carries all dialogs. Each interface's backend builds on it.
   which the compositor already has. A monitor source is the composited
   output, which only viz has: the engine runs a `FrameSinkVideoCapturer` on
   the display's root frame sink and sends each frame's dmabuf over the broker
-  socket. One producer keeps cursor modes and restore tokens in one place.
+  socket. Frames come in shared memory instead when the GPU cannot make
+  dmabufs, as nested in a Wayland session with no render node. A capture viz
+  stops fails every stream and shot on it with viz's cause, such as a first
+  frame it could not allocate. One producer keeps cursor modes and restore tokens in one place.
   The producer is `src/casting/`: `Casting::start` takes a `Source` and
   reports the node. `Source::Monitor` names a `wl_output`; `Source::Region`
   is a desktop rectangle in logical pixels. The pointer is drawn where the
@@ -269,6 +272,8 @@ One request channel carries all dialogs. Each interface's backend builds on it.
     becomes a clipboard history row. An application that asked still gets
     its file; the shell's own screenshot is not saved
     (`SystemReply::Copied`).
+  - **The shell's own screenshot asked again while its picker is up**, such
+    as a second Print, gets that picker's answer. It shows no second picker.
   - The picker lists "Everything" (the whole desk), then screens, then
     windows, beside the frozen desk. The desk outlines the pick with its
     size; arrow keys move through the list. "Select on screen" selects an
@@ -296,6 +301,14 @@ One request channel carries all dialogs. Each interface's backend builds on it.
     shot is the page alone: no address bar, title bar or anything over it.
     One not on screen, such as a tab behind another, is offered too: the
     capture keeps its page drawing.
+  - An Electron app's window is shot with the views it holds and shows
+    (`WebContentsView`, such as Claude's whole chat), each captured on its
+    own and drawn over the page where the app placed it, bottom first. The
+    engine lists each window's views with their places to the compositor
+    (`viewed_browser_windows`). A failed view capture fails the shot. A
+    screen cast of the window draws them the same way, and follows the app
+    as it adds, moves and drops views; a view that closes leaves the cast,
+    and one whose capture fails ends it.
   - The frontend checks the `PermissionStore` for a non-interactive
     screenshot (`permission_store_checked`). Without that, the backend asks
     through an `Access` dialog once per app and keeps the answer in the same
@@ -389,6 +402,12 @@ One request channel carries all dialogs. Each interface's backend builds on it.
   through its restore token. A `Start` canceled because the picker was up
   answers half a second after the pick's `Start`: Electron frees both of its
   capturers when either fails, and a pick answered after that crashed Slack.
+- **A restore cut short carries over.** Meet restarts a page's capture as
+  it starts: webrtc closes the session restoring the pick before its `Start`
+  answers, and opens another with the same token. The frontend deletes a
+  token when it is used and saves it again only from an answer, so this
+  backend gets none for the second. A connection's next ask without a token, within 2 seconds
+  of closing a session while its `Start` restored, restores the same pick.
 - **A region is dragged on the desk shot or selected on screen.** As in the
   screenshot picker, the user drags over the picker's desk preview, and the
   area is turned into the desktop's logical pixels, grown to whole ones.
@@ -446,6 +465,15 @@ screen-record`, the Screen Record launcher entry and the SDK's
   (`components/viz/service/display/domicile`, patch `0143`). It shows on screen
   and in no recording, screen cast or screenshot.
 
+## Agents
+
+An agent connected through `domicile mcp` asks to see and use the desk with an
+`agent` dialog, and is listed as an `agent` capturing session while it's in.
+No portal asks: the `agent` system call puts it in the same queue. The answer
+can ask to remember the agent, with the whole desk only. `PortalAnswer::Change`
+on its session puts the dialog up again, with `current` set to what it reaches
+now. See [AGENTS.md](AGENTS.md).
+
 ## Interfaces
 
 | Interface | Compositor | Shell UI |
@@ -456,7 +484,7 @@ screen-record`, the Screen Record launcher entry and the SDK's
 | OpenURI | (frontend) | via AppChooser |
 | Access | `grant_label`, `deny_label`; Domicile's own `destructive` makes the yes a danger button | yes/no prompt with the app's name; none for Domicile's own questions |
 | Account | user name, avatar from `AccountsService`, else passwd | confirm; allowed with the `access` answer |
-| Email | opens the `mailto:` handler from `mimeapps.list` with the fields; attachments as `attach=`, which Thunderbird ignores | — |
+| Email | hands the `mailto:` link to the shell when it claims `mailto` ([Links](WRITING-A-SHELL.md#links)), else opens the handler from `mimeapps.list`, with the fields; attachments as `attach=`, which Thunderbird ignores | — |
 | Notification | v2, direct to `domicile_host::notifications` | existing drawer |
 | Inhibit | idle inhibit through `idle.rs`; logout/suspend inhibitors listed as `inhibit` requests; `QueryEndResponse` on session end (the desk has no session end yet, so no query-end is sent) | "X is preventing logout" |
 | Lockdown | properties from the config's `lockdown`; signaled on reload | — |

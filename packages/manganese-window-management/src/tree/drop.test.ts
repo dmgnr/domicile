@@ -211,6 +211,39 @@ describe("droppedOn", () => {
       });
     });
 
+    it("takes a nested group's only window out past it at either end", () => {
+      /** A strip of "b" alone in a nested group, then "a"; "b" last. */
+      const strip = (nestedFirst: boolean) => {
+        const nested = LayoutNode.Container(Layout.Tabbed, [
+          LayoutNode.Window("b"),
+        ]);
+        const other = LayoutNode.Window("a");
+        return {
+          depth: 2,
+          root: LayoutNode.Container(
+            Layout.Tabbed,
+            nestedFirst ? [nested, other] : [other, nested],
+            nestedFirst ? 0 : 1,
+          ),
+        };
+      };
+      const group = { id: "b", up: 1 };
+      const window = { id: "b", up: 0 };
+
+      expect(
+        droppedOn(strip(true), window, group, Direction.Left).root,
+      ).toMatchObject({
+        children: [{ id: "b" }, { id: "a" }],
+        layout: Layout.Tabbed,
+      });
+      expect(
+        droppedOn(strip(false), window, group, Direction.Right).root,
+      ).toMatchObject({
+        children: [{ id: "a" }, { id: "b" }],
+        layout: Layout.Tabbed,
+      });
+    });
+
     it("splits a nested group with a window dropped apart from it", () => {
       const pair = {
         depth: 1,

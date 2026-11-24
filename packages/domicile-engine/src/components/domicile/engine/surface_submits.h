@@ -66,6 +66,9 @@ class SurfaceSubmits {
       uint64_t ticket,
       const std::optional<gpu::SyncToken>& sync_token);
 
+  // Whether no submit waits for a fence.
+  bool empty() const { return queued_.empty(); }
+
  private:
   struct Queued {
     Queued();
@@ -124,6 +127,9 @@ class SurfaceBacklog {
   // Viz reported frames and now has `in_viz`. Returns the held submit once
   // there is room for it.
   std::optional<SurfaceSubmit> Take(size_t in_viz);
+
+  // Whether a submit is held.
+  bool holding() const { return held_.has_value(); }
 
  private:
   std::optional<SurfaceSubmit> held_;

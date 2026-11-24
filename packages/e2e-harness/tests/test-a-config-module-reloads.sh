@@ -159,8 +159,10 @@ esac
 
 echo "== an edit is evaluated again and the shell built again and loaded =="
 echo "second" >"$CONFIG"
+WANT="{\"type\":\"load_shell\",\"version\":1,\"root\":\"$WORK/cache/domicile/shells/second\",\"module\":\"shell.js\"}"
+# The reload says nothing by default, so wait for the load it ends with.
 WAITED=0
-while ! grep -q "reloaded" "$LOG" 2>/dev/null && [ "$WAITED" -lt 100 ]; do
+while ! grep -qxF "$WANT" "$WORK/engine-heard" 2>/dev/null && [ "$WAITED" -lt 100 ]; do
   sleep 0.1
   WAITED=$((WAITED + 1))
 done
@@ -170,7 +172,6 @@ else
   echo "FAIL: the compositor's config says $(cat "$READS" 2>/dev/null)"
   FAILED=1
 fi
-WANT="{\"type\":\"load_shell\",\"version\":1,\"root\":\"$WORK/cache/domicile/shells/second\",\"module\":\"shell.js\"}"
 if grep -qxF "$WANT" "$WORK/engine-heard" 2>/dev/null; then
   echo "PASS: the engine was told $WANT"
 else

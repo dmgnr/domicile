@@ -4,6 +4,7 @@
 #include <drm_fourcc.h>
 #include <xf86drmMode.h>
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -48,6 +49,8 @@ class DrmPageFlipTimeoutTest : public testing::Test {
         std::make_unique<MockGbmDevice>());
     drm_->ResetStateWithDefaultObjects(/*crtc_count=*/1,
                                        /*planes_per_crtc=*/1);
+    drm_->AddProperty(drm_->crtc_property(0).id,
+                      {.id = kVrrEnabledPropId, .value = 0});
     drm_->InitializeState(/*use_atomic=*/true);
     controller_ = std::make_unique<HardwareDisplayController>(
         std::make_unique<CrtcController>(drm_.get(),
@@ -74,8 +77,7 @@ class DrmPageFlipTimeoutTest : public testing::Test {
     DrmOverlayPlaneList planes;
     planes.push_back(DrmOverlayPlane::TestPlane(Buffer()));
     CommitRequest request;
-    controller_->GetModesetProps(&request, planes, kMode,
-                                 /*enable_vrr=*/false);
+    controller_->GetModesetProps(&request, planes, kMode, vrr_);
     CommitRequest applied = request;
     ASSERT_TRUE(drm_->plane_manager()->Commit(std::move(request),
                                               DRM_MODE_ATOMIC_ALLOW_MODESET));
@@ -94,12 +96,13 @@ class DrmPageFlipTimeoutTest : public testing::Test {
                gfx::GpuFenceHandle) { *last = result; },
             &last_swap_),
         base::BindOnce(
-            [](int* presented, int* failed,
+            [](int* presented, int* failed, uint32_t* flags,
                const gfx::PresentationFeedback& feedback) {
               ++*presented;
               *failed += feedback.failed() ? 1 : 0;
+              *flags = feedback.flags;
             },
-            &presented_, &failed_));
+            &presented_, &failed_, &flags_));
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_{
@@ -110,6 +113,10 @@ class DrmPageFlipTimeoutTest : public testing::Test {
   gfx::SwapResult last_swap_ = gfx::SwapResult::SWAP_FAILED;
   int presented_ = 0;
   int failed_ = 0;
+  // The last presentation's `gfx::PresentationFeedback::Flags`.
+  uint32_t flags_ = 0;
+  // Whether `Modeset` turns on a variable refresh rate.
+  bool vrr_ = false;
 };
 
 // Without the event the window waits for its presentation forever, and so
@@ -208,6 +215,30 @@ TEST_F(DrmPageFlipTimeoutTest, AFlipThatFinishesIsNotGivenUpOn) {
   task_environment_.FastForwardBy(kTimeout * 2);
   EXPECT_EQ(presented_, 1);
   EXPECT_EQ(failed_, 0);
+}
+
+// A fixed refresh rate flips on vsync, so viz phases its frames to the flip.
+TEST_F(DrmPageFlipTimeoutTest, AFlipAtAFixedRefreshRateIsOnVsync) {
+  Flip();
+  drm_->RunCallbacks();
+  EXPECT_EQ(presented_, 1);
+  EXPECT_TRUE(flags_ & gfx::PresentationFeedback::kVSync);
+}
+
+// With a variable refresh rate the panel scans out when the flip lands, so a
+// flip is not a vsync: phasing viz's frames to it adds each frame's drawing
+// time to the next one's interval, and every animation stutters.
+TEST_F(DrmPageFlipTimeoutTest, AFlipAtAVariableRefreshRateIsNotOnVsync) {
+  vrr_ = true;
+  Modeset();
+  ASSERT_TRUE(controller_->crtc_controllers()[0]->vrr_enabled());
+
+  Flip();
+  drm_->RunCallbacks();
+  EXPECT_EQ(presented_, 1);
+  EXPECT_EQ(failed_, 0);
+  EXPECT_FALSE(flags_ & gfx::PresentationFeedback::kVSync);
+  EXPECT_TRUE(flags_ & gfx::PresentationFeedback::kHWCompletion);
 }
 
 }  // namespace

@@ -27,13 +27,22 @@ export const LoadingRows = () => (
   </div>
 );
 
+// The highlight is its own layer, slid across with a transform, so the sweep
+// runs on the compositor.
 const shimmer = {
-  animation: "shimmer {durations.shimmer} {easings.in-out} infinite",
-  animationDelay: "calc(var(--index, 0) * {durations.fastest})",
-  backgroundImage:
-    "linear-gradient(90deg, color-mix(in oklab, {colors.skeleton} 35%, transparent) 30%, color-mix(in oklab, {colors.skeleton} 70%, transparent) 50%, color-mix(in oklab, {colors.skeleton} 35%, transparent) 70%)",
-  backgroundSize: "300% 100%",
+  _after: {
+    animation: "shimmer {durations.shimmer} {easings.in-out} infinite",
+    animationDelay: "calc(var(--index, 0) * {durations.fastest})",
+    backgroundImage:
+      "linear-gradient(90deg, transparent 20%, color-mix(in oklab, {colors.skeleton} 55%, transparent) 50%, transparent 80%)",
+    content: '""',
+    inset: 0,
+    position: "absolute",
+  },
+  backgroundColor: "color-mix(in oklab, {colors.skeleton} 35%, transparent)",
   borderRadius: "full",
+  overflow: "hidden",
+  position: "relative",
 };
 
 const rootStyles = css({

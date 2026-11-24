@@ -3,6 +3,7 @@
 
 #include "components/domicile/browser/external_surface_provider.h"
 
+#include <cmath>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -36,13 +37,17 @@ void ExternalSurfaceProvider::Embed(
     const viz::LocalSurfaceId& local_surface_id,
     const gfx::Size& size,
     double scale,
+    double zoom,
     EmbedCallback callback) {
   const Page& page = receivers_.current_context();
   if (parent_frame_sink_id.client_id() != page.renderer_client_id) {
     receivers_.ReportBadMessage("parent frame sink is not the renderer's");
+  } else if (!std::isfinite(zoom) || zoom <= 0) {
+    // The compositor divides the box by it.
+    receivers_.ReportBadMessage("zoom is not a positive number");
   } else {
     broker_->Embed(page.requester, app_id, parent_frame_sink_id,
-                   local_surface_id, size, scale, std::move(callback));
+                   local_surface_id, size, scale, zoom, std::move(callback));
   }
 }
 

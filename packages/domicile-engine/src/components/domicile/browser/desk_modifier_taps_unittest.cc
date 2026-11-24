@@ -21,9 +21,13 @@ namespace {
 using ui::DomCode;
 using Heard = std::vector<TapModifier>;
 
+constexpr base::TimeDelta kLongest = base::Milliseconds(300);
+
 DeskModifierTaps::Tapped Into(Heard* heard) {
   return base::BindRepeating(
-      [](Heard* heard, TapModifier modifier) { heard->push_back(modifier); },
+      [](Heard* heard, TapModifier modifier, base::TimeDelta) {
+        heard->push_back(modifier);
+      },
       base::Unretained(heard));
 }
 
@@ -49,14 +53,26 @@ ui::KeyboardCode KeyboardCodeOf(DomCode code) {
   }
 }
 
-ui::KeyEvent Press(DomCode code, int flags = ui::EF_NONE) {
-  return ui::KeyEvent(ui::EventType::kKeyPressed, KeyboardCodeOf(code), code,
-                      flags);
+// Every key event at one instant, unless a test says when.
+const base::TimeTicks kStart = base::TimeTicks() + base::Seconds(1);
+
+ui::KeyEvent KeyAt(ui::EventType type,
+                   DomCode code,
+                   int flags,
+                   base::TimeTicks at) {
+  return ui::KeyEvent(type, KeyboardCodeOf(code), code, flags, at);
 }
 
-ui::KeyEvent Release(DomCode code, int flags = ui::EF_NONE) {
-  return ui::KeyEvent(ui::EventType::kKeyReleased, KeyboardCodeOf(code), code,
-                      flags);
+ui::KeyEvent Press(DomCode code,
+                   int flags = ui::EF_NONE,
+                   base::TimeTicks at = kStart) {
+  return KeyAt(ui::EventType::kKeyPressed, code, flags, at);
+}
+
+ui::KeyEvent Release(DomCode code,
+                     int flags = ui::EF_NONE,
+                     base::TimeTicks at = kStart) {
+  return KeyAt(ui::EventType::kKeyReleased, code, flags, at);
 }
 
 ui::MouseEvent Click() {
@@ -75,7 +91,7 @@ ui::ScrollEvent Scroll() {
 class DeskModifierTapsTest : public testing::Test {
  protected:
   DeskModifierTapsTest() : channel_(taps_.AddChannel(Into(&heard_))) {
-    taps_.Grab(channel_, TapModifier::kMeta, false);
+    taps_.Grab(channel_, TapModifier::kMeta, false, kLongest);
   }
 
   void Tap(DomCode code) {
@@ -177,7 +193,7 @@ TEST_F(DeskModifierTapsTest, AnUngrabbedModifierTapsNobody) {
 TEST_F(DeskModifierTapsTest, OnlyTheFirstTakerHearsATap) {
   Heard second;
   const auto two = taps_.AddChannel(Into(&second));
-  taps_.Grab(two, TapModifier::kMeta, false);
+  taps_.Grab(two, TapModifier::kMeta, false, kLongest);
 
   Tap(DomCode::META_LEFT);
   taps_.RemoveChannel(channel_);
@@ -194,14 +210,45 @@ TEST_F(DeskModifierTapsTest, AnInhibitorTakesTapsNotGrabbedWhileInhibited) {
   Tap(DomCode::META_LEFT);
   EXPECT_TRUE(heard_.empty());
 
-  taps_.Grab(channel_, TapModifier::kMeta, true);
+  taps_.Grab(channel_, TapModifier::kMeta, true, kLongest);
   Tap(DomCode::META_LEFT);
   EXPECT_EQ(heard_, (Heard{TapModifier::kMeta}));
 
   // The page gave back the grab that said `--inhibited`.
-  taps_.Grab(channel_, TapModifier::kMeta, false);
+  taps_.Grab(channel_, TapModifier::kMeta, false, kLongest);
   Tap(DomCode::META_LEFT);
   EXPECT_EQ(heard_, (Heard{TapModifier::kMeta}));
+}
+
+// Super held a while and let go alone is no tap; held up to the grab's
+// longest still is.
+TEST_F(DeskModifierTapsTest, AHoldLongerThanTheGrabsLongestIsNoTap) {
+  taps_.Heard(Press(DomCode::META_LEFT));
+  taps_.Heard(Release(DomCode::META_LEFT, ui::EF_NONE,
+                      kStart + kLongest + base::Milliseconds(1)));
+  EXPECT_TRUE(heard_.empty());
+
+  taps_.Heard(Press(DomCode::META_LEFT));
+  taps_.Heard(Release(DomCode::META_LEFT, ui::EF_NONE, kStart + kLongest));
+  EXPECT_EQ(heard_, (Heard{TapModifier::kMeta}));
+}
+
+// The page hears how long the modifier was held, to match each name it
+// grabbed the tap by against that name's longest.
+TEST_F(DeskModifierTapsTest, ATapSaysHowLongItWasHeld) {
+  std::vector<base::TimeDelta> held;
+  taps_.RemoveChannel(channel_);
+  const auto timed = taps_.AddChannel(base::BindRepeating(
+      [](std::vector<base::TimeDelta>* held, TapModifier,
+         base::TimeDelta duration) { held->push_back(duration); },
+      base::Unretained(&held)));
+  taps_.Grab(timed, TapModifier::kMeta, false, kLongest);
+
+  taps_.Heard(Press(DomCode::META_LEFT));
+  taps_.Heard(Release(DomCode::META_LEFT, ui::EF_NONE,
+                      kStart + base::Milliseconds(120)));
+
+  EXPECT_EQ(held, (std::vector<base::TimeDelta>{base::Milliseconds(120)}));
 }
 
 TEST(TapModifierOfTest, NamesTheModifierOfEachSidesKey) {

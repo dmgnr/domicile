@@ -1,7 +1,7 @@
 import type { Result } from "@cprussin/option-result";
 import { AnimatedBluetoothIcon } from "@domicile-desktop/component-library/AnimatedBluetoothIcon";
+import { EmptyState } from "@domicile-desktop/component-library/EmptyState";
 import { Loading } from "@domicile-desktop/component-library/Loading";
-import { PanelNote } from "@domicile-desktop/component-library/PanelNote";
 import { QuickTile } from "@domicile-desktop/component-library/QuickTile";
 import type { SharedWatch } from "@domicile-desktop/react/shared-watch";
 import { useSharedWatch } from "@domicile-desktop/react/use-shared-watch";
@@ -95,6 +95,7 @@ export const BluetoothTile = ({
           />
         }
         label="Bluetooth"
+        lit={connected.length > 0}
         onMore={locked ? undefined : onMore}
       />
     );
@@ -109,6 +110,7 @@ export const BluetoothTile = ({
         })}
         icon={<AnimatedBluetoothIcon size={15} state="off" />}
         label="Bluetooth"
+        lit={false}
       />
     );
   }
@@ -154,9 +156,12 @@ export const BluetoothDetails = ({
   ) : (
     reading.match({
       Err: (error) => (
-        <PanelNote detail={error.message} tone="warning">
-          Couldn't read Bluetooth
-        </PanelNote>
+        <EmptyState
+          detail={error.message}
+          hint="Close this and open it again in a moment."
+          title="Couldn't read Bluetooth"
+          tone="warning"
+        />
       ),
       Ok: (found) => (
         <BluetoothPanel actions={actions} bluetooth={found} host={host} />

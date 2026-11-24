@@ -1,0 +1,17 @@
+# The Miracast service, which D-Bus starts on the shell's first call
+# (`net.domicile.Miracast.service`).
+#
+# It lives in the desk's graphical session: it stops with
+# `graphical-session.target`, and with it the casts and their `gst-launch-1.0`
+# pipelines, and refuses to start without one.
+[Unit]
+Description=Domicile Miracast casting
+Documentation=https://github.com/cprussin/domicile/blob/main/docs/CASTING-TO-TVS.md
+PartOf=graphical-session.target
+Requisite=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=net.domicile.Miracast
+ExecStart=@bin@/domicile-miracast

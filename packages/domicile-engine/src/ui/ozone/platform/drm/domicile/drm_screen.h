@@ -90,7 +90,7 @@ gfx::Size DisplayPhysicalSizeMm(const display::DisplaySnapshot& snapshot);
 // `layout` applies here as well as to the modeset because the browser must
 // still place dark connectors. Origins come from `OriginsForLayout`.
 std::vector<display::Display> DisplaysFromSnapshots(
-    const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
     const std::vector<DomicileDisplayLayout>& layout);
 
@@ -104,7 +104,7 @@ std::vector<display::Display> DisplaysFromSnapshots(
 // is never used: ozone reports (0, 0) for a connector it has not read before,
 // and displays sharing a rectangle share a window, leaving a CRTC black.
 std::vector<gfx::Point> OriginsForLayout(
-    const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
     const std::vector<DomicileDisplayLayout>& layout);
 
@@ -115,7 +115,7 @@ std::vector<gfx::Point> OriginsForLayout(
 // initial position. A dark primary, such as a closed laptop panel, would draw
 // the desktop onto a screen nobody sees.
 size_t PrimaryIndexForLayout(
-    const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
     const std::vector<DomicileDisplayLayout>& layout);
 
@@ -135,7 +135,7 @@ class DrmScreen : public PlatformScreen {
   // Replaces the display list, primary first. Called at startup and on every
   // hotplug. `DisplayList` notifies observers itself.
   void OnDisplaysChanged(
-      const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+      const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
       const std::vector<DomicileDisplayLayout>& layout);
 

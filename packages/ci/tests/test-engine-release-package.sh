@@ -8,8 +8,8 @@
 # is missing, unrecognized, or disagrees with `DOMICILE_ENGINE_BUILD`, which
 # picks the release tag.
 #
-# What ships: `locales/*.pak` without the build's `*.pak.info`, and every ELF
-# without its symbol table. The build directory keeps both, for the
+# What ships: `locales/*.pak` without the build's `*.pak.info`, the spelling
+# dictionaries, and every ELF without its symbol table. The build directory keeps both, for the
 # measurements in docs/architecture/ENGINE-FORK-MEASUREMENTS.md.
 #
 # The build directory is faked with empty files and one small ELF, `zstd` with
@@ -60,8 +60,10 @@ cc -o "$WORK/elf" "$WORK/elf.c"
 fake_build() { # args.gn contents, or empty for none
   rm -rf "$CHROMIUM"
   mkdir -p "$BUILD/locales"
+  mkdir -p "$BUILD/dictionaries"
   for file in icudtl.dat resources.pak chrome_100_percent.pak \
-              locales/en-US.pak locales/en-US.pak.info; do
+              locales/en-US.pak locales/en-US.pak.info \
+              dictionaries/en-US-10-1.bdic; do
     : >"$BUILD/$file"
   done
   printf '\0\1\2\3' >"$BUILD/icudtl.dat"
@@ -149,10 +151,20 @@ expect "the locales' paks ship" yes \
   "$([ -f "$WORK/unpacked/locales/en-US.pak" ] && echo yes || echo no)"
 expect "the locales' .pak.info stay behind" no \
   "$([ -e "$WORK/unpacked/locales/en-US.pak.info" ] && echo yes || echo no)"
+expect "the spelling dictionaries ship" yes \
+  "$([ -f "$WORK/unpacked/dictionaries/en-US-10-1.bdic" ] && echo yes || echo no)"
 expect "chrome ships stripped" stripped "$(symbols "$WORK/unpacked/chrome")"
 expect "a library ships stripped" stripped \
   "$(symbols "$WORK/unpacked/libdomicile_engine.so")"
 expect "the build's chrome keeps its symbols" symbols "$(symbols "$BUILD/chrome")"
+
+echo
+echo "== packaging stops without what the engine needs =="
+
+fake_build "$(gn_args true false)"
+rm -rf "$BUILD/dictionaries"
+expect "a build with no spelling dictionaries" failed \
+  "$(package DOMICILE_ENGINE_BUILD=official)"
 
 echo
 if [ "$FAILED" -eq 0 ]; then

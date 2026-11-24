@@ -117,7 +117,7 @@ impl FileChooser {
         options: HashMap<String, OwnedValue>,
     ) -> (u32, HashMap<String, OwnedValue>) {
         let types = MimeTypes::read(&self.data_dirs).unwrap_or_else(|why| {
-            warn!(%why, "MIME types are unreadable; file filters by type match nothing");
+            tracing::error!(%why, "MIME types are unreadable; file filters by type match nothing");
             MimeTypes::default()
         });
         let asked = Asked::new(mode, title, options, &types, &self.home);
@@ -250,6 +250,8 @@ impl Asked {
             | PortalAnswer::ScreenshotWindow { .. }
             | PortalAnswer::ScreenshotBrowserWindow { .. }
             | PortalAnswer::PickColor { .. }
+            | PortalAnswer::Agent { .. }
+            | PortalAnswer::Change
             | PortalAnswer::Pressed
             | PortalAnswer::Released
             | PortalAnswer::Refused => (2, HashMap::new()),

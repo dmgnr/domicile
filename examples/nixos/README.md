@@ -5,7 +5,7 @@ for one user, with home-manager.
 
 - `flake.nix` passes `domicile` to both modules.
 - `configuration.nix` adds the login session and the lock screen's password
-  check.
+  check, and Domicile's binary cache.
 - `hardware-configuration.nix` is your machine's, from `nixos-generate-config`.
 - `home.nix` writes the user's config file and picks the shell.
 

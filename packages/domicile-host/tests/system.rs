@@ -808,14 +808,36 @@ mod previews {
 }
 
 /// `domicile send-shell` commands, sent on one connection and heard on every
-/// connection listening.
+/// connection listening, each answered by the pages that heard it.
 mod shell_commands {
+    use std::time::Duration;
+
     use domicile_host::shell_commands::ShellCommands;
+    use domicile_protocol::{ShellBinding, ShellCommandHelp};
 
     use super::*;
 
     fn focus_right() -> Vec<String> {
         vec!["focus".into(), "right".into()]
+    }
+
+    /// Commands that wait `BRIEFLY` for an answer, so a test of the wait is
+    /// quick.
+    fn commands() -> ShellCommands {
+        ShellCommands::answered_within(Duration::from_millis(50))
+    }
+
+    fn listening(commands: Vec<ShellCommandHelp>) -> SystemRequest {
+        SystemRequest::ShellCommands {
+            commands,
+            bindings: Vec::new(),
+        }
+    }
+
+    fn send() -> SystemRequest {
+        SystemRequest::SendShell {
+            command: focus_right(),
+        }
     }
 
     /// Two systems sharing `commands`, as two chrome connections do.
@@ -837,61 +859,147 @@ mod shell_commands {
         )
     }
 
+    /// The `sent` of the command `heard` was told next.
+    fn heard_sent(heard: &Receiver<HostMessage>) -> u64 {
+        match next(heard) {
+            HostMessage::SystemEvent {
+                event: SystemEvent::ShellCommand { command, sent },
+                ..
+            } if command == focus_right() => sent,
+            other => panic!("expected focus right, heard {other:?}"),
+        }
+    }
+
     #[test]
-    fn a_command_sent_on_one_connection_is_heard_on_every_page_listening() {
-        let commands = ShellCommands::default();
+    fn a_command_is_sent_once_a_page_listening_ran_it() {
+        let commands = commands();
         let ((page, page_heard), (sender, sender_heard)) = two_pages(&commands);
-        page.handle(7, SystemRequest::ShellCommands);
+        page.handle(7, listening(Vec::new()));
         assert_eq!(reply(&page_heard, 7), SystemReply::Started);
 
-        sender.handle(
-            1,
-            SystemRequest::SendShell {
-                command: focus_right(),
+        sender.handle(1, send());
+        let sent = heard_sent(&page_heard);
+        page.handle(
+            8,
+            SystemRequest::AnswerShellCommand {
+                sent,
+                refused: None,
+                output: None,
             },
         );
 
-        assert_eq!(reply(&sender_heard, 1), SystemReply::Sent);
+        assert_eq!(reply(&page_heard, 8), SystemReply::Set);
+        assert_eq!(reply(&sender_heard, 1), SystemReply::Sent { output: None });
+    }
+
+    #[test]
+    fn what_the_page_that_ran_a_command_printed_reaches_the_sender() {
+        // A query such as Manganese's `get-tree` answers with its JSON.
+        let commands = commands();
+        let ((page, page_heard), (sender, sender_heard)) = two_pages(&commands);
+        page.handle(7, listening(Vec::new()));
+        reply(&page_heard, 7);
+
+        sender.handle(1, send());
+        let sent = heard_sent(&page_heard);
+        page.handle(
+            8,
+            SystemRequest::AnswerShellCommand {
+                sent,
+                refused: None,
+                output: Some("[]".into()),
+            },
+        );
+
         assert_eq!(
-            next(&page_heard),
-            HostMessage::SystemEvent {
-                id: 7,
-                event: SystemEvent::ShellCommand {
-                    command: focus_right()
-                },
+            reply(&sender_heard, 1),
+            SystemReply::Sent {
+                output: Some("[]".into())
             }
         );
     }
 
     #[test]
-    fn a_command_nobody_listens_for_says_so() {
-        let commands = ShellCommands::default();
-        let (_, (sender, sender_heard)) = two_pages(&commands);
-
-        sender.handle(
-            1,
-            SystemRequest::SendShell {
-                command: focus_right(),
+    fn each_listening_page_s_bindings_are_listed_until_it_stops() {
+        let commands = commands();
+        let ((page, page_heard), _) = two_pages(&commands);
+        let lock = ShellBinding {
+            mode: "default".into(),
+            chord: "Meta+l".into(),
+            action: "send-shell lock".into(),
+        };
+        page.handle(
+            7,
+            SystemRequest::ShellCommands {
+                commands: Vec::new(),
+                bindings: vec![lock.clone()],
             },
         );
+        reply(&page_heard, 7);
+        assert_eq!(commands.bindings(), vec![lock]);
+
+        page.handle(7, SystemRequest::Unwatch);
+        assert_eq!(commands.bindings(), Vec::new());
+    }
+
+    #[test]
+    fn a_command_every_page_refused_fails_with_why() {
+        // Loud, so a typo in a binding or a script is not silently dropped.
+        let commands = commands();
+        let ((page, page_heard), (sender, sender_heard)) = two_pages(&commands);
+        page.handle(7, listening(Vec::new()));
+        reply(&page_heard, 7);
+
+        sender.handle(1, send());
+        let sent = heard_sent(&page_heard);
+        page.handle(
+            8,
+            SystemRequest::AnswerShellCommand {
+                sent,
+                refused: Some("no command `focus right`".into()),
+                output: None,
+            },
+        );
+
+        match reply(&sender_heard, 1) {
+            SystemReply::Failed { error } => {
+                assert_eq!(error.message, "no command `focus right`")
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_command_no_page_answers_fails_once_the_wait_is_over() {
+        let commands = commands();
+        let ((page, page_heard), (sender, sender_heard)) = two_pages(&commands);
+        page.handle(7, listening(Vec::new()));
+        reply(&page_heard, 7);
+
+        sender.handle(1, send());
+
+        assert_eq!(failure(reply(&sender_heard, 1)), SystemErrorKind::Other);
+    }
+
+    #[test]
+    fn a_command_nobody_listens_for_says_so() {
+        let commands = commands();
+        let (_, (sender, sender_heard)) = two_pages(&commands);
+
+        sender.handle(1, send());
 
         assert_eq!(failure(reply(&sender_heard, 1)), SystemErrorKind::Other);
     }
 
     #[test]
     fn a_page_that_stopped_listening_hears_no_more() {
-        let commands = ShellCommands::default();
+        let commands = commands();
         let ((page, page_heard), (sender, sender_heard)) = two_pages(&commands);
-        page.handle(7, SystemRequest::ShellCommands);
+        page.handle(7, listening(Vec::new()));
         reply(&page_heard, 7);
 
         page.handle(7, SystemRequest::Unwatch);
-        sender.handle(
-            1,
-            SystemRequest::SendShell {
-                command: focus_right(),
-            },
-        );
+        sender.handle(1, send());
 
         assert_eq!(
             next(&page_heard),
@@ -905,39 +1013,170 @@ mod shell_commands {
 
     #[test]
     fn a_page_that_went_away_hears_no_more() {
-        let commands = ShellCommands::default();
+        let commands = commands();
         let ((page, page_heard), (sender, sender_heard)) = two_pages(&commands);
-        page.handle(7, SystemRequest::ShellCommands);
+        page.handle(7, listening(Vec::new()));
         reply(&page_heard, 7);
 
         drop(page);
-        sender.handle(
-            1,
-            SystemRequest::SendShell {
-                command: focus_right(),
-            },
-        );
+        sender.handle(1, send());
 
         assert_eq!(failure(reply(&sender_heard, 1)), SystemErrorKind::Other);
+    }
+
+    #[test]
+    fn the_commands_pages_listen_for_are_described_once_each_while_they_listen() {
+        // `domicile list-shell-commands`. Every monitor's page of one shell
+        // describes the same commands.
+        let commands = commands();
+        let ((first, first_heard), (second, second_heard)) = two_pages(&commands);
+        let focus = ShellCommandHelp {
+            usage: "focus left|right|up|down".into(),
+            description: "Move focus.".into(),
+        };
+        let lock = ShellCommandHelp {
+            usage: "lock".into(),
+            description: "Lock the desktop.".into(),
+        };
+        first.handle(7, listening(vec![focus.clone()]));
+        reply(&first_heard, 7);
+        second.handle(7, listening(vec![focus.clone(), lock.clone()]));
+        reply(&second_heard, 7);
+
+        assert_eq!(commands.described(), vec![focus.clone(), lock]);
+
+        second.handle(7, SystemRequest::Unwatch);
+        assert_eq!(commands.described(), vec![focus]);
     }
 
     /// A reloaded page listens again while the desktop is locked, so commands
     /// still reach it once it unlocks.
     #[test]
-    fn listening_is_its_own_reach_and_sending_acts() {
-        assert_eq!(reach(&SystemRequest::ShellCommands), Reach::Listens);
+    fn listening_is_its_own_reach_answering_listens_and_sending_acts() {
+        assert_eq!(reach(&listening(Vec::new())), Reach::Listens);
         assert_eq!(
-            reach(&SystemRequest::SendShell {
-                command: focus_right()
+            reach(&SystemRequest::AnswerShellCommand {
+                sent: 1,
+                refused: None,
+                output: None,
             }),
-            Reach::Acts
+            Reach::Listens
         );
+        assert_eq!(reach(&send()), Reach::Acts);
     }
 }
 
 /// Pages hearing when nobody has been at the desktop for a time each chose.
 /// The compositor says how long the desk has been still; these tests stand in
 /// for its clock.
+mod links {
+    use domicile_host::links::Links;
+
+    use super::*;
+
+    const LINK: &str = "mailto:a@example.com";
+
+    fn claiming(schemes: &[&str]) -> SystemRequest {
+        SystemRequest::ClaimLinks {
+            schemes: schemes.iter().map(|scheme| scheme.to_string()).collect(),
+        }
+    }
+
+    fn open(url: &str) -> SystemRequest {
+        SystemRequest::OpenLink {
+            url: url.into(),
+            app_id: Some("slack".into()),
+        }
+    }
+
+    /// A system sharing `links`, as each chrome connection does.
+    fn a_page(links: &Links) -> (System, Receiver<HostMessage>) {
+        let (system, heard) = system_in(&std::env::temp_dir());
+        (system.sharing_links(links.clone()), heard)
+    }
+
+    fn heard_link(heard: &Receiver<HostMessage>, id: u32) -> (String, Option<String>) {
+        match next(heard) {
+            HostMessage::SystemEvent {
+                id: from,
+                event: SystemEvent::Link { url, app_id },
+            } if from == id => (url, app_id),
+            other => panic!("expected a link on {id}, heard {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_link_goes_to_the_page_that_claims_its_scheme() {
+        let links = Links::default();
+        let (page, page_heard) = a_page(&links);
+        let (sender, sender_heard) = a_page(&links);
+        page.handle(7, claiming(&["mailto"]));
+        assert_eq!(reply(&page_heard, 7), SystemReply::Started);
+
+        sender.handle(1, open(LINK));
+
+        assert_eq!(
+            heard_link(&page_heard, 7),
+            (LINK.to_string(), Some("slack".to_string()))
+        );
+        assert_eq!(reply(&sender_heard, 1), SystemReply::Sent { output: None });
+    }
+
+    #[test]
+    fn a_scheme_matches_in_any_case() {
+        let links = Links::default();
+        let (page, page_heard) = a_page(&links);
+        page.handle(7, claiming(&["MailTo"]));
+        reply(&page_heard, 7);
+
+        assert!(links.open("MAILTO:a@example.com", None));
+        assert_eq!(heard_link(&page_heard, 7).0, "MAILTO:a@example.com");
+    }
+
+    #[test]
+    fn a_link_no_page_claims_is_not_found() {
+        let links = Links::default();
+        let (page, page_heard) = a_page(&links);
+        page.handle(7, claiming(&["mailto"]));
+        reply(&page_heard, 7);
+
+        page.handle(1, open("zoommtg://zoom.us/join"));
+
+        assert_eq!(failure(reply(&page_heard, 1)), SystemErrorKind::NotFound);
+        assert!(!links.claims("zoommtg://zoom.us/join"));
+    }
+
+    #[test]
+    fn the_page_that_claimed_last_gets_the_link() {
+        // A reloaded shell claims again before the old page lets go.
+        let links = Links::default();
+        let (old, old_heard) = a_page(&links);
+        let (new, new_heard) = a_page(&links);
+        old.handle(7, claiming(&["mailto"]));
+        reply(&old_heard, 7);
+        new.handle(8, claiming(&["mailto"]));
+        reply(&new_heard, 8);
+
+        assert!(links.open(LINK, None));
+
+        assert_eq!(heard_link(&new_heard, 8).0, LINK);
+        assert!(old_heard.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_page_that_stopped_claiming_gets_no_more_links() {
+        let links = Links::default();
+        let (page, page_heard) = a_page(&links);
+        page.handle(7, claiming(&["mailto"]));
+        reply(&page_heard, 7);
+
+        page.handle(7, SystemRequest::Unwatch);
+
+        assert!(!links.claims(LINK));
+        assert!(!links.open(LINK, None));
+    }
+}
+
 mod idle_watches {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -1769,6 +2008,10 @@ mod locked {
             SystemRequest::SendShell {
                 command: vec!["focus".into(), "right".into()],
             },
+            SystemRequest::OpenLink {
+                url: "mailto:a@example.com".into(),
+                app_id: None,
+            },
             SystemRequest::ShortcutsInhibitor {
                 action: domicile_protocol::InhibitorAction::Toggle,
             },
@@ -1830,9 +2073,24 @@ mod apps {
             SystemRequest::PreviewWindow {
                 window: PreviewedWindow::App { id: "app-1".into() },
             },
-            SystemRequest::ShellCommands,
+            SystemRequest::ShellCommands {
+                commands: Vec::new(),
+                bindings: Vec::new(),
+            },
             SystemRequest::SendShell {
                 command: vec!["focus".into(), "right".into()],
+            },
+            SystemRequest::AnswerShellCommand {
+                sent: 1,
+                refused: None,
+                output: None,
+            },
+            SystemRequest::ClaimLinks {
+                schemes: vec!["mailto".into()],
+            },
+            SystemRequest::OpenLink {
+                url: "mailto:a@example.com".into(),
+                app_id: None,
             },
             SystemRequest::IdleAfter { seconds: 1 },
             SystemRequest::IdleBeforeBlanking { seconds: 1 },
@@ -2327,5 +2585,332 @@ mod virtual_monitors {
         system.handle(1, a_tv());
 
         assert_eq!(failure(reply(&heard, 1)), SystemErrorKind::Other);
+    }
+}
+
+/// Agents a caller asks the user to let in, such as `domicile agent`'s.
+mod agents {
+    use std::sync::mpsc::Sender;
+    use std::sync::{Arc, Mutex};
+
+    use domicile_host::system::{AgentChanged, AgentLease, AgentStopped, AgentTold, Agents, LetIn};
+    use domicile_protocol::{
+        AgentReach, ConnectedAgent, KnownAgents, RememberedAgent, SystemError, SystemEvent,
+    };
+
+    use super::*;
+
+    fn claude() -> SystemRequest {
+        SystemRequest::Agent {
+            agent: "Claude Code".into(),
+        }
+    }
+
+    /// Says on `did` what the agent did, and on `gone` when it drops, as the
+    /// compositor takes it off the shell's list.
+    struct Lease {
+        did: Sender<String>,
+        gone: Sender<()>,
+    }
+
+    impl AgentLease for Lease {
+        fn did(&self, said: String) {
+            self.did.send(said).unwrap();
+        }
+    }
+
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            let _ = self.gone.send(());
+        }
+    }
+
+    type Answer = Box<dyn Fn() -> Result<AgentReach, SystemError> + Send + Sync>;
+
+    /// Agents whose user answers each with `answer`, telling the test what
+    /// it hears.
+    struct Door {
+        answer: Answer,
+        named: Sender<String>,
+        did: Sender<String>,
+        gone: Sender<()>,
+        stop: Arc<Mutex<Option<AgentStopped>>>,
+        change: Arc<Mutex<Option<AgentChanged>>>,
+        stopped: Sender<u32>,
+        forgot: Sender<String>,
+    }
+
+    impl Agents for Door {
+        fn let_in(&self, agent: String, told: AgentTold) -> Result<LetIn, SystemError> {
+            self.named.send(agent).unwrap();
+            *self.stop.lock().unwrap() = Some(told.stopped);
+            *self.change.lock().unwrap() = Some(told.changed);
+            Ok(LetIn {
+                reach: (self.answer)()?,
+                lease: Box::new(Lease {
+                    did: self.did.clone(),
+                    gone: self.gone.clone(),
+                }),
+            })
+        }
+
+        fn known(&self) -> KnownAgents {
+            KnownAgents {
+                connected: vec![ConnectedAgent {
+                    session: 4,
+                    agent: "Claude Code".into(),
+                    reach: AgentReach::Desk,
+                }],
+                remembered: vec![RememberedAgent {
+                    agent: "Codex".into(),
+                    last_used_ms: 9,
+                }],
+            }
+        }
+
+        fn stop(&self, session: u32) -> Result<(), SystemError> {
+            self.stopped.send(session).unwrap();
+            Ok(())
+        }
+
+        fn forget(&self, agent: &str) -> Result<(), SystemError> {
+            self.forgot.send(agent.into()).unwrap();
+            Ok(())
+        }
+    }
+
+    /// What a system that lets agents in heard, and the user's stop and
+    /// change.
+    struct Asked {
+        named: Receiver<String>,
+        did: Receiver<String>,
+        gone: Receiver<()>,
+        stop: Arc<Mutex<Option<AgentStopped>>>,
+        change: Arc<Mutex<Option<AgentChanged>>>,
+        stopped: Receiver<u32>,
+        forgot: Receiver<String>,
+    }
+
+    /// A system whose user answers each agent with `answer`.
+    fn letting(
+        system: System,
+        answer: impl Fn() -> Result<AgentReach, SystemError> + Send + Sync + 'static,
+    ) -> (System, Asked) {
+        let (named_one, named) = channel();
+        let (did_one, did) = channel();
+        let (gone_one, gone) = channel();
+        let (stopped_one, stopped) = channel();
+        let (forgot_one, forgot) = channel();
+        let stop = Arc::new(Mutex::new(None));
+        let change = Arc::new(Mutex::new(None));
+        let system = system.letting_agents_in(Door {
+            answer: Box::new(answer),
+            named: named_one,
+            did: did_one,
+            gone: gone_one,
+            stop: stop.clone(),
+            change: change.clone(),
+            stopped: stopped_one,
+            forgot: forgot_one,
+        });
+        (
+            system,
+            Asked {
+                named,
+                did,
+                gone,
+                stop,
+                change,
+                stopped,
+                forgot,
+            },
+        )
+    }
+
+    #[test]
+    fn an_agent_let_in_lists_what_it_did_until_its_caller_lets_go() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+        let (system, asked) = letting(system, || Ok(AgentReach::Desk));
+
+        system.handle(1, claude());
+
+        assert_eq!(
+            reply(&heard, 1),
+            SystemReply::Agent {
+                reach: AgentReach::Desk
+            }
+        );
+        assert_eq!(asked.named.recv().unwrap(), "Claude Code");
+        assert_eq!(
+            system.handle(
+                1,
+                SystemRequest::AgentDid {
+                    said: "Clicked".into()
+                }
+            ),
+            Handled::Done
+        );
+        assert_eq!(asked.did.recv().unwrap(), "Clicked");
+
+        system.handle(1, SystemRequest::Unwatch);
+
+        assert_eq!(
+            next(&heard),
+            HostMessage::SystemEnd {
+                id: 1,
+                end: SystemEnd::Stopped,
+            }
+        );
+        asked.gone.recv().unwrap();
+    }
+
+    #[test]
+    fn the_shell_stopping_an_agent_ends_its_call() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+        let (system, asked) = letting(system, || Ok(AgentReach::Desk));
+        system.handle(1, claude());
+        reply(&heard, 1);
+
+        let stop = asked.stop.lock().unwrap().take().unwrap();
+        stop();
+
+        assert_eq!(
+            next(&heard),
+            HostMessage::SystemEnd {
+                id: 1,
+                end: SystemEnd::Stopped,
+            }
+        );
+        asked.gone.recv().unwrap();
+        assert_eq!(
+            system.handle(
+                1,
+                SystemRequest::AgentDid {
+                    said: "late".into()
+                }
+            ),
+            Handled::NothingRunning
+        );
+    }
+
+    #[test]
+    fn an_agent_the_user_cancels_fails_its_call() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+        let (system, _asked) = letting(system, || {
+            Err(SystemError {
+                kind: SystemErrorKind::Canceled,
+                message: "canceled".into(),
+            })
+        });
+
+        system.handle(1, claude());
+
+        assert_eq!(failure(reply(&heard, 1)), SystemErrorKind::Canceled);
+    }
+
+    #[test]
+    fn a_system_that_lets_no_agents_in_says_so() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+
+        system.handle(1, claude());
+
+        assert_eq!(failure(reply(&heard, 1)), SystemErrorKind::Other);
+    }
+
+    #[test]
+    fn an_agent_acts_and_is_refused_to_apps_and_while_locked() {
+        assert_eq!(reach(&claude()), Reach::Acts);
+        assert!(locked_out(1, &claude()).is_some());
+        assert!(refused_to_an_app(1, &claude()).is_some());
+        let did = SystemRequest::AgentDid { said: "x".into() };
+        assert_eq!(locked_out(1, &did), None);
+        assert!(refused_to_an_app(1, &did).is_some());
+    }
+
+    #[test]
+    fn the_user_changing_an_agent_tells_its_caller() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+        let (system, asked) = letting(system, || Ok(AgentReach::Desk));
+        system.handle(1, claude());
+        reply(&heard, 1);
+        let windows = AgentReach::Windows { windows: vec![] };
+
+        (asked.change.lock().unwrap().as_ref().unwrap())(windows.clone());
+
+        assert_eq!(
+            next(&heard),
+            HostMessage::SystemEvent {
+                id: 1,
+                event: SystemEvent::AgentReach { reach: windows },
+            }
+        );
+    }
+
+    #[test]
+    fn a_change_after_the_caller_let_go_tells_nobody() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+        let (system, asked) = letting(system, || Ok(AgentReach::Desk));
+        system.handle(1, claude());
+        reply(&heard, 1);
+        system.handle(1, SystemRequest::Unwatch);
+        next(&heard);
+
+        (asked.change.lock().unwrap().as_ref().unwrap())(AgentReach::Desk);
+
+        assert!(heard.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_agents_are_listed_stopped_and_forgotten() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+        let (system, asked) = letting(system, || Ok(AgentReach::Desk));
+
+        system.handle(1, SystemRequest::Agents);
+        let SystemReply::Agents(known) = reply(&heard, 1) else {
+            panic!("the agents are listed");
+        };
+        assert_eq!(known.connected[0].session, 4);
+        assert_eq!(known.remembered[0].agent, "Codex");
+
+        system.handle(2, SystemRequest::StopAgent { session: 4 });
+        assert_eq!(reply(&heard, 2), SystemReply::Set);
+        assert_eq!(asked.stopped.recv().unwrap(), 4);
+
+        system.handle(
+            3,
+            SystemRequest::ForgetAgent {
+                agent: "Codex".into(),
+            },
+        );
+        assert_eq!(reply(&heard, 3), SystemReply::Set);
+        assert_eq!(asked.forgot.recv().unwrap(), "Codex");
+    }
+
+    #[test]
+    fn a_system_that_lets_no_agents_in_knows_none() {
+        let (system, heard) = system_in(&std::env::temp_dir());
+
+        system.handle(1, SystemRequest::Agents);
+
+        assert_eq!(
+            reply(&heard, 1),
+            SystemReply::Agents(KnownAgents::default())
+        );
+    }
+
+    #[test]
+    fn managing_agents_is_refused_to_apps_and_while_locked() {
+        for request in [
+            SystemRequest::Agents,
+            SystemRequest::StopAgent { session: 1 },
+            SystemRequest::ForgetAgent { agent: "x".into() },
+        ] {
+            assert!(locked_out(1, &request).is_some(), "{request:?}");
+            assert!(refused_to_an_app(1, &request).is_some(), "{request:?}");
+        }
+        assert_eq!(
+            reach(&SystemRequest::StopAgent { session: 1 }),
+            Reach::Stops
+        );
     }
 }

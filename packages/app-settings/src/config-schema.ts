@@ -1,201 +1,27 @@
-// The config's sections as the form shows them: the `domicile-config` crate's
-// schema in Zod, with its defaults. The crate is the source of truth. The host
-// checks every write against it, so this schema only has to read.
+// The config as the form shows it: the SDK's Zod schema, generated from the
+// `domicile-config` crate, with its defaults. The crate is the source of
+// truth. The host checks every write against it, so this schema only has to
+// read.
 
 import type { Result } from "@cprussin/option-result";
 import { Err, Ok } from "@cprussin/option-result";
+import type {
+  displayConfigSchema,
+  displayPlacementSchema,
+  keymapSchema,
+  profileSchema,
+  transformSchema,
+} from "@domicile-desktop/sdk/config-schema";
+import { configSchema } from "@domicile-desktop/sdk/config-schema";
 import { z } from "zod";
 
 import type { ConfigDocument } from "./config-document";
 
 /** The default for `files.omit`: hidden paths. */
-export const DEFAULT_OMIT = ["**/.*"];
-
-/** `theme.mode`'s values. */
-export const THEME_MODES = ["dark", "light"] as const;
-
-/** `theme.contrast`'s values. */
-export const CONTRASTS = ["normal", "high"] as const;
-
-/** A profile display's `transform` values. */
-export const TRANSFORMS = [
-  "normal",
-  "rotate-90",
-  "rotate-180",
-  "rotate-270",
-] as const;
-
-/** The `lockdown` switches. */
-export const LOCKDOWN_SWITCHES = [
-  "disable_printing",
-  "disable_save_to_disk",
-  "disable_application_handlers",
-  "disable_location",
-  "disable_camera",
-  "disable_microphone",
-  "disable_sound_output",
-] as const;
-
-const point = z.tuple([z.number().int(), z.number().int()]);
-const size = z.tuple([
-  z.number().int().positive(),
-  z.number().int().positive(),
-]);
-
-const displaySchema = z.strictObject({
-  name: z.string(),
-  position: point.default([0, 0]),
-  scale: z.number().int().positive().default(1),
-  size,
-});
-
-const placementSchema = z.strictObject({
-  adaptive_sync: z.boolean().optional(),
-  display: z.string(),
-  enabled: z.boolean().default(true),
-  mode: size.optional(),
-  position: point.optional(),
-  refresh: z.number().positive().optional(),
-  scale: z.number().positive().default(1),
-  transform: z.enum(TRANSFORMS).default("normal"),
-});
-
-const profileSchema = z.strictObject({
-  displays: z.array(placementSchema),
-  name: z.string(),
-});
-
-/** How xkb compiles a keymap, as `input.keyboard` and each keymap set it. */
-const xkbFields = {
-  xkb_layout: z.string().default("us"),
-  xkb_model: z.string().default(""),
-  xkb_options: z.array(z.string()).default([]),
-  xkb_rules: z.string().default(""),
-  xkb_variant: z.string().default(""),
-};
-
-const keymapSchema = z.strictObject({ ...xkbFields, name: z.string() });
-
-const settingsSchema = z.strictObject({
-  extensions: z
-    .strictObject({
-      settings: z
-        .record(
-          z.string(),
-          // `null` is unset, as `domicile-config` reads it.
-          z.strictObject({
-            file_access: z
-              .boolean()
-              .nullish()
-              .transform((value) => value ?? undefined),
-            private: z
-              .boolean()
-              .nullish()
-              .transform((value) => value ?? undefined),
-            site_access: z
-              .union([z.enum(["on_click", "all_sites"]), z.array(z.string())])
-              .nullish()
-              .transform((value) => value ?? undefined),
-            user_scripts: z
-              .boolean()
-              .nullish()
-              .transform((value) => value ?? undefined),
-          }),
-        )
-        .default({}),
-      unpacked: z.array(z.string()).default([]),
-      web_store: z.array(z.string()).default([]),
-    })
-    .prefault({}),
-  files: z
-    .strictObject({ omit: z.array(z.string()).default(DEFAULT_OMIT) })
-    .prefault({}),
-  idle: z
-    .strictObject({
-      blank_after_seconds: z.number().int().positive().optional(),
-      lock_after_seconds: z.number().int().positive().optional(),
-    })
-    .prefault({}),
-  input: z
-    .strictObject({
-      keyboard: z
-        .strictObject({
-          ...xkbFields,
-          keymaps: z.array(keymapSchema).default([]),
-          repeat: z
-            .strictObject({
-              delay_ms: z.number().int().min(0).max(65_535).default(500),
-              rate: z.number().int().min(0).max(65_535).default(25),
-            })
-            .prefault({}),
-        })
-        .prefault({}),
-      pointers: z
-        .array(z.strictObject({ device: z.string(), display: z.string() }))
-        .default([]),
-    })
-    .prefault({}),
-  lock: z
-    .strictObject({
-      pam_service: z.string().optional(),
-    })
-    .prefault({}),
-  lockdown: z
-    .strictObject({
-      disable_application_handlers: z.boolean().default(false),
-      disable_camera: z.boolean().default(false),
-      disable_location: z.boolean().default(false),
-      disable_microphone: z.boolean().default(false),
-      disable_printing: z.boolean().default(false),
-      disable_save_to_disk: z.boolean().default(false),
-      disable_sound_output: z.boolean().default(false),
-    })
-    .prefault({}),
-  output: z
-    .strictObject({
-      displays: z.array(displaySchema).default([]),
-      max_scale: z.number().int().positive().default(2),
-      profiles: z.array(profileSchema).default([]),
-    })
-    .prefault({}),
-  shell: z.string().optional(),
-  shell_options: z.record(z.string(), z.unknown()).default({}),
-  startup: z
-    .strictObject({ commands: z.array(z.array(z.string())).default([]) })
-    .prefault({}),
-  theme: z
-    .strictObject({
-      accent_color: z
-        .string()
-        .regex(/^#[0-9a-fA-F]{6}$/)
-        .optional(),
-      contrast: z.enum(CONTRASTS).default("normal"),
-      cursor_hide_after_ms: z
-        .number()
-        .int()
-        .positive()
-        .max(4_294_967_295)
-        .optional(),
-      cursor_hide_when_typing: z.boolean().optional(),
-      cursor_size: z.number().int().positive().max(65_535).optional(),
-      cursor_theme: z
-        .union([
-          z.string(),
-          z.strictObject({ dark: z.string(), light: z.string() }),
-        ])
-        .optional(),
-      font_name: z.string().optional(),
-      force_dark: z.array(z.string()).optional(),
-      icon_theme: z.string().optional(),
-      mode: z.enum(THEME_MODES).default("dark"),
-      monospace_font_name: z.string().optional(),
-      reduced_motion: z.boolean().default(false),
-    })
-    .prefault({}),
-});
+export const DEFAULT_OMIT = configSchema.parse({}).files.omit;
 
 /** Every setting, with the compositor's defaults filled in. */
-export type Settings = z.infer<typeof settingsSchema>;
+export type Settings = z.infer<typeof configSchema>;
 
 /** A profile, which arranges the monitors that are plugged in. */
 export type Profile = z.infer<typeof profileSchema>;
@@ -204,15 +30,18 @@ export type Profile = z.infer<typeof profileSchema>;
 export type Keymap = z.infer<typeof keymapSchema>;
 
 /** A display a profile places. */
-export type Placement = z.infer<typeof placementSchema>;
+export type Placement = z.infer<typeof displayPlacementSchema>;
 
 /** A display described outright. */
-export type Display = z.infer<typeof displaySchema>;
+export type Display = z.infer<typeof displayConfigSchema>;
+
+/** Which way up a monitor is. */
+export type Transform = z.infer<typeof transformSchema>;
 
 /** Reads `document`'s settings, or says where it does not fit the schema. */
 export const readSettings = (
   document: ConfigDocument,
 ): Result<Settings, string> => {
-  const read = settingsSchema.safeParse(document);
+  const read = configSchema.safeParse(document);
   return read.success ? Ok(read.data) : Err(z.prettifyError(read.error));
 };

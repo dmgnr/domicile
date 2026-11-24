@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a frame shown again un-throttles its child frames
+
+A PDF went blank after its tab or <webview> was hidden and shown again.
+
+- Chrome's PDF viewer is a cross-origin frame; the PDF's page is drawn
+  by its child frame.
+- Hidden, the viewer throttles that child
+  (FrameView::CanThrottleRenderingForPropagation), and a throttled
+  frame drops what it painted. LocalFrame::WasHidden() reaches the child
+  through a forced intersection update.
+- LocalFrame::WasShown() only scheduled a frame. An unchanged layout
+  recomputes no intersections, so the child stayed throttled until its
+  geometry changed.
+- WasShown() propagates the frame's throttling status to its children.
+
+Verified: guard-pdf-after-hiding.sh fails on the engine without this
+patch (the page has 0 white pixels after one hide and show, 105108
+before). Not built with the patch: the engine job builds it on crux.
+---
+ third_party/blink/renderer/core/frame/local_frame.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/third_party/blink/renderer/core/frame/local_frame.cc b/third_party/blink/renderer/core/frame/local_frame.cc
+index de63a63..a9d1384 100644
+--- a/third_party/blink/renderer/core/frame/local_frame.cc
++++ b/third_party/blink/renderer/core/frame/local_frame.cc
+@@ -2652,6 +2652,15 @@ void LocalFrame::WasShown() {
+   hidden_ = false;
+   if (LocalFrameView* frame_view = View()) {
+     frame_view->ScheduleAnimation();
++    // Domicile: while hidden, a cross-origin frame throttles its child frames
++    // (FrameView::CanThrottleRenderingForPropagation), and a throttled frame
++    // drops what it painted. WasHidden() reaches the children through an
++    // intersection update. An unchanged layout recomputes no intersections, so
++    // without this a child stays throttled and blank after the frame is shown,
++    // as the PDF viewer's page does after a tab switch.
++    frame_view->UpdateRenderThrottlingStatus(
++        frame_view->IsHiddenForThrottling(), frame_view->IsSubtreeThrottled(),
++        frame_view->IsDisplayLockThrottled(), /*recurse=*/true);
+   }
+ 
+   if (auto* content_capture_manager = GetOrResetContentCaptureManager()) {

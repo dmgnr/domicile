@@ -17,6 +17,9 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "chrome/browser/domicile/domicile_browser_profiles.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/domicile/browser/browser_profiles.h"
 #include "components/domicile/browser/desk_lock.h"
 #include "components/domicile/browser/shell_fetch.h"
 #include "content/public/browser/browser_context.h"
@@ -222,35 +225,124 @@ class ShellFetchService final
              std::vector<mojom::ShellFetchHeaderPtr> headers,
              const std::optional<std::string>& body,
              const std::optional<std::string>& sapisid_hash_origin,
+             const std::string& profile,
              FetchCallback callback) override {
     std::optional<std::string> refusal = ShellFetchRefusal(
         url, headers, sapisid_hash_origin, DeskLock::IsLocked());
     if (!refusal.has_value()) {
       refusal = ShellFetchMethodRefusal(method, body);
     }
+    if (!refusal.has_value()) {
+      refusal = ProfileRefusal(profile);
+    }
     if (refusal.has_value()) {
       std::move(callback).Run(nullptr, *refusal);
       return;
     }
+    if (profile.empty()) {
+      FetchIn(url, method, std::move(headers), body, sapisid_hash_origin,
+              profile, std::move(callback));
+      return;
+    }
+    // A profile still loading would block the UI thread on the disk, so the
+    // fetch waits for it.
+    BrowserProfileRegistry::Get().WhenLoaded(
+        *Profile::FromBrowserContext(render_frame_host().GetBrowserContext())
+             ->GetOriginalProfile(),
+        profile,
+        base::BindOnce(&ShellFetchService::FetchLoaded,
+                       weak_factory_.GetWeakPtr(), url, method,
+                       std::move(headers), body, sapisid_hash_origin, profile,
+                       std::move(callback)));
+  }
+
+  // Fetch, once its profile has loaded (BrowserProfileRegistry::WhenLoaded).
+  // The desk can drop the profile meanwhile, so it is checked again.
+  void FetchLoaded(const GURL& url,
+                   const std::string& method,
+                   std::vector<mojom::ShellFetchHeaderPtr> headers,
+                   const std::optional<std::string>& body,
+                   const std::optional<std::string>& sapisid_hash_origin,
+                   const std::string& profile,
+                   FetchCallback callback) {
+    if (std::optional<std::string> refusal = ProfileRefusal(profile)) {
+      std::move(callback).Run(nullptr, *refusal);
+      return;
+    }
+    FetchIn(url, method, std::move(headers), body, sapisid_hash_origin,
+            profile, std::move(callback));
+  }
+
+  // Fetch, with its profile loaded.
+  void FetchIn(const GURL& url,
+               const std::string& method,
+               std::vector<mojom::ShellFetchHeaderPtr> headers,
+               const std::optional<std::string>& body,
+               const std::optional<std::string>& sapisid_hash_origin,
+               const std::string& profile,
+               FetchCallback callback) {
+    content::StoragePartition* partition = PartitionOf(profile);
+    if (partition == nullptr) {
+      std::move(callback).Run(
+          nullptr, base::StrCat({"browser profile ", profile,
+                                 " is not loaded, so it has no cookies to "
+                                 "send"}));
+      return;
+    }
     Asked asked{url, method, std::move(headers), body};
     if (!sapisid_hash_origin.has_value()) {
-      PendingFetch::Start(*partition_->GetURLLoaderFactoryForBrowserProcess(),
+      PendingFetch::Start(*partition->GetURLLoaderFactoryForBrowserProcess(),
                           std::move(asked), std::string(),
                           std::move(callback));
       return;
     }
     // The cookies the request will carry, so the hash is from the SAPISID
     // the site receives with it.
-    partition_->GetCookieManagerForBrowserProcess()->GetCookieList(
+    partition->GetCookieManagerForBrowserProcess()->GetCookieList(
         url, net::CookieOptions::MakeAllInclusive(),
         net::CookiePartitionKeyCollection(),
         base::BindOnce(&ShellFetchService::Hash, weak_factory_.GetWeakPtr(),
-                       std::move(asked), *sapisid_hash_origin,
+                       std::move(asked), *sapisid_hash_origin, profile,
                        std::move(callback)));
+  }
+
+  // Why the page may not fetch with browser profile `profile`'s cookies, or
+  // nothing. Empty is the default profile's.
+  static std::optional<std::string> ProfileRefusal(const std::string& profile) {
+    if (profile.empty()) {
+      return std::nullopt;
+    }
+    const BrowserProfile* found =
+        BrowserProfileRegistry::Get().profiles().Find(profile);
+    if (found == nullptr) {
+      return base::StrCat({"the desk has no browser profile ", profile});
+    }
+    if (found->is_private) {
+      return base::StrCat({"browser profile ", profile,
+                           " is private, and keeps no sign-ins to fetch "
+                           "with"});
+    }
+    return std::nullopt;
+  }
+
+  // The storage partition browser profile `profile` keeps its cookies in:
+  // the shell's own for an empty one. Null when the profile will not load.
+  // Looked up for each use, since the desk can drop a profile while a
+  // request is out.
+  content::StoragePartition* PartitionOf(const std::string& profile) {
+    if (profile.empty()) {
+      return partition_;
+    }
+    Profile& shell = *Profile::FromBrowserContext(
+                          render_frame_host().GetBrowserContext())
+                          ->GetOriginalProfile();
+    Profile* context = BrowserProfileRegistry::Get().ContextOf(shell, profile);
+    return context == nullptr ? nullptr : context->GetDefaultStoragePartition();
   }
 
   void Hash(Asked asked,
             const std::string& origin,
+            const std::string& profile,
             FetchCallback callback,
             const net::CookieAccessResultList& cookies,
             const net::CookieAccessResultList& /*excluded*/) {
@@ -265,8 +357,17 @@ class ShellFetchService final
           base::StrCat({"no SAPISID cookie is sent to ", asked.url.host()}));
       return;
     }
+    // The profile may have gone while the cookies were read.
+    content::StoragePartition* partition =
+        ProfileRefusal(profile).has_value() ? nullptr : PartitionOf(profile);
+    if (partition == nullptr) {
+      std::move(callback).Run(
+          nullptr, base::StrCat({"browser profile ", profile,
+                                 " went away while the request was out"}));
+      return;
+    }
     PendingFetch::Start(
-        *partition_->GetURLLoaderFactoryForBrowserProcess(), std::move(asked),
+        *partition->GetURLLoaderFactoryForBrowserProcess(), std::move(asked),
         SapisidHash(*sapisid, origin, base::Time::Now().ToTimeT()),
         std::move(callback));
   }

@@ -65,6 +65,18 @@ opensuse_depends="$(sed -n '/^  rpm:/,/^    recommends:/p' <<<"$opensuse")"
 lacks "no Fedora names in openSUSE's dependencies" "$opensuse_depends" 'gstreamer1-'
 lacks "every placeholder on openSUSE" "$opensuse" '"@rpm-gstreamer@"'
 
+echo "every format recommends wl-clipboard, which Electron apps' clipboard runs"
+has "Debian" "$debian" '- wl-clipboard'
+has "Fedora" "$fedora" '- wl-clipboard'
+has "openSUSE" "$opensuse" '- wl-clipboard'
+has "Arch" "$(cat "$ROOT/packages/distro/arch-optdepends")" 'wl-clipboard:'
+
+echo "every format recommends xdg-utils, which Electron apps ask for link handlers"
+has "Debian" "$debian" '- xdg-utils'
+has "Fedora" "$fedora" '- xdg-utils'
+has "openSUSE" "$opensuse" '- xdg-utils'
+has "Arch" "$(cat "$ROOT/packages/distro/arch-optdepends")" 'xdg-utils:'
+
 echo "Arch requires only what the desktop needs"
 arch_depends="$(config archlinux | sed -n '/^  archlinux:/,/^[a-z]/p')"
 while IFS=: read -r optional _; do

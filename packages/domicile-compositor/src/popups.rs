@@ -1,34 +1,20 @@
-//! Popups and bubbles: announcing and placing them over their windows, keeping
-//! menus on screen, and dismissing them.
+//! Popups: announcing and placing them over their windows, keeping menus on
+//! screen, and dismissing them.
 
 use domicile_protocol::HostMessage;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Transform};
 use smithay::wayland::viewporter::ViewportCachedState;
 use smithay::wayland::{
-    compositor::{
-        get_children, get_parent, get_role, is_sync_subsurface, with_states, BufferAssignment,
-        SubsurfaceCachedState, SurfaceAttributes,
-    },
+    compositor::{get_role, is_sync_subsurface, with_states, BufferAssignment, SurfaceAttributes},
     shell::xdg::{PopupSurface, PositionerState, XdgPopupSurfaceData, XDG_POPUP_ROLE},
 };
 use tracing::debug;
 
 use crate::buffer_transform::upright_size;
-use crate::surface_commit::{committed_buffer, window_geometry, Role};
+use crate::surface_commit::{committed_buffer, Role};
 use crate::viewport::{surface_size, Viewport};
 use crate::DomicileCompositor;
-
-/// An announced bubble. See `DomicileCompositor::bubbles`.
-pub struct Bubble {
-    pub app_id: String,
-    pub surface: WlSurface,
-    /// The surface it was announced over. Kept because a hidden bubble is
-    /// no longer its child.
-    pub parent: WlSurface,
-    /// Its position and size as the chrome was last told them, logical.
-    placed: ((f64, f64), (f64, f64)),
-}
 
 impl DomicileCompositor {
     /// Announce a window's popup on its first buffer commit.
@@ -105,93 +91,7 @@ impl DomicileCompositor {
         }
     }
 
-    /// Announce, move or forget the bubbles a commit of `surface` changes.
-    ///
-    /// That is `surface` itself, which may be a bubble, and the bubbles over
-    /// it, since a parent's commit applies their positions.
-    pub fn place_the_bubbles(&mut self, surface: &WlSurface) {
-        let drawn = drawn_size(surface);
-        let over_it = self
-            .bubbles
-            .iter()
-            .filter(|bubble| bubble.parent == *surface)
-            .map(|bubble| bubble.surface.clone());
-        let children: Vec<WlSurface> = get_children(surface).into_iter().chain(over_it).collect();
-        self.place_a_bubble(surface, drawn);
-        for child in children {
-            self.place_a_bubble(&child, None);
-        }
-    }
-
-    /// Announce a subsurface of an app as a bubble once it has drawn, place it
-    /// again when it moves or resizes, and forget it once it is no longer a
-    /// subsurface.
-    ///
-    /// `drawn` is the size of a buffer it just committed. Chromium hides a
-    /// bubble by destroying its `wl_subsurface` and keeping the surface.
-    fn place_a_bubble(&mut self, surface: &WlSurface, drawn: Option<(f64, f64)>) {
-        let tracked = self
-            .bubbles
-            .iter()
-            .position(|bubble| bubble.surface == *surface);
-        let parent = get_parent(surface)
-            .and_then(|parent| self.app_id_of(&parent).map(|app_id| (parent, app_id)));
-        match (tracked, parent) {
-            (Some(at), None) => {
-                let bubble = self.bubbles.remove(at);
-                self.by_surface.remove(&bubble.surface);
-                debug!(app_id = %bubble.app_id, "bubble hidden -> Host::app_closed");
-                self.forget(&bubble.app_id);
-            }
-            (Some(at), Some((parent, _))) => {
-                let bubble = &mut self.bubbles[at];
-                let placed = (
-                    bubble_position(surface, &parent),
-                    drawn.unwrap_or(bubble.placed.1),
-                );
-                if placed == bubble.placed {
-                    return;
-                }
-                bubble.placed = placed;
-                let moved =
-                    self.hub
-                        .host
-                        .lock()
-                        .unwrap()
-                        .popup_moved(&bubble.app_id, placed.0, placed.1);
-                if let Some(message) = moved {
-                    self.tell_the_move(message);
-                }
-            }
-            (None, Some((parent, parent_id))) => {
-                let Some(size) = drawn else {
-                    return;
-                };
-                let position = bubble_position(surface, &parent);
-                let placed = self
-                    .hub
-                    .host
-                    .lock()
-                    .unwrap()
-                    .popup_placed(&parent_id, position, size, false);
-                if let Some((app_id, message)) = placed {
-                    debug!(%app_id, parent = %parent_id, "bubble mapped -> Host::popup_placed");
-                    self.by_surface
-                        .insert(surface.clone(), (app_id.clone(), Role::Bubble));
-                    self.bubbles.push(Bubble {
-                        app_id,
-                        surface: surface.clone(),
-                        parent,
-                        placed: (position, size),
-                    });
-                    self.tell_the_move(message);
-                }
-            }
-            (None, None) => {}
-        }
-    }
-
-    /// Tell the chromes a bubble moved: at once, or, if frames sync, once its
+    /// Tell the chromes a popup moved: at once, or, if frames sync, once its
     /// commit transaction is applied. See
     /// `docs/architecture/WINDOW-COMPOSITING.md#synced-frames`.
     fn tell_the_move(&mut self, moved: HostMessage) {
@@ -237,27 +137,6 @@ impl DomicileCompositor {
         }
     }
 
-    /// The surface that takes the pointer at `at`, a point on `surface`, and
-    /// the point on it.
-    ///
-    /// A bubble's own element is drawn over its window, so the chrome sends it
-    /// whatever is over it. A bubble whose input region leaves the point out
-    /// passes it down to its parent, as a compositor hit-testing the surface
-    /// tree would. Firefox draws its whole window into a subsurface with an
-    /// empty input region and reads the pointer only on the toplevel.
-    pub fn input_target(&self, surface: WlSurface, at: (f64, f64)) -> (WlSurface, (f64, f64)) {
-        let (mut surface, mut at) = (surface, at);
-        while !takes_input(&surface, at) && self.bubbles.iter().any(|b| b.surface == surface) {
-            let Some(parent) = get_parent(&surface) else {
-                break;
-            };
-            let location = subsurface_location(&surface);
-            at = (at.0 + f64::from(location.x), at.1 + f64::from(location.y));
-            surface = parent;
-        }
-        (surface, at)
-    }
-
     /// The window a popup is over, however many popups deep: the app id of
     /// the toplevel at the bottom of its chain.
     pub fn window_under(&self, popup: &PopupSurface) -> Option<String> {
@@ -276,6 +155,9 @@ impl DomicileCompositor {
 
     /// Every grabbing popup dismissed, innermost first, as xdg-shell wants.
     pub fn dismiss_the_menus(&mut self) {
+        if !self.grabbing.is_empty() {
+            debug!(menus = self.grabbing.len(), "dismissing the open menus");
+        }
         for menu in self.grabbing.drain(..).rev() {
             menu.send_popup_done();
         }
@@ -299,11 +181,13 @@ impl DomicileCompositor {
         match placed {
             None => positioner.get_geometry(),
             Some((parent, window, screen)) => {
-                // The positioner works relative to the parent's geometry.
-                let parent_at =
-                    Point::from((window.min.x, window.min.y)) + self.menu_offset(&parent).to_f64();
+                // The positioner works relative to the parent's geometry, in
+                // its window's logical units, which a zoomed window draws
+                // larger on the desktop.
+                let screen =
+                    crate::scale::screen_in_window(window.min, screen, self.zoom_of(&parent));
                 let target = Rectangle::<f64, Logical>::new(
-                    Point::from((screen.min.x, screen.min.y)) - parent_at,
+                    Point::from((screen.min.x, screen.min.y)) - self.menu_offset(&parent).to_f64(),
                     (screen.max.x - screen.min.x, screen.max.y - screen.min.y).into(),
                 );
                 positioner.get_unconstrained_geometry(target.to_i32_round())
@@ -321,15 +205,18 @@ impl DomicileCompositor {
         let window = self.bounds_of(&self.window_under_menus(popup.wl_surface()))?;
         let at = self.menu_offset(popup.wl_surface());
         let size = popup.with_pending_state(|state| state.geometry.size);
+        // The popup is in its window's logical units, which a zoomed window
+        // draws larger on the desktop.
+        let zoom = self.zoom_of(popup.wl_surface());
         let min = domicile_scene::Point {
-            x: window.min.x + f64::from(at.x),
-            y: window.min.y + f64::from(at.y),
+            x: window.min.x + f64::from(at.x) * zoom,
+            y: window.min.y + f64::from(at.y) * zoom,
         };
         Some(domicile_scene::Bounds {
             min,
             max: domicile_scene::Point {
-                x: min.x + f64::from(size.w),
-                y: min.y + f64::from(size.h),
+                x: min.x + f64::from(size.w) * zoom,
+                y: min.y + f64::from(size.h) * zoom,
             },
         })
     }
@@ -418,37 +305,4 @@ fn committed_placement(surface: &WlSurface) -> ((f64, f64), (f64, f64)) {
         (f64::from(geometry.loc.x), f64::from(geometry.loc.y)),
         (f64::from(geometry.size.w), f64::from(geometry.size.h)),
     )
-}
-
-/// A subsurface's position on its parent, logical.
-fn subsurface_location(surface: &WlSurface) -> Point<i32, Logical> {
-    with_states(surface, |states| {
-        states
-            .cached_state
-            .get::<SubsurfaceCachedState>()
-            .current()
-            .location
-    })
-}
-
-/// Whether `surface`'s input region holds `at`, a point on it. No region is
-/// the whole surface.
-fn takes_input(surface: &WlSurface, at: (f64, f64)) -> bool {
-    with_states(surface, |states| {
-        states
-            .cached_state
-            .get::<SurfaceAttributes>()
-            .current()
-            .input_region
-            .as_ref()
-            .is_none_or(|region| region.contains((at.0.floor() as i32, at.1.floor() as i32)))
-    })
-}
-
-/// Where a bubble is over `parent`, logical: its subsurface position from
-/// the corner of the parent's window geometry, as a popup's is.
-fn bubble_position(surface: &WlSurface, parent: &WlSurface) -> (f64, f64) {
-    let location = subsurface_location(surface);
-    let (x, y) = with_states(parent, window_geometry).map_or((0, 0), |(x, y, _, _)| (x, y));
-    (f64::from(location.x - x), f64::from(location.y - y))
 }

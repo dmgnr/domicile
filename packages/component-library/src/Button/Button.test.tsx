@@ -71,6 +71,20 @@ describe(Button, () => {
       expect(screen.getByTestId("icon")).toBeInTheDocument();
     });
 
+    it("draws text with a longer name like any text button", () => {
+      render(
+        <>
+          <Button>Forget</Button>
+          <Button label="Forget Codex">Forget</Button>
+        </>,
+      );
+      const named = screen.getByRole("button", { name: "Forget Codex" });
+      expect(named).toHaveTextContent("Forget");
+      expect(named.className).toBe(
+        screen.getByRole("button", { name: "Forget" }).className,
+      );
+    });
+
     it("forwards arbitrary props to the underlying button", () => {
       render(
         <Button name="submit-button" title="Save changes" type="submit">

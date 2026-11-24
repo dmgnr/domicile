@@ -37,7 +37,7 @@ each hunk applies to was rebuilt from the pin and the patches before it.
  8 files changed, 31 insertions(+), 17 deletions(-)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 5cc5ef8..57279fa 100644
+index eebf9e1..02501b7 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -6,6 +6,7 @@
@@ -48,7 +48,7 @@ index 5cc5ef8..57279fa 100644
  #include "chrome/browser/domicile/domicile_extension_tray.h"
  #include "chrome/browser/domicile/domicile_pointer_warp.h"
  #include "chrome/browser/domicile/domicile_tab_helpers.h"
-@@ -637,6 +638,23 @@ void PopulateChromeFrameBinders(
+@@ -669,6 +670,23 @@ void PopulateChromeFrameBinders(
          domicile::BindExtensionTray(frame, std::move(receiver));
        }));
  
@@ -98,10 +98,10 @@ index ef2822c..58d4f68 100644
    static PassKey GetPassKey();
  };
 diff --git a/content/public/common/content_features.cc b/content/public/common/content_features.cc
-index abcac37..73a598d 100644
+index 94489ad..9645c02 100644
 --- a/content/public/common/content_features.cc
 +++ b/content/public/common/content_features.cc
-@@ -142,7 +142,9 @@ const base::FeatureParam<bool>
+@@ -137,7 +137,9 @@ const base::FeatureParam<bool>
  // Whether to allow attaching an inner WebContents not owned by the outer
  // WebContents. This is for prototyping purposes and should not be enabled in
  // production.
@@ -113,7 +113,7 @@ index abcac37..73a598d 100644
  // Runs the audio service in a separate process.
  BASE_FEATURE(kAudioServiceOutOfProcess,
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index 27d875c..afed125 100644
+index 1ce01a5..102c8c0 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1210,10 +1210,6 @@ generated_interface_sources_in_core = [
@@ -128,7 +128,7 @@ index 27d875c..afed125 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_head_element.cc",
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 6209d1f..a3f4770 100644
+index 7c40a55..58a619e 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -309,8 +309,6 @@ generated_dictionary_sources_in_modules = [
@@ -140,7 +140,7 @@ index 6209d1f..a3f4770 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notifications_event_init.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notifications_event_init.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_locked_event_init.cc",
-@@ -2396,6 +2394,8 @@ generated_interface_sources_in_modules = [
+@@ -2400,6 +2398,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_desktop_entry.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_bookmark.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_bookmark.h",
@@ -149,7 +149,7 @@ index 6209d1f..a3f4770 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_modifiers_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_modifiers_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_display.cc",
-@@ -2424,8 +2424,6 @@ generated_interface_sources_in_modules = [
+@@ -2428,8 +2428,6 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_item.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_item.h",
@@ -159,7 +159,7 @@ index 6209d1f..a3f4770 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_notification_action.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index c43e8e5..a0eb61e 100644
+index 4f77193..12714a4 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -463,8 +463,6 @@ static_idl_files_in_core = [
@@ -193,7 +193,7 @@ index a6d9da7..51ad830 100644
    "//third_party/blink/renderer/modules/domicile/domicile_notification_action.idl",
    "//third_party/blink/renderer/modules/domicile/domicile_notifications_event.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 959cdb9..c16ccd6 100644
+index 3e8dd74..16dd2da 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -100,10 +100,6 @@ blink_core_sources_html = [

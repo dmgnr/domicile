@@ -1,0 +1,56 @@
+name: Renovate fixup
+
+# Makes Renovate's pull requests mergeable: bun.lock from the pinned bun, the
+# SDK's generated files, the flake's node-modules hashes and a changeset
+# (.github/scripts/renovate-fixup.sh). Its push starts the checks again, and
+# Renovate automerges once they pass (renovate.json).
+#
+# `pin-roll` stays red while a Chromium pin roll is open, so Renovate does not
+# merge during one. Renovate rebases the branch once the roll lands, which runs
+# it again.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: renovate-fixup-${{ github.head_ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  fixup:
+    if: >-
+      startsWith(github.head_ref, 'renovate/')
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The whole history, so the script can compare against main.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: .github/scripts/renovate-fixup.sh "$BRANCH"
+        env:
+          BRANCH: ${{ github.head_ref }}
+          DOMICILE_WRITEBACK_TOKEN: ${{ secrets.DOMICILE_WRITEBACK_TOKEN }}
+
+  pin-roll:
+    if: startsWith(github.head_ref, 'renovate/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: .github/scripts/no-pin-roll-open.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -3,6 +3,7 @@ import type { Domicile } from "@domicile-desktop/sdk/desktop/desktop";
 import type { Extension } from "@domicile-desktop/sdk/extension";
 import type { TrayItem } from "@domicile-desktop/sdk/tray";
 import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 
 import { Tray } from "./Tray";
 
@@ -25,6 +26,7 @@ const counter: Extension = {
   id: "ponmlkjihgfedcbaponmlkjihgfedcba",
   name: "Counter",
   popup: undefined,
+  profile: "default",
   title: "Counter",
 };
 
@@ -58,6 +60,10 @@ type Move = [readonly string[], string, string];
 
 type TrayProps = {
   domicile?: Domicile;
+  end?: ReactNode;
+  onUnpin?: (key: string) => void;
+  opened?: { id: string; popup: string; profile: string } | undefined;
+  unpinned?: ReadonlySet<string>;
   extensions?: readonly Extension[];
   items?: readonly TrayItem[];
   onMove?: (shown: readonly string[], dragged: string, target: string) => void;
@@ -66,21 +72,28 @@ type TrayProps = {
 
 const renderTray = ({
   domicile = recordingDomicile([]),
+  end = <button type="button">All tray icons</button>,
   extensions = [counter],
   items = [sync],
   onMove = () => undefined,
+  onUnpin = () => undefined,
+  opened = undefined,
   order = [],
+  unpinned = new Set(),
 }: TrayProps) =>
   render(
     <Tray
       domicile={domicile}
+      end={end}
       extensions={extensions}
       items={items}
       onActivate={() => undefined}
       onMove={onMove}
       onOpen={() => undefined}
-      opened={undefined}
+      onUnpin={onUnpin}
+      opened={opened}
       order={order}
+      unpinned={unpinned}
     />,
   );
 
@@ -103,13 +116,32 @@ describe("Tray", () => {
       // Applications first, in arrival order, until the user reorders.
       renderTray({ extensions: [counter, off] });
 
-      expect(labels()).toStrictEqual(["Syncthing", "Counter"]);
+      expect(labels()).toStrictEqual(["Syncthing", "Counter", null]);
+    });
+
+    it("leaves out unpinned icons", () => {
+      renderTray({ unpinned: new Set([SYNC, COUNTER]) });
+
+      expect(labels()).toStrictEqual([null]);
+    });
+
+    it("shows an unpinned extension while its popup is open", () => {
+      renderTray({
+        opened: {
+          id: counter.id,
+          popup: "chrome-extension://x/popup.html",
+          profile: "default",
+        },
+        unpinned: new Set([COUNTER]),
+      });
+
+      expect(labels()).toStrictEqual(["Syncthing", "Counter", null]);
     });
 
     it("draws them in the order the user put them in", () => {
       renderTray({ order: [COUNTER, SYNC] });
 
-      expect(labels()).toStrictEqual(["Counter", "Syncthing"]);
+      expect(labels()).toStrictEqual(["Counter", "Syncthing", null]);
     });
 
     it("follows the lists as they change", () => {
@@ -138,7 +170,7 @@ describe("Tray", () => {
         order: [SYNC, COUNTER],
       });
 
-      expect(labels()).toStrictEqual(["Syncthing (paused)", "Counter"]);
+      expect(labels()).toStrictEqual(["Syncthing (paused)", "Counter", null]);
     });
 
     it("leaves no picture for the engine to drag instead", () => {
@@ -186,6 +218,16 @@ describe("Tray", () => {
       expect(moves).toStrictEqual([]);
     });
 
+    it("unpins the icon dropped on the menu's button", () => {
+      const unpinned: string[] = [];
+      renderTray({ onUnpin: (key) => unpinned.push(key) });
+
+      drag("Syncthing", "All tray icons");
+      fireEvent.pointerUp(button("All tray icons"), { pointerId: 1 });
+
+      expect(unpinned).toStrictEqual([SYNC]);
+    });
+
     it("is not a click, and the next press is", () => {
       const clicked: string[] = [];
       renderTray({ domicile: recordingDomicile(clicked) });
@@ -198,6 +240,29 @@ describe("Tray", () => {
       fireEvent.click(button("Counter"));
 
       expect(clicked).toStrictEqual([counter.id]);
+    });
+
+    it("leaves the menu's button working after a drag", () => {
+      const pressed: string[] = [];
+      renderTray({
+        end: (
+          <button onClick={() => pressed.push("menu")} type="button">
+            All tray icons
+          </button>
+        ),
+      });
+
+      drag("Counter", "Syncthing");
+      fireEvent.pointerUp(window, { pointerId: 1 });
+      fireEvent.click(button("Counter"));
+      fireEvent.pointerDown(button("All tray icons"), {
+        button: 0,
+        pointerId: 1,
+      });
+      fireEvent.pointerUp(window, { pointerId: 1 });
+      fireEvent.click(button("All tray icons"));
+
+      expect(pressed).toStrictEqual(["menu"]);
     });
   });
 });

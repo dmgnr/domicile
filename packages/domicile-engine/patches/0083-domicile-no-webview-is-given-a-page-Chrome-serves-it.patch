@@ -30,10 +30,10 @@ and both blobs are that file's.
  2 files changed, 13 insertions(+)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 66cfd67..8b5b7f5 100644
+index 0b8ebc8..cbe74c3 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -1314,6 +1314,11 @@ source_set("core") {
+@@ -1322,6 +1322,11 @@ source_set("core") {
      "//components/data_sharing/public:features",
      "//components/desktop_to_mobile_promos",
      "//components/device_event_log",
@@ -46,10 +46,10 @@ index 66cfd67..8b5b7f5 100644
      "//components/embedder_support:content_settings",
      "//components/embedder_support:user_agent",
 diff --git a/chrome/browser/chrome_content_browser_client_navigation_throttles.cc b/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
-index ff67d9b..555c601 100644
+index 27b7773..003e286 100644
 --- a/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
 +++ b/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
-@@ -53,6 +53,7 @@
+@@ -54,6 +54,7 @@
  #include "components/captive_portal/core/buildflags.h"
  #include "components/contextual_tasks/public/features.h"
  #include "components/custom_handlers/protocol_handler_navigation_throttle.h"
@@ -57,7 +57,7 @@ index ff67d9b..555c601 100644
  #include "components/error_page/content/browser/net_error_auto_reloader.h"
  #include "components/guest_view/buildflags/buildflags.h"
  #include "components/history/content/browser/visited_link_navigation_throttle.h"
-@@ -320,6 +321,13 @@ void CreateAndAddChromeThrottlesForNavigation(
+@@ -321,6 +322,13 @@ void CreateAndAddChromeThrottlesForNavigation(
  #endif  // BUILDFLAG(IS_ANDROID)
    }
  

@@ -56,7 +56,7 @@ export const Loading = ({ children, icon: Icon, layout = "panel" }: Props) => {
           role="status"
         >
           <span aria-hidden className={radarStyles}>
-            <Icon size={20} weight="bold" />
+            <Icon size={22} weight="bold" />
           </span>
           <span className={titleStyles}>{children}</span>
         </span>
@@ -120,12 +120,15 @@ const radarStyles = center({
     opacity: 0,
     position: "absolute",
   },
-  backgroundColor: "fill",
-  blockSize: 10,
+  backgroundImage:
+    "linear-gradient(150deg, color-mix(in oklab, {colors.accent} 32%, transparent), color-mix(in oklab, {colors.accent} 12%, transparent))",
+  blockSize: 12,
   borderRadius: "full",
-  color: "textSoft",
-  inlineSize: 10,
-  marginBlockEnd: 1,
+  boxShadow:
+    "inset 0 0 0 1px color-mix(in oklab, {colors.accent} 30%, transparent)",
+  color: "color-mix(in oklab, {colors.accent} 70%, currentcolor)",
+  inlineSize: 12,
+  marginBlockEnd: 1.5,
   position: "relative",
 });
 

@@ -23,11 +23,11 @@ EdgeSwipe and TouchEdgeSwipes are new files under src/.
 Verified: not built. This repository cannot build Chromium; the engine
 job builds it on `crux`.
 ---
- ui/events/BUILD.gn                           | 2 ++
- ui/events/ozone/evdev/BUILD.gn               | 2 ++
- ui/events/ozone/evdev/event_factory_evdev.cc | 9 ++++++++-
- ui/events/ozone/evdev/event_factory_evdev.h  | 9 +++++++++
- 4 files changed, 21 insertions(+), 1 deletion(-)
+ ui/events/BUILD.gn                           |  2 ++
+ ui/events/ozone/evdev/BUILD.gn               |  2 ++
+ ui/events/ozone/evdev/event_factory_evdev.cc | 10 +++++++++-
+ ui/events/ozone/evdev/event_factory_evdev.h  |  9 +++++++++
+ 4 files changed, 22 insertions(+), 1 deletion(-)
 
 diff --git a/ui/events/BUILD.gn b/ui/events/BUILD.gn
 index ff2fa8f..88edc77 100644
@@ -43,7 +43,7 @@ index ff2fa8f..88edc77 100644
      "domicile/native_gesture_sink.h",
      "domicile/scroll_metadata.h",
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index 0602b58..c48df6a 100644
+index 9bbb413..738817b 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -57,6 +57,8 @@ component("evdev") {
@@ -56,12 +56,12 @@ index 0602b58..c48df6a 100644
      "domicile/typing_guard.h",
      "domicile/wheel_ticks.cc",
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.cc b/ui/events/ozone/evdev/event_factory_evdev.cc
-index 70f4665..fa16886 100644
+index 92306a5..ae5caca 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.cc
 +++ b/ui/events/ozone/evdev/event_factory_evdev.cc
-@@ -241,7 +241,10 @@ EventFactoryEvdev::EventFactoryEvdev(
-                         &mouse_button_map_,
-                         &pointing_stick_button_map_),
+@@ -245,7 +245,10 @@ EventFactoryEvdev::EventFactoryEvdev(
+       exclude_dispatch_from_safety_checks_(
+           base::FeatureList::IsEnabled(kExcludeEvdevDispatchFromSafetyChecks)),
        opener_factory_(std::move(opener_factory)),
 -      touch_id_generator_(0) {
 +      touch_id_generator_(0),
@@ -71,20 +71,20 @@ index 70f4665..fa16886 100644
    CHECK(device_manager_, base::NotFatalUntil::M163);
  }
  
-@@ -415,7 +418,11 @@ void EventFactoryEvdev::DispatchScrollEvent(const ScrollEventParams& params) {
+@@ -446,6 +449,11 @@ void EventFactoryEvdev::DispatchScrollEvent(const ScrollEventParams& params) {
  void EventFactoryEvdev::DispatchTouchEvent(const TouchEventParams& params) {
    TRACE_EVENT1("evdev", "EventFactoryEvdev::DispatchTouchEvent", "device",
                 params.device_id);
 +  // DOMICILE: on to DispatchTouchEventNow, now, later or never.
 +  edge_swipes_.Touch(params);
 +}
- 
++
 +void EventFactoryEvdev::DispatchTouchEventNow(const TouchEventParams& params) {
-   gfx::PointF location = GetTransformedEventLocation(params);
-   PointerDetails details = GetTransformedEventPointerDetails(params);
-   details.twist = 0.f;
+   std::optional<base::ScopedSafetyChecksExclusion> excluded;
+   if (exclude_dispatch_from_safety_checks_) {
+     excluded.emplace();
 diff --git a/ui/events/ozone/evdev/event_factory_evdev.h b/ui/events/ozone/evdev/event_factory_evdev.h
-index b374fc8..2a2763a 100644
+index 7dd8822..43db310 100644
 --- a/ui/events/ozone/evdev/event_factory_evdev.h
 +++ b/ui/events/ozone/evdev/event_factory_evdev.h
 @@ -15,6 +15,7 @@
@@ -105,7 +105,7 @@ index b374fc8..2a2763a 100644
    int NextDeviceId();
  
    // Device thread initialization.
-@@ -193,6 +197,11 @@ class COMPONENT_EXPORT(EVDEV) EventFactoryEvdev : public DeviceEventObserver,
+@@ -195,6 +199,11 @@ class COMPONENT_EXPORT(EVDEV) EventFactoryEvdev : public DeviceEventObserver,
  
    scoped_refptr<base::SingleThreadTaskRunner> user_input_task_runner_;
  

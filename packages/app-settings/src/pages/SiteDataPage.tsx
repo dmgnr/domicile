@@ -1,7 +1,10 @@
 import { Button } from "@domicile-desktop/component-library/Button";
 import { Card } from "@domicile-desktop/component-library/Card";
+import { EmptyState } from "@domicile-desktop/component-library/EmptyState";
 import { Input } from "@domicile-desktop/component-library/Input";
 import { ModalDialog } from "@domicile-desktop/component-library/ModalDialog";
+import { DatabaseIcon } from "@phosphor-icons/react/dist/ssr/Database";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/ssr/MagnifyingGlass";
 import { TrashIcon } from "@phosphor-icons/react/dist/ssr/Trash";
 import { useState } from "react";
 
@@ -53,11 +56,19 @@ export const SiteDataPage = ({ description, host, report, title }: Props) => {
             value={search}
           />
           {shown.length === 0 ? (
-            <p className={hintStyles}>
-              {search.trim() === ""
-                ? "No site stores data."
-                : "No site with data matches."}
-            </p>
+            <EmptyState
+              {...(search.trim() === ""
+                ? {
+                    hint: "Sites you visit that save cookies show up here.",
+                    icon: DatabaseIcon,
+                    title: "No site stores data",
+                  }
+                : {
+                    hint: "Try another name.",
+                    icon: MagnifyingGlassIcon,
+                    title: "No site matches",
+                  })}
+            />
           ) : (
             <div>
               {shown.map((site) => (

@@ -1,0 +1,223 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a page's compositor thread says why it sent nothing
+ at a new size
+
+Patch 0245 fired on lyra (2026-11-19, Claude Desktop): the page's main
+thread committed the new surface with nothing deferred, yet no frame at
+that size reached the browser, so its widget waited on the resize ack
+for good. What happens next is on the compositor thread.
+
+LayerTreeHostImpl now watches each newer target surface from
+SetTargetLocalSurfaceId. If no frame at or past it has been submitted 2
+seconds in, and the page is visible, it logs at ERROR: begin frames
+since (and how long ago the last came), how many were skipped for an
+older surface, frames sent, frames not produced and the last reason,
+acks, frames still awaiting viz's ack, the active and pending surfaces,
+whether it can draw, whether it is evicted, and whether it has a frame
+sink.
+
+Log only: the line says whether the page lacks begin frames, is
+throttled behind an unacked frame, or has nothing it can draw.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on crux.
+---
+ cc/trees/layer_tree_host_impl.cc | 95 ++++++++++++++++++++++++++++++++
+ cc/trees/layer_tree_host_impl.h  | 17 ++++++
+ 2 files changed, 112 insertions(+)
+
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index da5d072..47605f7 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -28,6 +28,7 @@
+ #include "base/feature_list.h"
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ptr_exclusion.h"
+@@ -2040,9 +2041,71 @@ void LayerTreeHostImpl::DidModifyTilePriorities(bool pending_update_tiles) {
+   delegate_->SetNeedsPrepareTilesOnImplThread();
+ }
+ 
++void LayerTreeHostImpl::DomicileWatchTarget() {
++  domicile_target_set_ = base::TimeTicks::Now();
++  domicile_begin_frames_ = 0;
++  domicile_skipped_for_target_ = 0;
++  domicile_frames_sent_ = 0;
++  domicile_not_produced_ = 0;
++  domicile_acks_ = 0;
++  domicile_last_skip_ = "none";
++  if (!domicile_target_timer_.IsRunning()) {
++    domicile_target_timer_.SetTaskRunner(
++        base::WrapRefCounted(GetTaskRunner()));
++  }
++  // Safe: the timer is a member, so it never runs after this is gone.
++  domicile_target_timer_.Start(
++      FROM_HERE, base::Seconds(2),
++      base::BindOnce(&LayerTreeHostImpl::DomicileReportTargetWait,
++                     base::Unretained(this)));
++}
++
++void LayerTreeHostImpl::DomicileReportTargetWait() {
++  // A hidden page draws nothing by design.
++  if (!visible_) {
++    return;
++  }
++  const viz::LocalSurfaceId& active =
++      active_tree()->local_surface_id_from_parent();
++  const base::TimeTicks now = base::TimeTicks::Now();
++  std::string last_begin_frame = "never";
++  if (!domicile_last_begin_frame_.is_null()) {
++    last_begin_frame =
++        base::NumberToString((now - domicile_last_begin_frame_).InSecondsF()) +
++        " s ago";
++  }
++  LOG(ERROR) << "domicile: compositor " << id_
++             << " thread has sent no frame at its new surface "
++             << target_local_surface_id_.ToString() << " in "
++             << (now - domicile_target_set_).InSecondsF()
++             << " s: begin frames " << domicile_begin_frames_
++             << " (last " << last_begin_frame << "), skipped for an older surface "
++             << domicile_skipped_for_target_ << ", frames sent "
++             << domicile_frames_sent_ << ", not produced "
++             << domicile_not_produced_ << " (last: " << domicile_last_skip_
++             << "), acks " << domicile_acks_ << ", frames awaiting ack "
++             << domicile_unacked_ << ", active surface " << active.ToString()
++             << ", pending surface "
++             << (pending_tree()
++                     ? pending_tree()->local_surface_id_from_parent().ToString()
++                     : std::string("none"))
++             << ", can draw " << (CanDraw() ? "yes" : "no")
++             << ", evicted "
++             << (evicted_local_surface_id_.is_valid() ? "yes" : "no")
++             << ", frame sink " << (layer_tree_frame_sink_ ? "bound" : "none")
++             << ".";
++}
++
+ void LayerTreeHostImpl::SetTargetLocalSurfaceId(
+     const viz::LocalSurfaceId& target_local_surface_id) {
++  const bool domicile_newer =
++      target_local_surface_id.is_valid() &&
++      target_local_surface_id.IsNewerThanOrEmbeddingChanged(
++          target_local_surface_id_);
+   target_local_surface_id_ = target_local_surface_id;
++  if (domicile_newer) {
++    DomicileWatchTarget();
++  }
+   if (layer_context_ && target_local_surface_id.is_valid()) {
+     layer_context_->SetTargetLocalSurfaceId(target_local_surface_id);
+   }
+@@ -2354,6 +2417,8 @@ void LayerTreeHostImpl::SetExternalTilePriorityConstraints(
+ }
+ 
+ void LayerTreeHostImpl::DidReceiveCompositorFrameAck() {
++  ++domicile_acks_;
++  --domicile_unacked_;
+   delegate_->DidReceiveCompositorFrameAckOnImplThread();
+ }
+ 
+@@ -3016,6 +3081,16 @@ std::optional<SubmitInfo> LayerTreeHostImpl::DrawLayers(FrameData* frame) {
+       layer_tree_frame_sink_->NotifyNewLocalSurfaceIdExpectedWhilePaused();
+     }
+   }
++  // Either branch above sent a frame.
++  ++domicile_frames_sent_;
++  ++domicile_unacked_;
++  // As WillBeginImplFrame decides, a frame at or past the target, or under
++  // another embedding, is the page drawing again.
++  if (domicile_target_timer_.IsRunning() &&
++      !target_local_surface_id_.IsNewerThan(
++          active_tree()->local_surface_id_from_parent())) {
++    domicile_target_timer_.Stop();
++  }
+ 
+ #if DCHECK_IS_ON()
+   if (!doing_sync_draw_) {
+@@ -3744,6 +3819,8 @@ bool LayerTreeHostImpl::WillBeginImplFrame(const viz::BeginFrameArgs& args) {
+     begin_frame_time_delta_ = base::TimeDelta();
+   }
+ 
++  ++domicile_begin_frames_;
++  domicile_last_begin_frame_ = base::TimeTicks::Now();
+   impl_thread_phase_ = ImplThreadPhase::INSIDE_IMPL_FRAME;
+   current_begin_frame_tracker_.Start(args);
+   frame_trackers_.NotifyBeginImplFrame(args);
+@@ -3771,6 +3848,7 @@ bool LayerTreeHostImpl::WillBeginImplFrame(const viz::BeginFrameArgs& args) {
+         pending_tree() ? pending_tree()->local_surface_id_from_parent()
+                        : active_tree()->local_surface_id_from_parent();
+     if (target_local_surface_id_.IsNewerThan(upcoming_lsid)) {
++      ++domicile_skipped_for_target_;
+       return false;
+     }
+   }
+@@ -3858,6 +3936,21 @@ void LayerTreeHostImpl::DidNotProduceFrame(const viz::BeginFrameAck& ack,
+         return "";
+       }(),
+       "Frame Sequence Number", ack.frame_id.sequence_number);
++  ++domicile_not_produced_;
++  switch (reason) {
++    case FrameSkippedReason::kRecoverLatency:
++      domicile_last_skip_ = "recovering latency";
++      break;
++    case FrameSkippedReason::kNoDamage:
++      domicile_last_skip_ = "no damage";
++      break;
++    case FrameSkippedReason::kWaitingOnMain:
++      domicile_last_skip_ = "waiting on main";
++      break;
++    case FrameSkippedReason::kDrawThrottled:
++      domicile_last_skip_ = "draw throttled";
++      break;
++  }
+   if (layer_tree_frame_sink_) {
+     layer_tree_frame_sink_->DidNotProduceFrame(ack, reason);
+   }
+@@ -4568,6 +4661,8 @@ void LayerTreeHostImpl::ReleaseLayerTreeFrameSink() {
+   // the new LayerTreeFrameSink succeeds or not.
+   layer_tree_frame_sink_->DetachFromClient();
+   layer_tree_frame_sink_ = nullptr;
++  // A released sink holds no frames of ours.
++  domicile_unacked_ = 0;
+   layer_context_.reset();
+ 
+   // If gpu compositing, then any resources created with the gpu context in the
+diff --git a/cc/trees/layer_tree_host_impl.h b/cc/trees/layer_tree_host_impl.h
+index 778e151..2bfdc39 100644
+--- a/cc/trees/layer_tree_host_impl.h
++++ b/cc/trees/layer_tree_host_impl.h
+@@ -27,6 +27,7 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "base/timer/timer.h"
+ #include "base/types/optional_ref.h"
+ #include "cc/base/delayed_unique_notifier.h"
+ #include "cc/benchmarks/micro_benchmark_controller_impl.h"
+@@ -1294,6 +1295,22 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
+   std::optional<RenderFrameMetadata> last_draw_render_frame_metadata_;
+   // The viz::LocalSurfaceId to unthrottle drawing for.
+   viz::LocalSurfaceId target_local_surface_id_;
++
++  // Domicile: what the compositor thread did while waiting to draw at a new
++  // surface, logged when it has sent no frame there in 2 s.
++  void DomicileWatchTarget();
++  void DomicileReportTargetWait();
++  base::OneShotTimer domicile_target_timer_;
++  base::TimeTicks domicile_target_set_;
++  base::TimeTicks domicile_last_begin_frame_;
++  int domicile_begin_frames_ = 0;
++  int domicile_skipped_for_target_ = 0;
++  int domicile_frames_sent_ = 0;
++  int domicile_not_produced_ = 0;
++  int domicile_acks_ = 0;
++  // Every frame ever sent less every ack: frames viz still holds.
++  int domicile_unacked_ = 0;
++  const char* domicile_last_skip_ = "none";
+   viz::LocalSurfaceId evicted_local_surface_id_;
+   viz::ChildLocalSurfaceIdAllocator child_local_surface_id_allocator_;
+   viz::LocalSurfaceId current_local_surface_id_from_client_;

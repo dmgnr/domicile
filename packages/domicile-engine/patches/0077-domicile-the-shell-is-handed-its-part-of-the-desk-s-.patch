@@ -22,7 +22,7 @@ gives.
  2 files changed, 6 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 369af67..0b852d0 100644
+index 5b79885..3c7b504 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -295,6 +295,8 @@ generated_dictionary_sources_in_modules = [
@@ -34,7 +34,7 @@ index 369af67..0b852d0 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event_init.cc",
-@@ -2394,6 +2396,8 @@ generated_interface_sources_in_modules = [
+@@ -2398,6 +2400,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_modifiers_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_display.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_display.h",

@@ -27,6 +27,7 @@ use domicile_host::cast_grants::Grants;
 use domicile_host::clipboard::Contents;
 use domicile_host::cups::Cups;
 use domicile_host::data_dirs::data_dirs;
+use domicile_host::links::Links;
 use domicile_host::mime_apps::{default_handler, lists};
 use domicile_host::portal_notifications::Invoked;
 use domicile_host::system::Kept;
@@ -43,7 +44,9 @@ use crate::eis::{Captured, Eis};
 use crate::notifications::NotificationServer;
 
 mod access;
+mod accessibility;
 mod account;
+pub mod agent;
 mod app_chooser;
 mod background;
 mod clipboard;
@@ -130,8 +133,14 @@ pub const CURRENT_DESKTOP: &str = "domicile";
 pub struct Portals {
     backends: Backends,
     shots: Shots,
+    /// The shell's own screenshot dialog, while one is up.
+    shell_dialog: screenshot::ShellDialog,
     /// `None` in unit tests that cast nothing.
     recordings: Option<Recordings>,
+    agents: Arc<agent::Door>,
+    /// The pages that open links, which the Email portal hands `mailto:`
+    /// links to before the desk's mail client.
+    links: Links,
 }
 
 /// What the portal thread is told to do on the bus.
@@ -169,19 +178,37 @@ enum Told {
 }
 
 impl Portals {
+    /// The pages that open links, which every chrome connection shares.
+    pub fn links(&self) -> Links {
+        self.links.clone()
+    }
+
     /// A handle with no service behind it, for unit tests without a session
     /// bus.
     #[cfg(test)]
     pub fn to_nobody() -> Self {
         // Same state as a service thread that has stopped.
+        let backends = Backends::new(
+            NotificationServer::unserved(Vec::new()),
+            Tokens::load(None),
+            Shortcuts::new(None),
+        )
+        .0;
         Portals {
-            backends: Backends::new(
-                NotificationServer::unserved(Vec::new()),
-                Tokens::load(None),
-                Shortcuts::new(None),
-            )
-            .0,
+            links: Links::default(),
+            agents: agent::Door::new(
+                backends.queue.clone(),
+                None,
+                recording::system_clock(),
+                agent::PATIENCE,
+                agent::Accessibility {
+                    enabled: Box::new(|| true),
+                    enable: Box::new(|_| {}),
+                },
+            ),
+            backends,
             shots: Shots::none(),
+            shell_dialog: screenshot::ShellDialog::default(),
             recordings: None,
         }
     }
@@ -290,14 +317,32 @@ impl Portals {
     }
 
     /// Takes a screenshot the shell asked for itself, and returns where it
-    /// went. Blocks until then, the dialog included. See
-    /// [`screenshot::for_the_shell`].
+    /// went. Blocks until then, the dialog included. One asked for while the
+    /// shell's dialog is up answers as that dialog does; see
+    /// [`screenshot::ShellDialog`] and [`screenshot::for_the_shell`].
     pub fn screenshot(&self, file: Option<PathBuf>) -> Result<Kept, SystemError> {
-        zbus::block_on(screenshot::for_the_shell(
-            &self.backends.queue,
-            &self.shots,
-            file,
-        ))
+        let take = || {
+            zbus::block_on(screenshot::for_the_shell(
+                &self.backends.queue,
+                &self.shots,
+                file.clone(),
+            ))
+        };
+        match &file {
+            Some(_) => take(),
+            None => self.shell_dialog.take(take),
+        }
+    }
+
+    /// Writes a PNG of the desk for an agent. Blocks until then. See
+    /// [`screenshot::for_an_agent`].
+    pub fn shoot_desk(
+        &self,
+        file: PathBuf,
+        fit: u32,
+        area: Option<domicile_protocol::DeskRect>,
+    ) -> Result<domicile_protocol::DeskShot, String> {
+        zbus::block_on(screenshot::for_an_agent(&self.shots, file, fit, area))
     }
 
     /// Records what the shell picks until it stops the recording, and
@@ -308,6 +353,11 @@ impl Portals {
             message: "this desktop casts nothing to record".into(),
         })?;
         recording::for_the_shell(&self.backends.queue, recordings)
+    }
+
+    /// The agents the desk lets in. See [`agent::Door`].
+    pub fn agents(&self) -> &Arc<agent::Door> {
+        &self.agents
     }
 
     /// Draws a window for the shell's picker to preview. Blocks until it is
@@ -518,9 +568,22 @@ pub fn serve(
             })
         },
     };
+    let links = Links::default();
     let portals = Portals {
+        links: links.clone(),
+        agents: agent::Door::new(
+            backends.queue.clone(),
+            agent::path(
+                std::env::var_os("XDG_STATE_HOME").map(PathBuf::from),
+                std::env::var_os("HOME").map(PathBuf::from),
+            ),
+            recording::system_clock(),
+            agent::PATIENCE,
+            accessibility::on_the_session_bus(),
+        ),
         backends: backends.clone(),
         shots: shots.clone(),
+        shell_dialog: screenshot::ShellDialog::default(),
         recordings: Some(Recordings {
             casting: casting.casting.clone(),
             shoot: shots.shoot.clone(),
@@ -530,7 +593,7 @@ pub fn serve(
         }),
     };
     let appearance = Appearance::from(look);
-    let open = mail_client(spawn);
+    let open = mail_client(spawn, links.clone());
     thread::spawn(move || {
         let starting = Starting {
             lockdown,
@@ -551,7 +614,7 @@ pub fn serve(
             in_a_window,
             &changes,
         ) {
-            warn!(
+            tracing::error!(
                 %why,
                 "the desktop portal is not being answered; this desktop's \
                  clients will not follow its theme or show its dialogs"
@@ -912,7 +975,7 @@ fn idle_screen_cast(queue: &Arc<Queue>) -> ScreenCast {
 fn screen_cast(queue: &Arc<Queue>, casting: ScreenCasting, shoot: Shoot) -> ScreenCast {
     let grants = match casting.grants {
         Some(file) => Grants::load(file.clone()).unwrap_or_else(|why| {
-            warn!(%why, file = %file.display(), "saved screen cast grants are unreadable; applications will ask again");
+            tracing::error!(%why, file = %file.display(), "saved screen cast grants are unreadable; applications will ask again");
             Grants::default()
         }),
         None => Grants::default(),
@@ -920,13 +983,17 @@ fn screen_cast(queue: &Arc<Queue>, casting: ScreenCasting, shoot: Shoot) -> Scre
     ScreenCast::new(Arc::clone(queue), casting.casting, grants, shoot)
 }
 
-/// Opens a `mailto:` URL with the desk's default `x-scheme-handler/mailto`
-/// application, started through `spawn`.
+/// Opens a `mailto:` URL with the page that claims `mailto` links in `links`,
+/// else with the desk's default `x-scheme-handler/mailto` application,
+/// started through `spawn`.
 ///
 /// Reads `mimeapps.list` and the desktop entries on each call, as GIO does,
 /// so a new default takes effect at once.
-fn mail_client(spawn: impl Fn(&[String]) + Send + Sync + 'static) -> Open {
-    Box::new(move |url| {
+fn mail_client(spawn: impl Fn(&[String]) + Send + Sync + 'static, links: Links) -> Open {
+    Box::new(move |url, app_id| {
+        if links.open(url, Some(app_id).filter(|id| !id.is_empty())) {
+            return Ok(());
+        }
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let applications = application_dirs(&data_dirs(
             std::env::var_os("XDG_DATA_HOME"),
@@ -1143,7 +1210,7 @@ mod tests {
     }
 
     fn served(listening: bool) -> Served {
-        served_opening(listening, Box::new(|_| Ok(())))
+        served_opening(listening, Box::new(|_, _| Ok(())))
     }
 
     /// [`served`], opening `mailto:` URLs with `open`.
@@ -1871,7 +1938,7 @@ mod tests {
     fn an_account_request_for_a_user_not_found_fails_without_asking() {
         let served = served_as(
             true,
-            Box::new(|_| Ok(())),
+            Box::new(|_, _| Ok(())),
             Box::new(|| Box::pin(async { Err("nobody".into()) })),
         );
 
@@ -1929,7 +1996,7 @@ mod tests {
         let (opened, heard) = channel();
         let served = served_opening(
             true,
-            Box::new(move |url| {
+            Box::new(move |url, _| {
                 opened.send(url.to_string()).expect("the test listens");
                 Ok(())
             }),
@@ -1944,8 +2011,41 @@ mod tests {
     }
 
     #[test]
+    fn an_email_goes_to_the_page_that_claims_mailto_links() {
+        let links = Links::default();
+        let (told, heard) = channel();
+        let page = domicile_host::system::System::new(std::env::temp_dir(), Vec::new(), 0, {
+            let told = Mutex::new(told);
+            move |message| {
+                let _ = told.lock().unwrap().send(message);
+            }
+        })
+        .sharing_links(links.clone());
+        page.handle(
+            7,
+            domicile_protocol::SystemRequest::ClaimLinks {
+                schemes: vec!["mailto".into()],
+            },
+        );
+        let open = mail_client(|_| panic!("the mail client started"), links);
+
+        assert_eq!(open("mailto:a@example.com", "org.example.App"), Ok(()));
+        let heard: Vec<domicile_protocol::HostMessage> = heard.try_iter().collect();
+        assert_eq!(
+            heard.last(),
+            Some(&domicile_protocol::HostMessage::SystemEvent {
+                id: 7,
+                event: domicile_protocol::SystemEvent::Link {
+                    url: "mailto:a@example.com".into(),
+                    app_id: Some("org.example.App".into()),
+                },
+            })
+        );
+    }
+
+    #[test]
     fn an_email_with_no_mail_client_fails() {
-        let served = served_opening(true, Box::new(|_| Err("no mail client".into())));
+        let served = served_opening(true, Box::new(|_, _| Err("no mail client".into())));
 
         assert_eq!(compose(&served.client), 2);
     }

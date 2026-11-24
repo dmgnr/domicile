@@ -318,13 +318,26 @@ describe("the desk's browser windows", () => {
     id: "1",
     isApp: false,
     isCaptured: false,
+    isHidden: false,
     isPrivate: false,
+    menu: null,
+    menuBarAutoHide: false,
+    menuBarVisible: true,
+    messageBox: null,
+    parent: null,
     partition: "",
+    popupMenu: null,
     popupWindow: null,
+    profile: "default",
     title: "",
     toplevelId: null,
     url: "https://example.com/",
+    wantsFullscreen: false,
+    wantsMaximized: false,
+    wantsMinimized: false,
     width: 0,
+    x: 0,
+    y: 0,
   };
 
   it("are drawn as the engine lists them", () => {
@@ -466,17 +479,6 @@ describe("a command", () => {
     ).toEqual(["kitty", "foot"]);
   });
 
-  it("takes what only the compositor can do with it", () => {
-    // An `exec` is a process the compositor starts.
-    const { host, result } = desktop([LEFT, RIGHT]);
-
-    act(() => {
-      result.current.act(WindowAction.CommandExecuted(["foot", "-e", "htop"]));
-    });
-
-    expect(host.spawned).toEqual([["foot", "-e", "htop"]]);
-  });
-
   it("asks the compositor to lock the desk", () => {
     const { host, result } = desktop([LEFT, RIGHT]);
 
@@ -498,11 +500,12 @@ describe("a command", () => {
   });
 
   describe("searching the clipboard", () => {
-    const searched = (copied: readonly string[]) => {
+    const searched = (copied: readonly string[], onClipboard = true) => {
       const { host, result } = desktop([LEFT, RIGHT]);
       act(() => {
         host.fake.set({
           clipboard: copied.map((preview, at) => ({
+            current: onClipboard && at === 0,
             id: at,
             image: false,
             preview,
@@ -534,6 +537,10 @@ describe("a command", () => {
       expect(searched([])).toEqual([]);
     });
 
+    it("opens nothing after the copy on the clipboard was removed", () => {
+      expect(searched(["hello world"], false)).toEqual([]);
+    });
+
     it("opens a private window from a private one", () => {
       const { host, result } = desktop([LEFT, RIGHT]);
       host.lists([
@@ -543,19 +550,38 @@ describe("a command", () => {
           id: "1",
           isApp: false,
           isCaptured: false,
+          isHidden: false,
           isPrivate: true,
+          menu: null,
+          menuBarAutoHide: false,
+          menuBarVisible: true,
+          messageBox: null,
+          parent: null,
           partition: "",
+          popupMenu: null,
           popupWindow: null,
+          profile: "default",
           title: "",
           toplevelId: null,
           url: "https://example.com/",
+          wantsFullscreen: false,
+          wantsMaximized: false,
+          wantsMinimized: false,
           width: 0,
+          x: 0,
+          y: 0,
         },
       ]);
       act(() => {
         host.fake.set({
           clipboard: [
-            { id: 0, image: false, preview: "hello world", thumbnail: "" },
+            {
+              current: true,
+              id: 0,
+              image: false,
+              preview: "hello world",
+              thumbnail: "",
+            },
           ],
         });
       });
@@ -586,13 +612,26 @@ describe("a command", () => {
       id: "1",
       isApp: true,
       isCaptured: false,
+      isHidden: false,
       isPrivate: false,
+      menu: null,
+      menuBarAutoHide: false,
+      menuBarVisible: true,
+      messageBox: null,
+      parent: null,
       partition: "",
+      popupMenu: null,
       popupWindow: null,
+      profile: "default",
       title: "",
       toplevelId: null,
       url: "https://messages.example/",
+      wantsFullscreen: false,
+      wantsMaximized: false,
+      wantsMinimized: false,
       width: 0,
+      x: 0,
+      y: 0,
     };
     host.lists([window, { ...window, appId: "", id: "2", isApp: false }]);
 

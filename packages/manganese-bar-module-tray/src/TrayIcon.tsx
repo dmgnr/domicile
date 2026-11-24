@@ -1,17 +1,12 @@
 import { Button } from "@domicile-desktop/component-library/Button";
-import type { Point } from "@domicile-desktop/component-library/ContextMenu";
-import { watchMenu } from "@domicile-desktop/sdk/dbusmenu";
+import type { watchMenu } from "@domicile-desktop/sdk/dbusmenu";
 import type { Domicile } from "@domicile-desktop/sdk/desktop/desktop";
 import type { TrayItem } from "@domicile-desktop/sdk/tray";
-import { useState } from "react";
 
 import { css } from "../styled-system/css";
 import { center } from "../styled-system/patterns";
 import type { MenuIcons } from "./menu-icons";
-import { desktopMenuIcons } from "./menu-icons";
-import { TrayMenu } from "./TrayMenu";
-import { useMenuIcons } from "./useMenuIcons";
-import { useTrayMenu } from "./useTrayMenu";
+import { useItemMenu } from "./useItemMenu";
 
 /** The middle button, as `MouseEvent.button` numbers it. */
 const MIDDLE_BUTTON = 1;
@@ -39,23 +34,12 @@ type Props = {
  * An icon without an image shows the first letter of its title, so it can still
  * be clicked.
  */
-export const TrayIcon = ({
-  domicile,
-  icons = desktopMenuIcons,
-  item: { bus, icon, id, itemIsMenu, menu, title },
-  watch = watchMenu,
-}: Props) => {
-  // Where the open menu hangs from, or `undefined` while it is closed.
-  const [at, setAt] = useState<Point | undefined>(undefined);
-  const opened = useTrayMenu(domicile, bus, menu, at !== undefined, watch);
-  const pictures = useMenuIcons(domicile, opened?.menu, icons);
+export const TrayIcon = ({ domicile, icons, item, watch }: Props) => {
+  const { icon, id, itemIsMenu, title } = item;
+  const menu = useItemMenu(domicile, item, watch, icons);
   const showMenu = (button: HTMLElement) => {
-    if (menu === undefined) {
-      domicile.tray.activate(id, "context");
-    } else {
-      const box = button.getBoundingClientRect();
-      setAt({ x: box.left, y: box.bottom });
-    }
+    const box = button.getBoundingClientRect();
+    menu.show({ x: box.left, y: box.bottom });
   };
   return (
     <>
@@ -92,19 +76,7 @@ export const TrayIcon = ({
           />
         )}
       </Button>
-      {at !== undefined && opened !== undefined && (
-        <TrayMenu
-          at={at}
-          icons={pictures}
-          label={title}
-          menu={opened.menu}
-          onClick={opened.click}
-          onClose={() => {
-            setAt(undefined);
-          }}
-          onShow={opened.aboutToShow}
-        />
-      )}
+      {menu.opened}
     </>
   );
 };

@@ -7,12 +7,15 @@
 #include <memory>
 #include <optional>
 
+#include "components/domicile/mojom/picture_in_picture.mojom-blink.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/platform/graphics/external_surface_embedder.h"
 #include "third_party/blink/renderer/platform/graphics/surface_layer_bridge.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/events/types/native_pinch.h"
@@ -65,11 +68,15 @@ class CORE_EXPORT AppInputClient : public Supplement<LocalDOMWindow> {
                                 bool moved) = 0;
   // A hand moved the pointer over `app_id` by `movement`, in the page's CSS
   // pixels, to `on_page` in the page; `size` is the element's, as for
-  // `AppPointerMotion`. Sent after that motion.
-  virtual void AppPointerRelative(const String& app_id,
-                                  const gfx::Vector2dF& movement,
-                                  const gfx::PointF& on_page,
-                                  const gfx::SizeF& size) = 0;
+  // `AppPointerMotion`. Sent after that motion. `unaccelerated` is the
+  // device's motion before pointer acceleration, in physical pixels, when it
+  // said (PointerEvent::UnacceleratedMovement).
+  virtual void AppPointerRelative(
+      const String& app_id,
+      const gfx::Vector2dF& movement,
+      const std::optional<gfx::Vector2dF>& unaccelerated,
+      const gfx::PointF& on_page,
+      const gfx::SizeF& size) = 0;
   // A Linux button code (input-event-codes.h), going down or coming up.
   virtual void AppPointerButton(const String& app_id,
                                 uint32_t button,
@@ -116,8 +123,16 @@ class CORE_EXPORT AppInputClient : public Supplement<LocalDOMWindow> {
 // `app-id` says which window. It is a reflected content attribute, the way
 // <img src> is, so setting it in HTML and setting it from script are the same
 // operation and re-point the element at another client's surface.
-class CORE_EXPORT HTMLAppElement final : public HTMLElement,
-                                         public WebSurfaceLayerBridgeObserver {
+//
+// `picture-in-picture` instead names a page's video in picture-in-picture, as
+// the desktop's `pictureInPictureVideos` lists it, and the element embeds the
+// surface the video's player draws to: the shell draws the window Chrome
+// floats. Nothing is sent to it; the pointer over it is the page's. See
+// components/domicile/mojom/picture_in_picture.mojom.
+class CORE_EXPORT HTMLAppElement final
+    : public HTMLElement,
+      public WebSurfaceLayerBridgeObserver,
+      public domicile::mojom::blink::PictureInPictureVideoSurface {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -143,7 +158,11 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
   // Called by LayoutAppSurface once layout has a box, and again whenever that
   // box changes size. The box is what the producer is told to render at: for an
   // <app> the layout box *is* the xdg_toplevel.configure.
-  void SurfaceBoxChanged(const gfx::Size& size);
+  //
+  // `zoom` is the element's CSS `zoom`, ancestors' included. The client draws
+  // that much denser at a logical size that much smaller, so a zoomed window
+  // stays sharp where a transform would resample it.
+  void SurfaceBoxChanged(const gfx::Size& size, double zoom);
 
   // The control channel named synced frame `frame` for window `app_id`. Each
   // <app> for it in `document` that sets no `frame` shows the newest one
@@ -158,6 +177,9 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
   // The pointer, the wheel and the secondary button's menu over this element
   // are its client's: see the .cc. Every other event is an HTMLElement's.
   void DefaultEventHandler(Event&) override;
+
+  // domicile::mojom::blink::PictureInPictureVideoSurface:
+  void SurfaceChanged(const viz::SurfaceId& surface_id) override;
 
   // WebSurfaceLayerBridgeObserver:
   void OnWebLayerUpdated() override;
@@ -181,6 +203,12 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
                   const std::optional<viz::SurfaceId>&);
   // The producer of the surface shown disconnected.
   void OnSurfaceLost();
+
+  // Ask the browser for the surface of the video `picture-in-picture` names,
+  // and embed each it sends; the first fires
+  // `domicile-picture-in-picture-shown`. A no-op without a frame or without
+  // the attribute.
+  void ShowPictureInPicture();
 
   bool CreateLayer();
 
@@ -227,6 +255,10 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
   // relayout of the page a resize of every window on it.
   gfx::Size configured_size_;
 
+  // The CSS `zoom` last sent with the box. A zoom change reconfigures the
+  // client even when the box keeps its size.
+  double configured_zoom_ = 1.0;
+
   // Whether an Embed() has been asked for and not yet answered. The browser
   // holds the reply until a producer connects for this app id, which may be
   // never, so a second ask would queue behind the first rather than replace it.
@@ -248,6 +280,16 @@ class CORE_EXPORT HTMLAppElement final : public HTMLElement,
 
   std::unique_ptr<::blink::SurfaceLayerBridge> surface_layer_bridge_;
   std::unique_ptr<ExternalSurfaceEmbedder> external_surface_embedder_;
+
+  // A picture-in-picture video's: the browser's list of them, and the
+  // surface of the one shown. Unbound for a window's <app>.
+  HeapMojoRemote<domicile::mojom::blink::PictureInPictureVideos>
+      picture_in_picture_;
+  HeapMojoReceiver<domicile::mojom::blink::PictureInPictureVideoSurface,
+                   HTMLAppElement>
+      picture_in_picture_surface_;
+  // Whether the shown video's first surface was embedded and said so.
+  bool picture_in_picture_shown_ = false;
 };
 
 }  // namespace blink

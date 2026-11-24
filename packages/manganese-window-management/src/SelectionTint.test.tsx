@@ -5,6 +5,7 @@ import { render } from "@testing-library/react";
 import { css } from "../styled-system/css";
 import { recordedSettles } from "./recorded-settles";
 import { SelectionTint } from "./SelectionTint";
+import { SlidingScreen } from "./sliding-screen";
 
 // Loads the real stylesheet so motion and settling styles resolve.
 loadEmittedStylesheet(
@@ -33,6 +34,20 @@ const tint = (container: HTMLElement): HTMLElement => {
 };
 
 describe("SelectionTint", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself to its workspace while a switch slides it", () => {
+    const { container } = render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <SelectionTint {...tintProps} motion="leaving-to-start" />
+      </SlidingScreen>,
+    );
+
+    expect(tint(container).style.clip).toBe(
+      "rect(-52px, 1260px, 948px, -20px)",
+    );
+  });
+
   it("washes its box in the accent", () => {
     const { container } = render(<SelectionTint {...tintProps} />);
 

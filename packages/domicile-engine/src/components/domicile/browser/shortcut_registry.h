@@ -94,8 +94,14 @@ class ShortcutRegistry {
                        ModifiersCallback on_modifiers);
 
   // Stops delivering to `channel`. Its claims stay, left over, so a reloading
-  // page leaves no gap in which a chord reaches the focused window.
+  // page leaves no gap in which a chord reaches the focused window. Unless the
+  // shell changed while it was open: then its claims go with it.
   void RemoveChannel(ChannelId channel);
+
+  // The desktop is switching to another shell (`domicile load-shell`). Drops
+  // the claims closed pages left over, and has every page open now drop its
+  // claims when it closes instead of leaving them.
+  void ShellChanged();
 
   // Claims `chord` for the desktop on behalf of `channel`. Idempotent, so the
   // shell can re-run its claims.
@@ -144,6 +150,8 @@ class ShortcutRegistry {
     ShortcutCallback on_shortcut;
     ShortcutCallback on_release;
     ModifiersCallback on_modifiers;
+    // Opened before the last ShellChanged: the old shell's page.
+    bool outgoing = false;
   };
 
   base::Lock lock_;

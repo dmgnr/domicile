@@ -16,6 +16,7 @@ export const asReading = (reading: GmailReading): InboxReading => {
           receivedAt,
           subject,
         })),
+        reading.addresses,
       );
     case GmailKind.Failed:
       return InboxReading.Failed(reading.reason);

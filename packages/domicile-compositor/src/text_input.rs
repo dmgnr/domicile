@@ -245,22 +245,34 @@ impl DomicileCompositor {
             .map_or((0, 0), |(x, y, _, _)| (x, y));
         let window = self.bounds_of(&editor);
         let screen = window.and_then(|window| self.screens.screen_of(window));
+        // The list is placed in the editor's logical units, which a zoomed
+        // window draws larger on the desktop.
+        let zoom = self.zoom_of(&editor);
+        let corner = domicile_scene::Point { x: 0.0, y: 0.0 };
         let position = under_the_cursor(
             candidates.popup.text_input_rectangle(),
             geometry,
             candidates.size,
-            window.zip(screen),
+            window.zip(screen).map(|(window, screen)| {
+                (
+                    domicile_scene::Bounds {
+                        min: corner,
+                        max: corner,
+                    },
+                    crate::scale::screen_in_window(window.min, screen, zoom),
+                )
+            }),
         );
         let bounds = window.map(|window| {
             let min = domicile_scene::Point {
-                x: window.min.x + position.0,
-                y: window.min.y + position.1,
+                x: window.min.x + position.0 * zoom,
+                y: window.min.y + position.1 * zoom,
             };
             domicile_scene::Bounds {
                 min,
                 max: domicile_scene::Point {
-                    x: min.x + candidates.size.0,
-                    y: min.y + candidates.size.1,
+                    x: min.x + candidates.size.0 * zoom,
+                    y: min.y + candidates.size.1 * zoom,
                 },
             }
         });

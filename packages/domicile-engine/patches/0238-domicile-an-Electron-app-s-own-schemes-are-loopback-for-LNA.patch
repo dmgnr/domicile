@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an Electron app's own schemes are loopback for LNA
+
+Element could not reach a homeserver behind WireGuard. Its pages are at
+vector://, an app's own scheme, which has no IP address, so
+ChromeContentBrowserClient left it kUnknown and Local Network Access read
+it as public. Every request it made to a private address (the VPN's
+homeserver, anything on the LAN) was a LOCAL_NETWORK permission request
+that neither the app's handler nor the shell is asked about, so it was
+never granted.
+
+An app's own scheme is the app, installed on this machine, as
+chrome-extension:// is, so it is classed loopback, as the shell is
+(patch 0066). Its fetches are then never more private than itself. An
+app's http(s) pages are sites and keep LNA as they were.
+
+The schemes are the ones --domicile-electron-schemes registers (patch
+0222).
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ chrome/browser/chrome_content_browser_client.cc | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 983f7f7..7a5496f 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -2321,6 +2321,18 @@ ChromeContentBrowserClient::DetermineAddressSpaceFromURL(const GURL& url) {
+   if (url.SchemeIs(domicile::kDomicileScheme)) {
+     return network::mojom::IPAddressSpace::kLoopback;
+   }
++  // Domicile's engine fork. An Electron app's own schemes (Element's
++  // vector://) are the app on this machine, not a site, as
++  // chrome-extension:// is. Left kUnknown they read as public, and every
++  // request the app makes into the LAN or a VPN asks for local network access
++  // no one answers.
++  static const base::NoDestructor<std::vector<domicile::ElectronScheme>>
++      electron_schemes(
++          domicile::ElectronSchemesIn(*base::CommandLine::ForCurrentProcess()));
++  if (std::ranges::contains(*electron_schemes, url.scheme(),
++                            &domicile::ElectronScheme::scheme)) {
++    return network::mojom::IPAddressSpace::kLoopback;
++  }
+ 
+   return network::mojom::IPAddressSpace::kUnknown;
+ }

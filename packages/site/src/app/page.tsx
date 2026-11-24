@@ -4,6 +4,7 @@ import { Batteries } from "../domicile/Batteries";
 import { Build } from "../domicile/Build";
 import { DomicileMark } from "../domicile/DomicileMark";
 import { DOCS } from "../domicile/docs";
+import { Electron } from "../domicile/Electron";
 import { Explore } from "../domicile/Explore";
 import { Faq } from "../domicile/Faq";
 import { Hero } from "../domicile/Hero";
@@ -41,6 +42,7 @@ const DomicilePage = () => (
         { href: "/docs/how-it-works", label: "How it works" },
         { href: "#docs", label: "Docs" },
         { href: "/manganese", label: "Manganese" },
+        { href: "/docs/release-notes", label: "Release notes" },
       ]}
       sticky
     />
@@ -49,6 +51,7 @@ const DomicilePage = () => (
       <HeroDemo />
       <Why />
       <Possible />
+      <Electron />
       <Build />
       <Make />
       <Swap />

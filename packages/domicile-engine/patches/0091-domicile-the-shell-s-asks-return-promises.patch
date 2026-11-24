@@ -19,7 +19,7 @@ job builds it on `crux`.
  2 files changed, 9 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 3d587b4..c1e98c9 100644
+index dd62232..708efe0 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -293,6 +293,12 @@ generated_dictionary_sources_in_modules = [

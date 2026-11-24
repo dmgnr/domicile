@@ -20,10 +20,10 @@ job builds it on `crux`.
  2 files changed, 3 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index a3f4770..3d587b4 100644
+index 58a619e..dd62232 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
-@@ -2424,6 +2424,8 @@ generated_interface_sources_in_modules = [
+@@ -2428,6 +2428,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_item.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_item.h",

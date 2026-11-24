@@ -46,7 +46,9 @@ export const LevelToast = ({ changes, icon, label, level, muted }: Props) => (
       role="meter"
       // Inline because the level is a runtime value Panda cannot extract.
       style={{ "--level-toast-level": level } as CSSProperties}
-    />
+    >
+      <span className={fillStyles} />
+    </span>
   </HeldToast>
 );
 
@@ -178,26 +180,28 @@ const valueStyles = css({
 // A track filled from the start edge. The fill eases to each new level, which
 // shows while a key is held.
 const meterStyles = css({
-  "&::after": {
-    backgroundColor: "accent",
-    borderRadius: "full",
-    content: '""',
-    inlineSize: "calc(var(--level-toast-level) * 100%)",
-    insetBlock: 0,
-    insetInlineStart: 0,
-    position: "absolute",
-    transition:
-      "inline-size {durations.fast} {easings.out}, background-color {durations.fast} {easings.out}",
-  },
-  "&[data-muted]::after": {
-    backgroundColor: "muted",
-  },
   backgroundColor: "color-mix(in oklab, {colors.foreground} 14%, transparent)",
   blockSize: 2,
   borderRadius: "full",
   marginBlockStart: 2,
   overflow: "hidden",
-  position: "relative",
+});
+
+// The whole track's width, slid in from the start and clipped by it, so a new
+// level skips layout. `translateX` is physical: a transform takes no logical
+// direction.
+const fillStyles = css({
+  "[data-muted] > &": {
+    backgroundColor: "muted",
+  },
+  backgroundColor: "accent",
+  blockSize: "100%",
+  borderRadius: "full",
+  display: "block",
+  inlineSize: "100%",
+  transform: "translateX(calc((var(--level-toast-level) - 1) * 100%))",
+  transition:
+    "transform {durations.fast} {easings.out}, background-color {durations.fast} {easings.out}",
 });
 
 const detailStyles = css({

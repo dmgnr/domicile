@@ -5,9 +5,7 @@
 # The checks are ordered: an absent API only means something once the probe
 # has seen the APIs around it. Key cases:
 #
-#   - A page that has PaymentRequest blames payment_request_enabled, and
-#     one that has IdentityCredential blames RefuseChromeDialogs' FedCm.
-#   - Picture-in-picture still on blames OverrideWebPreferences.
+#   - A page that has PaymentRequest blames payment_request_enabled.
 #   - A probe that sees no navigator.credentials passes nothing.
 #
 # Runs the verdict block from the real guard, so moving it fails here.
@@ -46,8 +44,6 @@ judge() { # NAME=value overrides
     SAW_REPORT=1
     SAW_APIS=1
     SAW_NO_PAYMENT=1
-    SAW_NO_IDENTITY=1
-    SAW_NO_PIP=1
     for override in "$@"; do
       eval "$override"
     done
@@ -89,10 +85,6 @@ echo "the claim"
 expect "every API off is the pass" "pass" "$(verdict)"
 expect "PaymentRequest left blames payment_request_enabled" "yes" \
   "$(blames "payment_request_enabled" SAW_NO_PAYMENT=0)"
-expect "IdentityCredential left blames FedCm" "yes" \
-  "$(blames "FedCm" SAW_NO_IDENTITY=0)"
-expect "picture-in-picture left blames OverrideWebPreferences" "yes" \
-  "$(blames "OverrideWebPreferences" SAW_NO_PIP=0)"
 
 echo
 if [ "$FAILED" -eq 0 ]; then

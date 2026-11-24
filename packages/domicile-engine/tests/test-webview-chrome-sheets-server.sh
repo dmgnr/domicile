@@ -65,10 +65,10 @@ reported() { grep -qF -- "$REPORT_LINE" "$LOG" && echo yes || echo no; }
 curl -sS -o /dev/null "http://127.0.0.1:$PORT/probe"
 expect "a server that has only served the probe has no report" "no" "$(reported)"
 
-curl -sS -o /dev/null "http://127.0.0.1:$PORT/report?payment=undefined&pip=false"
+curl -sS -o /dev/null "http://127.0.0.1:$PORT/report?payment=undefined&identity=undefined"
 expect "a report writes the report line" "yes" "$(reported)"
 expect "with what the page found" "yes" \
-  "$(grep -F -- "$REPORT_LINE" "$LOG" | grep -qF "payment=undefined pip=false" &&
+  "$(grep -F -- "$REPORT_LINE" "$LOG" | grep -qF "payment=undefined identity=undefined" &&
     echo yes || echo no)"
 
 echo

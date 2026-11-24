@@ -38,7 +38,7 @@ See cc/domicile/display_regions.h.
  15 files changed, 283 insertions(+), 35 deletions(-)
 
 diff --git a/cc/BUILD.gn b/cc/BUILD.gn
-index 03ba44e..b74bf72 100644
+index 5c1519b..bf0fcef 100644
 --- a/cc/BUILD.gn
 +++ b/cc/BUILD.gn
 @@ -522,6 +522,9 @@ cc_component("cc") {
@@ -52,7 +52,7 @@ index 03ba44e..b74bf72 100644
      "//cc/mojom:mojom_layer_trees",
      "//cc/paint",
 diff --git a/cc/layers/picture_layer_impl.cc b/cc/layers/picture_layer_impl.cc
-index 57f6e6b..b2ab517 100644
+index c273956..c2e169b 100644
 --- a/cc/layers/picture_layer_impl.cc
 +++ b/cc/layers/picture_layer_impl.cc
 @@ -24,6 +24,7 @@
@@ -63,7 +63,7 @@ index 57f6e6b..b2ab517 100644
  #include "cc/layers/append_quads_context.h"
  #include "cc/layers/append_quads_data.h"
  #include "cc/paint/display_item_list.h"
-@@ -389,6 +390,7 @@ bool PictureLayerImpl::UpdateTiles() {
+@@ -380,6 +381,7 @@ bool PictureLayerImpl::UpdateTiles() {
    if (should_adjust_raster_scale)
      RecalculateRasterScales();
    UpdateTilingsForRasterScaleAndTranslation(should_adjust_raster_scale);
@@ -71,7 +71,7 @@ index 57f6e6b..b2ab517 100644
    raster_source_size_changed_ = false;
  
    DCHECK(raster_page_scale_);
-@@ -1518,6 +1520,11 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
+@@ -1509,6 +1511,11 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
    bool needs_push = false;
    for (size_t i = 0; i < tilings_->num_tilings(); ++i) {
      PictureLayerTiling* tiling = tilings_->tiling_at(i);
@@ -83,7 +83,7 @@ index 57f6e6b..b2ab517 100644
      // Keep all tilings within the min/max scales.
      if (tiling->contents_scale_key() >= min_acceptable_high_res_scale &&
          tiling->contents_scale_key() <= max_acceptable_high_res_scale) {
-@@ -1553,6 +1560,93 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
+@@ -1544,6 +1551,93 @@ void PictureLayerImpl::CleanUpTilingsOnActiveLayer() {
    }
  }
  
@@ -178,7 +178,7 @@ index 57f6e6b..b2ab517 100644
      const {
    DCHECK(AffectedByWillChangeTransformHint());
 diff --git a/cc/layers/picture_layer_impl.h b/cc/layers/picture_layer_impl.h
-index 2e03063..a6d17ec 100644
+index 1743a0b..357791b 100644
 --- a/cc/layers/picture_layer_impl.h
 +++ b/cc/layers/picture_layer_impl.h
 @@ -12,6 +12,7 @@
@@ -200,7 +200,7 @@ index 2e03063..a6d17ec 100644
    float MinimumContentsScale() const;
    float MaximumContentsScale() const;
    void UpdateViewportRectForTilePriorityInContentSpace();
-@@ -422,6 +427,9 @@ class CC_EXPORT PictureLayerImpl
+@@ -420,6 +425,9 @@ class CC_EXPORT PictureLayerImpl
        const TilingSetCoverageIterator<PictureLayerTiling>& iter) override;
  
    gfx::Rect GetScaledViewportForTilePriority(float scale) const override;
@@ -211,10 +211,10 @@ index 2e03063..a6d17ec 100644
   private:
    TilingResolution GetTilingResolutionForDebugBorders(
 diff --git a/cc/layers/tile_based_layer_impl.h b/cc/layers/tile_based_layer_impl.h
-index 46acc07..96fe7b2 100644
+index f0547f6..97be626 100644
 --- a/cc/layers/tile_based_layer_impl.h
 +++ b/cc/layers/tile_based_layer_impl.h
-@@ -215,6 +215,14 @@ class CC_EXPORT TileBasedLayerImpl : public LayerImpl {
+@@ -211,6 +211,14 @@ class CC_EXPORT TileBasedLayerImpl : public LayerImpl {
  
    virtual float GetIdealContentsScaleKey() const = 0;
  
@@ -229,7 +229,7 @@ index 46acc07..96fe7b2 100644
    // Called at the end of AppendQuads() to allow subclasses to do any specific
    // validation desired.
    virtual void SanityCheckTilingState() const {}
-@@ -240,6 +248,14 @@ class CC_EXPORT TileBasedLayerImpl : public LayerImpl {
+@@ -236,6 +244,14 @@ class CC_EXPORT TileBasedLayerImpl : public LayerImpl {
    bool produced_tile_last_append_quads_ : 1 = true;
  };
  
@@ -244,7 +244,7 @@ index 46acc07..96fe7b2 100644
  template <typename Tiling>
  template <typename Functor>
  void TileBasedLayerImpl<Tiling>::ForEachVisibleTile(
-@@ -420,31 +436,34 @@ void TileBasedLayerImpl<Tiling>::AppendQuads(
+@@ -416,31 +432,34 @@ void TileBasedLayerImpl<Tiling>::AppendQuads(
        GetScaledViewportForTilePriority(max_contents_scale);
  
    int missing_tile_count = 0;
@@ -537,7 +537,7 @@ index 88b116e..34461b1 100644
    bool is_drawing_layer_ = false;
  };
 diff --git a/cc/trees/commit_state.h b/cc/trees/commit_state.h
-index 0fd6e14..e550d55 100644
+index cd15505..b5e6e8b 100644
 --- a/cc/trees/commit_state.h
 +++ b/cc/trees/commit_state.h
 @@ -19,6 +19,7 @@
@@ -558,10 +558,10 @@ index 0fd6e14..e550d55 100644
    gfx::OverlayTransform display_transform_hint = gfx::OVERLAY_TRANSFORM_NONE;
    gfx::Rect device_viewport_rect;
 diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
-index ca21dd2..1ae2cfe 100644
+index d1b8f46..a0f8304 100644
 --- a/cc/trees/layer_tree_host.cc
 +++ b/cc/trees/layer_tree_host.cc
-@@ -1709,6 +1709,14 @@ void LayerTreeHost::SetRecordingScaleFactor(float recording_scale_factor) {
+@@ -1717,6 +1717,14 @@ void LayerTreeHost::SetRecordingScaleFactor(float recording_scale_factor) {
    recording_scale_factor_ = recording_scale_factor;
  }
  
@@ -577,7 +577,7 @@ index ca21dd2..1ae2cfe 100644
      const gfx::DisplayColorSpaces& display_color_spaces) {
    if (pending_commit_state()->display_color_spaces == display_color_spaces)
 diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
-index 4efb83c..eae7dda 100644
+index d730db4..acd6012 100644
 --- a/cc/trees/layer_tree_host.h
 +++ b/cc/trees/layer_tree_host.h
 @@ -32,6 +32,7 @@
@@ -588,7 +588,7 @@ index 4efb83c..eae7dda 100644
  #include "cc/input/browser_controls_offset_tag_modifications.h"
  #include "cc/input/browser_controls_state.h"
  #include "cc/input/compositor_input_interfaces.h"
-@@ -693,6 +694,10 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+@@ -703,6 +704,10 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
      return pending_commit_state()->display_color_spaces;
    }
  
@@ -600,10 +600,10 @@ index 4efb83c..eae7dda 100644
      DCHECK(IsMainThread());
      return scroll_animation_.in_progress;
 diff --git a/cc/trees/layer_tree_impl.cc b/cc/trees/layer_tree_impl.cc
-index d34157c..8475139 100644
+index 09169d3..87351a4 100644
 --- a/cc/trees/layer_tree_impl.cc
 +++ b/cc/trees/layer_tree_impl.cc
-@@ -940,6 +940,7 @@ void LayerTreeImpl::PullLayerTreePropertiesFrom(CommitState& commit_state) {
+@@ -943,6 +943,7 @@ void LayerTreeImpl::PullLayerTreePropertiesFrom(CommitState& commit_state) {
                                      commit_state.bottom_controls_shown_ratio);
  
    SetDisplayColorSpaces(commit_state.display_color_spaces);
@@ -611,7 +611,7 @@ index d34157c..8475139 100644
    SetExternalPageScaleFactor(commit_state.external_page_scale_factor);
  
    set_painted_device_scale_factor(commit_state.painted_device_scale_factor);
-@@ -1066,6 +1067,7 @@ void LayerTreeImpl::PushPropertiesTo(LayerTreeImpl* target_tree) {
+@@ -1073,6 +1074,7 @@ void LayerTreeImpl::PushPropertiesTo(LayerTreeImpl* target_tree) {
    target_tree->set_overscroll_behavior(overscroll_behavior_);
  
    target_tree->SetDisplayColorSpaces(display_color_spaces_);
@@ -619,7 +619,7 @@ index d34157c..8475139 100644
  
    target_tree->set_painted_device_scale_factor(painted_device_scale_factor());
    target_tree->SetDeviceScaleFactor(device_scale_factor());
-@@ -1758,6 +1760,15 @@ void LayerTreeImpl::SetDisplayColorSpaces(
+@@ -1766,6 +1768,15 @@ void LayerTreeImpl::SetDisplayColorSpaces(
    display_color_spaces_ = display_color_spaces;
  }
  
@@ -636,7 +636,7 @@ index d34157c..8475139 100644
      float external_page_scale_factor) {
    if (external_page_scale_factor_ == external_page_scale_factor)
 diff --git a/cc/trees/layer_tree_impl.h b/cc/trees/layer_tree_impl.h
-index c03f72b..578a4a7 100644
+index edfadc8..e0882a6 100644
 --- a/cc/trees/layer_tree_impl.h
 +++ b/cc/trees/layer_tree_impl.h
 @@ -19,6 +19,7 @@
@@ -647,7 +647,7 @@ index c03f72b..578a4a7 100644
  #include "cc/input/event_listener_properties.h"
  #include "cc/input/layer_selection_bound.h"
  #include "cc/input/overscroll_behavior.h"
-@@ -476,6 +477,12 @@ class CC_EXPORT LayerTreeImpl {
+@@ -490,6 +491,12 @@ class CC_EXPORT LayerTreeImpl {
      return display_color_spaces_;
    }
  
@@ -660,7 +660,7 @@ index c03f72b..578a4a7 100644
    const ViewportPropertyIds& viewport_property_ids() const {
      return viewport_property_ids_;
    }
-@@ -944,6 +951,7 @@ class CC_EXPORT LayerTreeImpl {
+@@ -971,6 +978,7 @@ class CC_EXPORT LayerTreeImpl {
    float device_scale_factor_;
    float painted_device_scale_factor_;
    gfx::DisplayColorSpaces display_color_spaces_;
@@ -669,7 +669,7 @@ index c03f72b..578a4a7 100644
    viz::LocalSurfaceId local_surface_id_from_parent_;
  
 diff --git a/third_party/blink/renderer/platform/widget/widget_base.cc b/third_party/blink/renderer/platform/widget/widget_base.cc
-index fbd81f1..ed7169a 100644
+index 75bdf66..19d822e 100644
 --- a/third_party/blink/renderer/platform/widget/widget_base.cc
 +++ b/third_party/blink/renderer/platform/widget/widget_base.cc
 @@ -19,6 +19,7 @@
@@ -688,7 +688,7 @@ index fbd81f1..ed7169a 100644
    std::move(callback).Run();
  }
  
-@@ -1972,6 +1974,7 @@ void WidgetBase::UpdateSurfaceAndScreenInfo(
+@@ -1976,6 +1978,7 @@ void WidgetBase::UpdateSurfaceAndScreenInfo(
      LayerTreeHost()->SetDisplayColorSpaces(
          screen_infos_.current().display_color_spaces);
    }
@@ -696,7 +696,7 @@ index fbd81f1..ed7169a 100644
  
    if (orientation_changed) {
      auto weak_this = weak_ptr_factory_.GetWeakPtr();
-@@ -2019,6 +2022,21 @@ void WidgetBase::SetScreenRects(const gfx::Rect& widget_screen_rect,
+@@ -2023,6 +2026,21 @@ void WidgetBase::SetScreenRects(const gfx::Rect& widget_screen_rect,
                                  const gfx::Rect& window_screen_rect) {
    widget_screen_rect_ = widget_screen_rect;
    window_screen_rect_ = window_screen_rect;
@@ -719,10 +719,10 @@ index fbd81f1..ed7169a 100644
  
  void WidgetBase::SetPendingWindowRect(const gfx::Rect& rect) {
 diff --git a/third_party/blink/renderer/platform/widget/widget_base.h b/third_party/blink/renderer/platform/widget/widget_base.h
-index 36d6e8f..f6bf9d7 100644
+index d68b68b..94c8dd3 100644
 --- a/third_party/blink/renderer/platform/widget/widget_base.h
 +++ b/third_party/blink/renderer/platform/widget/widget_base.h
-@@ -358,6 +358,11 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
+@@ -359,6 +359,11 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
    void SetScreenRects(const gfx::Rect& widget_screen_rect,
                        const gfx::Rect& window_screen_rect);
  

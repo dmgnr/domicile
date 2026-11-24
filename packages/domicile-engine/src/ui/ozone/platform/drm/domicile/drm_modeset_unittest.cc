@@ -3,6 +3,8 @@
 
 #include "ui/ozone/platform/drm/domicile/drm_modeset.h"
 
+#include <drm_fourcc.h>
+
 #include <limits>
 #include <memory>
 #include <optional>
@@ -21,6 +23,7 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/hdr_static_metadata.h"
 
 namespace ui {
 namespace {
@@ -42,6 +45,12 @@ class SnapshotBuilder {
     native_refresh_hz_ = refresh_hz;
     return *this;
   }
+  // A connector whose CRTC scans nothing out, such as one a hotplug just
+  // moved to an unlit CRTC.
+  SnapshotBuilder& Dark() {
+    lit_ = false;
+    return *this;
+  }
   SnapshotBuilder& NoNativeMode() {
     native_mode_size_.reset();
     return *this;
@@ -50,6 +59,18 @@ class SnapshotBuilder {
   // does.
   SnapshotBuilder& AdaptiveSync(display::VariableRefreshRateState state) {
     adaptive_sync_ = state;
+    return *this;
+  }
+  // A 10-bit panel on 10-bit planes whose EDID takes PQ and peaks at
+  // `peak_nits`.
+  SnapshotBuilder& Hdr(double peak_nits) {
+    color_info_.bits_per_channel = 10;
+    color_info_.hdr_static_metadata = gfx::HDRStaticMetadata(
+        peak_nits, peak_nits / 2, 0.05,
+        gfx::HDRStaticMetadata::EotfMask(
+            {gfx::HDRStaticMetadata::Eotf::kGammaSdrRange,
+             gfx::HDRStaticMetadata::Eotf::kPq}));
+    formats_ = {{DRM_FORMAT_XRGB8888, {}}, {DRM_FORMAT_XBGR2101010, {}}};
     return *this;
   }
   // Another advertised mode, after the native one.
@@ -78,22 +99,24 @@ class SnapshotBuilder {
         /*path_topology=*/std::vector<uint64_t>(),
         /*is_aspect_preserving_scaling=*/false, /*has_overscan=*/false,
         display::PrivacyScreenState::kNotSupported,
-        /*has_content_protection_key=*/false,
-        display::DisplaySnapshot::ColorInfo(), "a panel", base::FilePath(),
+        /*has_content_protection_key=*/false, color_info_, "a panel",
+        base::FilePath(),
         std::move(modes), display::PanelOrientation::kNormal,
         /*edid=*/std::vector<uint8_t>(),
-        /*current_mode=*/native, native, /*product_code=*/0,
-        /*year_of_manufacture=*/0, gfx::Size(), adaptive_sync_,
-        display::DrmFormatsAndModifiers());
+        /*current_mode=*/lit_ ? native : nullptr, native, /*product_code=*/0,
+        /*year_of_manufacture=*/0, gfx::Size(), adaptive_sync_, formats_);
   }
 
  private:
   int64_t id_ = 1;
+  bool lit_ = true;
   gfx::Point origin_;
   display::VariableRefreshRateState adaptive_sync_ =
       display::VariableRefreshRateState::kVrrNotCapable;
   std::optional<gfx::Size> native_mode_size_ = gfx::Size(1920, 1080);
   float native_refresh_hz_ = 60.f;
+  display::DisplaySnapshot::ColorInfo color_info_;
+  display::DrmFormatsAndModifiers formats_;
   struct Other {
     gfx::Size size;
     float refresh_hz;
@@ -102,9 +125,9 @@ class SnapshotBuilder {
   std::vector<Other> others_;
 };
 
-std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>> Pointers(
+std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>> Pointers(
     const std::vector<std::unique_ptr<display::DisplaySnapshot>>& owned) {
-  std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>> pointers;
+  std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>> pointers;
   for (const std::unique_ptr<display::DisplaySnapshot>& snapshot : owned) {
     pointers.push_back(snapshot.get());
   }
@@ -406,6 +429,58 @@ TEST(DrmModesetTest, ARateOrAdaptiveSyncChangingIsWorthTellingTheList) {
   EXPECT_TRUE(PanelChangedUnseen(off, faster));
 }
 
+// A 10-bit panel whose EDID takes PQ and peaks at 600 cd/m².
+std::unique_ptr<display::DisplaySnapshot> AnHdrPanel() {
+  return SnapshotBuilder().Id(5).Hdr(600).Build();
+}
+
+TEST(DrmModesetTest, AProfileAsksAnHdrPanelForHdr) {
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> owned;
+  owned.push_back(AnHdrPanel());
+
+  const auto asked = ModesetParamsFromSnapshots(
+      Pointers(owned), {{.id = 5, .enabled = true, .hdr = true}});
+  const auto unasked =
+      ModesetParamsFromSnapshots(Pointers(owned), {{.id = 5, .enabled = true}});
+
+  ASSERT_EQ(asked.size(), 1u);
+  EXPECT_TRUE(asked[0].domicile_hdr);
+  ASSERT_EQ(unasked.size(), 1u);
+  EXPECT_FALSE(unasked[0].domicile_hdr) << "HDR is off by default";
+  EXPECT_FALSE(ModesetParamsFromSnapshots(Pointers(owned), {})[0].domicile_hdr);
+}
+
+TEST(DrmModesetTest, APanelWithoutPqIsNotAskedForHdr) {
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> owned;
+  owned.push_back(SnapshotBuilder().Id(5).Build());
+
+  const auto params = ModesetParamsFromSnapshots(
+      Pointers(owned), {{.id = 5, .enabled = true, .hdr = true}});
+
+  ASSERT_EQ(params.size(), 1u);
+  EXPECT_FALSE(params[0].domicile_hdr);
+  EXPECT_EQ(PanelFromSnapshot(*owned[0], {{.id = 5, .hdr = true}}).hdr,
+            DomicileHdr::kUnsupported);
+}
+
+TEST(DrmModesetTest, APanelSaysWhetherItIsInHdrAndHowBrightItGets) {
+  const std::unique_ptr<display::DisplaySnapshot> panel = AnHdrPanel();
+
+  const DomicilePanel off = PanelFromSnapshot(*panel, {});
+  const DomicilePanel on = PanelFromSnapshot(
+      *panel,
+      {{.id = 5, .enabled = true, .hdr = true, .sdr_white_nits = 250.f}});
+
+  EXPECT_EQ(off.hdr, DomicileHdr::kOff);
+  EXPECT_FLOAT_EQ(off.max_luminance, 600.f);
+  EXPECT_FLOAT_EQ(off.max_average_luminance, 300.f);
+  EXPECT_FLOAT_EQ(off.min_luminance, 0.05f);
+  EXPECT_EQ(on.hdr, DomicileHdr::kOn);
+  EXPECT_FLOAT_EQ(on.sdr_white_nits, 250.f);
+  EXPECT_TRUE(PanelChangedUnseen(off, on))
+      << "display::DisplayList compares no HDR state";
+}
+
 TEST(DrmModesetTest, ALayoutCanLeaveAConnectorDark) {
   // For example, a laptop panel behind a closed lid.
   std::vector<std::unique_ptr<display::DisplaySnapshot>> owned;
@@ -497,7 +572,7 @@ TEST(DrmModesetTest, TheSameReadingTwiceIsNotWorthAModeset) {
   const std::vector<display::DisplayConfigurationParams> again =
       ModesetParamsFromSnapshots(Pointers(snapshots), {});
 
-  EXPECT_FALSE(ModesetWouldChangeAnything(once, again))
+  EXPECT_TRUE(ModesetParamsThatChange(once, again, Pointers(snapshots)).empty())
       << "asking the hardware for the mode it just reported is the loop";
 }
 
@@ -506,8 +581,11 @@ TEST(DrmModesetTest, TheFirstReadingIsAlwaysWorthAModeset) {
   snapshots.push_back(
       SnapshotBuilder().Id(11).NativeMode(gfx::Size(2880, 1920), 120.f).Build());
 
-  EXPECT_TRUE(ModesetWouldChangeAnything(
-      {}, ModesetParamsFromSnapshots(Pointers(snapshots), {})))
+  EXPECT_EQ(ModesetParamsThatChange(
+                {}, ModesetParamsFromSnapshots(Pointers(snapshots), {}),
+                Pointers(snapshots))
+                .size(),
+            1u)
       << "nothing has been asked for yet, so everything is a change";
 }
 
@@ -525,9 +603,14 @@ TEST(DrmModesetTest, ADisplayArrivingIsWorthAModeset) {
                     .NativeMode(gfx::Size(3840, 2160), 60.f)
                     .Build());
 
-  EXPECT_TRUE(
-      ModesetWouldChangeAnything(ModesetParamsFromSnapshots(Pointers(one), {}),
-                                 ModesetParamsFromSnapshots(Pointers(two), {})));
+  const std::vector<display::DisplayConfigurationParams> changed =
+      ModesetParamsThatChange(ModesetParamsFromSnapshots(Pointers(one), {}),
+                              ModesetParamsFromSnapshots(Pointers(two), {}),
+                              Pointers(two));
+
+  ASSERT_EQ(changed.size(), 1u);
+  EXPECT_EQ(changed[0].id, 12)
+      << "the display already lit is left alone, so it does not flash";
 }
 
 TEST(DrmModesetTest, AModeChangingOnOneDisplayIsWorthAModeset) {
@@ -538,9 +621,12 @@ TEST(DrmModesetTest, AModeChangingOnOneDisplayIsWorthAModeset) {
   after.push_back(
       SnapshotBuilder().Id(11).NativeMode(gfx::Size(1920, 1080), 60.f).Build());
 
-  EXPECT_TRUE(
-      ModesetWouldChangeAnything(ModesetParamsFromSnapshots(Pointers(before), {}),
-                                 ModesetParamsFromSnapshots(Pointers(after), {})))
+  EXPECT_EQ(
+      ModesetParamsThatChange(ModesetParamsFromSnapshots(Pointers(before), {}),
+                              ModesetParamsFromSnapshots(Pointers(after), {}),
+                              Pointers(after))
+          .size(),
+      1u)
       << "the same connector at a different mode is a different request";
 }
 
@@ -604,7 +690,7 @@ class FakeDelegate : public display::NativeDisplayDelegate {
   }
 
   void SetSnapshots(
-      std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>> s) {
+      std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>> s) {
     snapshots_ = std::move(s);
   }
 
@@ -659,7 +745,7 @@ class FakeDelegate : public display::NativeDisplayDelegate {
   }
 
  private:
-  std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>> snapshots_;
+  std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>> snapshots_;
   std::vector<std::vector<display::DisplayConfigurationParams>> asked_;
   display::ConfigureCallback pending_;
   std::optional<bool> inline_answer_;
@@ -812,6 +898,88 @@ TEST(DrmModesetTest, ARelitScreenStillSuppressesTheHotplugItCauses) {
   EXPECT_EQ(fake->asks(), 2u)
       << "the CHANGE the relight's own Configure emits is still this driver's "
          "own echo";
+}
+
+// A display asked for again can flash, so sleeping or waking one monitor asks
+// for that monitor alone.
+TEST(DrmModesetTest, AModesetAsksOnlyForTheDisplaysThatChanged) {
+  auto owned = std::make_unique<FakeDelegate>();
+  FakeDelegate* fake = owned.get();
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> snapshots;
+  snapshots.push_back(SnapshotBuilder().Id(1).Build());
+  snapshots.push_back(SnapshotBuilder().Id(2).Build());
+  fake->SetSnapshots(Pointers(snapshots));
+
+  DrmWindowHostManager window_manager;
+  DrmScreen screen(&window_manager, nullptr);
+  DrmModeset modeset(std::move(owned), &screen);
+
+  modeset.SetLayout(
+      {{.id = 1, .enabled = true, .origin = gfx::Point()},
+       {.id = 2, .enabled = true, .origin = gfx::Point(1920, 0)}});
+  ASSERT_EQ(fake->last_ask().size(), 2u);
+  fake->Answer(true);
+
+  modeset.SetLayout(
+      {{.id = 1, .enabled = false, .origin = gfx::Point()},
+       {.id = 2, .enabled = true, .origin = gfx::Point(1920, 0)}});
+  ASSERT_EQ(fake->asks(), 2u);
+  ASSERT_EQ(fake->last_ask().size(), 1u);
+  EXPECT_EQ(fake->last_ask()[0].id, 1);
+  EXPECT_EQ(fake->last_ask()[0].mode, nullptr);
+  fake->Answer(true);
+
+  modeset.SetLayout(
+      {{.id = 1, .enabled = true, .origin = gfx::Point()},
+       {.id = 2, .enabled = true, .origin = gfx::Point(1920, 0)}});
+  ASSERT_EQ(fake->asks(), 3u);
+  ASSERT_EQ(fake->last_ask().size(), 1u);
+  EXPECT_EQ(fake->last_ask()[0].id, 1);
+  EXPECT_NE(fake->last_ask()[0].mode, nullptr);
+}
+
+TEST(DrmModesetTest, AnUnchangedDisplayThatReadsDarkIsAskedForAgain) {
+  // A hotplug can move a display to another CRTC, which nothing has lit.
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> lit;
+  lit.push_back(SnapshotBuilder().Id(1).Build());
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> dark;
+  dark.push_back(SnapshotBuilder().Id(1).Dark().Build());
+
+  EXPECT_EQ(
+      ModesetParamsThatChange(ModesetParamsFromSnapshots(Pointers(lit), {}),
+                              ModesetParamsFromSnapshots(Pointers(dark), {}),
+                              Pointers(dark))
+          .size(),
+      1u);
+}
+
+TEST(DrmModesetTest, AMonitorPluggedBackInIsLitAgain) {
+  // An unplug asks for nothing, and must not leave the monitor recorded as
+  // lit for when it comes back.
+  auto owned = std::make_unique<FakeDelegate>();
+  FakeDelegate* fake = owned.get();
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> both;
+  both.push_back(SnapshotBuilder().Id(1).Build());
+  both.push_back(SnapshotBuilder().Id(2).Origin(gfx::Point(1920, 0)).Build());
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> one;
+  one.push_back(SnapshotBuilder().Id(1).Build());
+  fake->SetSnapshots(Pointers(both));
+
+  DrmWindowHostManager window_manager;
+  DrmScreen screen(&window_manager, nullptr);
+  DrmModeset modeset(std::move(owned), &screen);
+
+  modeset.Start();
+  fake->Answer(true);
+  fake->SetSnapshots(Pointers(one));
+  modeset.OnConfigurationChanged();
+  ASSERT_EQ(fake->asks(), 1u) << "the display still plugged in is unchanged";
+
+  fake->SetSnapshots(Pointers(both));
+  modeset.OnConfigurationChanged();
+  ASSERT_EQ(fake->asks(), 2u);
+  ASSERT_EQ(fake->last_ask().size(), 1u);
+  EXPECT_EQ(fake->last_ask()[0].id, 2);
 }
 
 // A virtual display's id has the top bit set, as the compositor picks it.
@@ -1059,6 +1227,40 @@ TEST(DrmModesetTest, ARefusedModesetWithoutAdaptiveSyncIsNotRetried) {
   modeset.SetLayout({{.id = 5, .enabled = true}});
   fake->Answer(false);
   EXPECT_EQ(fake->asks(), 1u);
+}
+
+// A panel asked for again only because it reads dark, as one another session
+// left dark does, did not bring adaptive sync into the modeset.
+TEST(DrmModesetTest, APanelAskedForOnlyBecauseItReadsDarkKeepsAdaptiveSync) {
+  auto owned = std::make_unique<FakeDelegate>();
+  FakeDelegate* fake = owned.get();
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> lit;
+  lit.push_back(AnAdaptivePanel());
+  std::vector<std::unique_ptr<display::DisplaySnapshot>> dark;
+  dark.push_back(SnapshotBuilder()
+                     .Id(5)
+                     .NativeMode(gfx::Size(2560, 1440), 144.f)
+                     .AdaptiveSync(
+                         display::VariableRefreshRateState::kVrrDisabled)
+                     .Dark()
+                     .Build());
+  fake->SetSnapshots(Pointers(lit));
+
+  DrmWindowHostManager window_manager;
+  DrmScreen screen(&window_manager, nullptr);
+  DrmModeset modeset(std::move(owned), &screen);
+
+  modeset.SetLayout({{.id = 5, .enabled = true, .adaptive_sync = true}});
+  fake->Answer(true);
+  fake->SetSnapshots(Pointers(dark));
+  modeset.OnConfigurationChanged();
+  ASSERT_EQ(fake->asks(), 2u);
+  fake->Answer(false);
+
+  EXPECT_EQ(fake->asks(), 2u) << "not retried without adaptive sync";
+  modeset.OnConfigurationChanged();
+  ASSERT_EQ(fake->asks(), 3u);
+  EXPECT_TRUE(fake->last_ask()[0].enable_vrr);
 }
 
 // A snapshot reads adaptive sync off the CRTC, so the reading a modeset went

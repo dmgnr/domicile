@@ -49,6 +49,13 @@ for binary in $FLAKE_BINARIES; do
   printf '#!/bin/sh\necho %s\n' "$binary" >"$BINARIES/$binary"
   chmod +x "$BINARIES/$binary"
 done
+# `help --man <dir>` writes the man pages, as the real one does.
+cat >"$BINARIES/domicile" <<'STUB'
+#!/bin/sh
+if [ "$1 $2" = "help --man" ]; then
+  mkdir -p "$3" && echo '.TH DOMICILE 1' >"$3/domicile.1"
+fi
+STUB
 
 ENGINE="$WORK/engine"
 mkdir -p "$ENGINE/locales"
@@ -101,6 +108,9 @@ manifest test-support
 put "$WORKSPACE/packages/test-support/src/preload.ts" test-support
 manifest shell-manganese ',"files":["src/**"],"dependencies":{"@domicile-desktop/sdk":"workspace:*"}'
 put "$WORKSPACE/packages/shell-manganese/src/index.tsx" manganese
+manifest electron-host ',"files":["src/**","!src/**/*.test.ts"]'
+put "$WORKSPACE/packages/electron-host/src/main.ts" 'console.log(process.argv.slice(1).join(" "));'
+put "$WORKSPACE/packages/electron-host/src/main.test.ts" test
 for shell in manganese simple splash; do
   [ -f "$WORKSPACE/packages/shell-$shell/package.json" ] || manifest "shell-$shell"
   put "$WORKSPACE/packages/shell-$shell/.vite/renderer/main_window/shell.js" "$shell"
@@ -112,6 +122,8 @@ for app in history settings; do
 done
 put "$WORKSPACE/packages/app-history/.vite/app/history.js" 'export const main = () => {};'
 put "$WORKSPACE/packages/app-settings/.vite/app/settings.js" 'export const main = () => {};'
+# The distribution package's manifest, whose version `--version` prints.
+put "$WORKSPACE/packages/domicile/package.json" '{"name":"domicile","private":true,"version":"0.0.0"}'
 # A crate: no `package.json`, so not part of the workspace.
 put "$WORKSPACE/packages/domicile-launch/Cargo.toml" ''
 # As `packages/distro/build.sh` installs before it builds.
@@ -149,6 +161,11 @@ expect "bin holds only what the flake installs" "$FLAKE_BINARIES" \
   ok "the engine is libexec/domicile/engine, as unpacked" ||
   fail "the engine is libexec/domicile/engine, as unpacked" \
     "$(ls -R "$LIBEXEC/engine" 2>&1)"
+[ -f "$USR/share/man/man1/domicile.1" ] &&
+  ok "the man pages are in share/man/man1" ||
+  fail "the man pages are in share/man/man1" "no $USR/share/man/man1/domicile.1"
+expect "libexec/domicile/version names the version and commit" \
+  "$(printf 'domicile 0.0.0\ncommit   %s' "$REV")" "$(cat "$LIBEXEC/version" 2>&1)"
 for shell in manganese simple splash; do
   [ -f "$LIBEXEC/shells/$shell/shell.js" ] &&
     ok "the $shell shell is prebuilt" ||
@@ -167,6 +184,10 @@ echo "the builder runs the bundled bun against the bundled workspace"
 expect "the builder's command line" \
   "$LIBEXEC/workspace/packages/domicile-builder/src/main.ts --domicile $LIBEXEC/workspace --entry desk.tsx" \
   "$("$LIBEXEC/builder" --entry desk.tsx 2>&1)"
+echo "electron-host runs the bundled bun against the bundled workspace"
+expect "electron-host's command line" \
+  "$LIBEXEC/workspace/packages/electron-host/src/main.ts /opt/Slack/resources -u" \
+  "$("$LIBEXEC/electron-host" /opt/Slack/resources -u 2>&1)"
 SHIPPED="$LIBEXEC/workspace/packages"
 present() { # what, file under the shipped packages
   [ -f "$SHIPPED/$2" ] && ok "$1" || fail "$1" "no $SHIPPED/$2"
@@ -182,6 +203,7 @@ absent "or the musl builds of native modules" domicile-builder/node_modules/ligh
 absent "or the workspace packages only they use" test-support/src
 absent "only the files a package publishes" sdk/src
 absent "without tests" domicile-builder/src/main.test.ts
+absent "without electron-host's tests" electron-host/src/main.test.ts
 absent "without the shells' builds" shell-manganese/.vite
 absent "without the crates" domicile-launch
 expect "without source maps or readmes" "" \
@@ -201,6 +223,11 @@ echo "the session and what it starts"
 SESSION="$USR/share/wayland-sessions/domicile.desktop"
 holds_line "the session runs domicile" "$SESSION" "Exec=/usr/bin/domicile"
 holds_line "the session names the desktop" "$SESSION" "DesktopNames=domicile"
+MIRACAST="$USR/lib/systemd/user/domicile-miracast.service"
+holds_line "D-Bus starts Miracast as a unit" "$USR/share/dbus-1/services/net.domicile.Miracast.service" \
+  "SystemdService=domicile-miracast.service"
+holds_line "the Miracast unit runs domicile-miracast" "$MIRACAST" "ExecStart=/usr/bin/domicile-miracast"
+holds_line "the Miracast unit ends with the desk" "$MIRACAST" "PartOf=graphical-session.target"
 for unit in domicile-session.target domicile-session-shutdown.target; do
   cmp -s "$ROOT/packages/distro/share/$unit" "$USR/lib/systemd/user/$unit" &&
     ok "$unit is the flake's" ||

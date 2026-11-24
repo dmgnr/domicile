@@ -286,14 +286,14 @@ const nonNullType = (type: IdlType, names: ReadonlySet<string>): string => {
   if (argument === undefined) {
     return namedType(type.name, names);
   } else {
-    const element = typeScriptType(argument, names);
     switch (type.name) {
       case "sequence":
       case "FrozenArray": {
+        const element = typeScriptType(argument, names);
         return `readonly ${argument.nullable ? `(${element})` : element}[]`;
       }
       case "Promise": {
-        return `Promise<${element}>`;
+        return `Promise<${returnType(argument, names)}>`;
       }
       default: {
         throw new Error(`unknown generic type ${type.name}`);

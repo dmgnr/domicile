@@ -28,6 +28,7 @@
     "@domicile-desktop/manganese-launcher": "workspace:*",
     "@domicile-desktop/manganese-lock": "workspace:*",
     "@domicile-desktop/manganese-notifications": "workspace:*",
+    "@domicile-desktop/manganese-page-requests": "workspace:*",
     "@domicile-desktop/manganese-quick-settings": "workspace:*",
     "@domicile-desktop/manganese-wallpaper": "workspace:*",
     "@domicile-desktop/manganese-window-management": "workspace:*",

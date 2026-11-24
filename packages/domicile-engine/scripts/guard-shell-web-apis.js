@@ -1,6 +1,29 @@
 // Shell module for guard-shell-web-apis.sh. Paints a box only if the shell's
-// own origin has notification permission and can read a cross-origin fetch,
-// as a bar widget such as a mail counter would need.
+// own origin has notification permission, can read a cross-origin fetch, as a
+// bar widget such as a mail counter would need, and is cross-origin isolated
+// with a SharedArrayBuffer a worker writes to, as threaded wasm needs.
+
+/**
+ * Whether a worker's write to a SharedArrayBuffer is seen here: it adds one
+ * to 41.
+ */
+const shared = () =>
+  typeof SharedArrayBuffer === "undefined"
+    ? Promise.resolve(false)
+    : new Promise((resolve, reject) => {
+        const memory = new Int32Array(new SharedArrayBuffer(4));
+        memory[0] = 41;
+        const worker = new Worker(
+          new URL("./guard-shell-web-apis-worker.js", import.meta.url),
+        );
+        worker.addEventListener("message", () => {
+          resolve(Atomics.load(memory, 0) === 42);
+        });
+        worker.addEventListener("error", (event) => {
+          reject(new Error(`the worker failed: ${event.message}`));
+        });
+        worker.postMessage(memory);
+      });
 
 export const HostShell = (root) => {
   /** Reads a required query parameter. */
@@ -41,10 +64,12 @@ export const HostShell = (root) => {
     const read = fetch(required(parameters, "api"))
       .then((response) => response.text())
       .then((text) => text === "ok");
-    Promise.all([granted, read]).then(
-      ([mayNotify, mayRead]) => {
-        console.log(`GUARD notifications=${mayNotify} read=${mayRead}`);
-        if (mayNotify && mayRead) {
+    Promise.all([granted, read, shared()]).then(
+      ([mayNotify, mayRead, mayShare]) => {
+        console.log(
+          `GUARD notifications=${mayNotify} read=${mayRead} isolated=${crossOriginIsolated} shared=${mayShare}`,
+        );
+        if (mayNotify && mayRead && crossOriginIsolated && mayShare) {
           paint();
         }
       },

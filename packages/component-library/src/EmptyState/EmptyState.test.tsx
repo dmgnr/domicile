@@ -39,5 +39,35 @@ describe(EmptyState, () => {
         screen.getByRole("button", { name: "Look again" }),
       ).toBeInTheDocument();
     });
+
+    it("shows a warning sign for something that couldn't be read", () => {
+      render(
+        <EmptyState
+          detail="The name net.connman.iwd was not provided"
+          title="Couldn't read Wi-Fi"
+          tone="warning"
+        />,
+      );
+      const state = screen.getByRole("status");
+      expect(state).toHaveAttribute("data-tone", "warning");
+      expect(state).toHaveAttribute(
+        "title",
+        "The name net.connman.iwd was not provided",
+      );
+      expect(state.querySelector("svg")).not.toBeNull();
+    });
+
+    it("sits under a panel's rows inline, as words alone", () => {
+      render(
+        <EmptyState
+          icon={WifiSlashIcon}
+          layout="inline"
+          title="No other networks nearby"
+        />,
+      );
+      const state = screen.getByRole("status");
+      expect(state).toHaveAttribute("data-layout", "inline");
+      expect(state.querySelector("svg")).toBeNull();
+    });
   });
 });

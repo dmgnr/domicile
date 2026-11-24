@@ -4,7 +4,9 @@
 //! gives different layouts as monitors are plugged in. See
 //! [docs/DISPLAYS.md](../../../docs/DISPLAYS.md#profiles).
 
-use domicile_config::{Config, Connected, Desk, Layout, Transform};
+use domicile_config::{
+    Config, Connected, Desk, DisplayOverride, Layout, Transform, CONFIGURED_PROFILE,
+};
 
 /// The layout `text`'s profiles make of `connected`; panics if none.
 fn layout(text: &str, connected: &[Connected]) -> Layout {
@@ -34,6 +36,7 @@ fn spelled_out(name: &str, description: &str, spelled_out: &str, mode: (u32, u32
         name: name.to_owned(),
         description: description.to_owned(),
         spelled_out: spelled_out.to_owned(),
+        connector: String::new(),
         mode,
         modes: Vec::new(),
     }
@@ -204,6 +207,32 @@ fn a_scale_of_exactly_one_may_be_written_as_an_integer() {
             .logical,
         DESK_MODE,
         "scale 1 is the mode itself"
+    );
+}
+
+#[test]
+fn a_profile_can_name_a_monitor_by_its_connector() {
+    let layout = layout(
+        r#"
+{
+  "output": {
+    "profiles": [
+      { "name": "desk", "displays": [{ "display": "DP-3", "scale": 2 }] }
+    ]
+  }
+}
+"#,
+        &[Connected {
+            connector: "DP-3".to_owned(),
+            ..described(CENTER, "DEL DELL U3219Q G3MS413", DESK_MODE)
+        }],
+    );
+    assert_eq!(
+        layout
+            .placed()
+            .map(|placed| placed.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![CENTER]
     );
 }
 
@@ -1043,6 +1072,36 @@ fn adaptive_sync_is_off_unless_a_profile_asks_for_it() {
 }
 
 #[test]
+fn hdr_is_off_unless_a_profile_asks_for_it() {
+    let asked = layout(
+        r#"{ "output": { "profiles": [{ "name": "bright",
+              "displays": [{ "display": "drm-1", "hdr": true, "sdr_white": 240 }] }] } }"#,
+        &[offering(LAPTOP, PANEL_MODES)],
+    );
+    assert!(asked.scanout()[0].hdr, "the engine is asked for it");
+    assert_eq!(asked.scanout()[0].sdr_white, 240);
+    let unasked = layout(ONE_PANEL, &[offering(LAPTOP, PANEL_MODES)]);
+    assert!(!unasked.scanout()[0].hdr, "off by default");
+    assert_eq!(
+        unasked.scanout()[0].sdr_white,
+        domicile_config::DEFAULT_SDR_WHITE,
+        "BT.2408's reference white"
+    );
+}
+
+#[test]
+fn an_sdr_white_outside_what_pq_encodes_is_refused() {
+    for white in [0, 10_001] {
+        let config = format!(
+            r#"{{ "output": {{ "profiles": [{{ "name": "bright",
+                  "displays": [{{ "display": "drm-1", "hdr": true, "sdr_white": {white} }}] }}] }} }}"#
+        );
+        let error = Config::parse(&config).expect_err("a white PQ cannot encode is refused");
+        assert!(error.to_string().contains("sdr_white"), "{error}");
+    }
+}
+
+#[test]
 fn a_rate_alone_keeps_the_monitor_at_its_size() {
     let layout = layout(
         r#"{ "output": { "profiles": [{ "name": "fast",
@@ -1231,3 +1290,111 @@ const CROSSED_DESK: &str = r#"
   }
 }
 "#;
+
+#[test]
+fn an_override_changes_the_matching_profiles_display_and_leaves_the_rest() {
+    let config = Config::parse(ONE_DESK).expect("the config should parse");
+    let monitors = [connected(LAPTOP, PANEL_MODE), connected(CENTER, DESK_MODE)];
+    let overridden = config
+        .output
+        .overridden(
+            &monitors,
+            &[DisplayOverride {
+                display: CENTER.to_string(),
+                scale: Some(2.0),
+                ..DisplayOverride::default()
+            }],
+        )
+        .expect("a valid change");
+    let layout = overridden
+        .layout(&monitors)
+        .expect("representable")
+        .expect("the profile still matches");
+
+    assert_eq!(layout.profile(), "home-office-center");
+    let scales: Vec<(String, f64)> = layout
+        .placed()
+        .map(|placed| (placed.name.clone(), placed.scale))
+        .collect();
+    assert_eq!(
+        scales,
+        vec![(LAPTOP.to_string(), 1.5), (CENTER.to_string(), 2.0)]
+    );
+}
+
+#[test]
+fn an_override_with_no_matching_profile_makes_one_of_every_monitor() {
+    let monitors = [connected(LAPTOP, PANEL_MODE), connected(CENTER, DESK_MODE)];
+    let overridden = Config::parse("{}")
+        .expect("the config should parse")
+        .output
+        .overridden(
+            &monitors,
+            &[DisplayOverride {
+                display: LAPTOP.to_string(),
+                transform: Some(Transform::Rotate90),
+                ..DisplayOverride::default()
+            }],
+        )
+        .expect("a valid change");
+    let layout = overridden
+        .layout(&monitors)
+        .expect("representable")
+        .expect("the made profile matches");
+
+    assert_eq!(layout.profile(), CONFIGURED_PROFILE);
+    assert_eq!(layout.placed().count(), 2);
+    let laptop = layout.placed().next().expect("the laptop first");
+    assert_eq!(laptop.transform, Transform::Rotate90);
+}
+
+#[test]
+fn an_override_for_an_unplugged_monitor_waits_and_turning_every_one_off_is_refused() {
+    let config = Config::parse(ONE_DESK).expect("the config should parse");
+    let monitors = [connected(LAPTOP, PANEL_MODE), connected(CENTER, DESK_MODE)];
+    let unplugged = config
+        .output
+        .overridden(
+            &monitors,
+            &[DisplayOverride {
+                display: "HDMI-A-9".to_string(),
+                enabled: Some(false),
+                ..DisplayOverride::default()
+            }],
+        )
+        .expect("kept for when it is plugged in");
+    assert_eq!(
+        unplugged.layout(&monitors).unwrap(),
+        config.output.layout(&monitors).unwrap()
+    );
+
+    let off = |display: &str| DisplayOverride {
+        display: display.to_string(),
+        enabled: Some(false),
+        ..DisplayOverride::default()
+    };
+    assert!(config
+        .output
+        .overridden(&monitors, &[off(LAPTOP), off(CENTER)])
+        .is_err());
+}
+
+#[test]
+fn a_later_override_wins_field_by_field() {
+    let first = DisplayOverride {
+        display: LAPTOP.to_string(),
+        scale: Some(2.0),
+        hdr: Some(true),
+        ..DisplayOverride::default()
+    };
+    let later = DisplayOverride {
+        display: LAPTOP.to_string(),
+        scale: Some(1.5),
+        ..DisplayOverride::default()
+    };
+
+    let both = first.and_then(later);
+
+    assert_eq!(both.scale, Some(1.5));
+    assert_eq!(both.hdr, Some(true));
+}

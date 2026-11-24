@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Option, Result } from "@cprussin/option-result";
 import { Err, None, Ok, Some } from "@cprussin/option-result";
+import { Drilldown } from "@domicile-desktop/component-library/Drilldown";
 import { FakeDomicileHost } from "@domicile-desktop/sdk/fake-host";
 import type { SystemError } from "@domicile-desktop/sdk/system";
 import { SystemErrorKind } from "@domicile-desktop/sdk/system";
@@ -10,7 +11,10 @@ import type {
   WifiConnection,
   WifiNetwork,
 } from "@domicile-desktop/system-network/wifi";
-import { WifiBackend } from "@domicile-desktop/system-network/wifi";
+import {
+  WifiBackend,
+  WifiSecurity,
+} from "@domicile-desktop/system-network/wifi";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -59,6 +63,15 @@ const WIFI: Wifi = {
   hardwareAddress: "A4:C3:F0:85:AC:2D",
   interface: "wlan0",
   networks: [home, office, cafe, neighbor],
+  saved: [
+    {
+      autoJoin: true,
+      lastUsed: undefined,
+      profile: "/profile/home",
+      security: WifiSecurity.Password,
+      ssid: "Home",
+    },
+  ],
   scanning: false,
 };
 
@@ -87,13 +100,16 @@ const shown = async (
   held = heldWifiActions(),
   addresses: Result<Map<string, Addressing>, SystemError> = ADDRESSES,
 ) => {
+  // In a drilldown, as in quick settings, for the saved networks' page.
   const rendered = render(
-    <WifiPanel
-      actions={held.actions}
-      addresses={addresses}
-      host={NO_HOST}
-      wifi={wifi}
-    />,
+    <Drilldown>
+      <WifiPanel
+        actions={held.actions}
+        addresses={addresses}
+        host={NO_HOST}
+        wifi={wifi}
+      />
+    </Drilldown>,
   );
   await act(() => Promise.resolve());
   return { ...held, ...rendered };
@@ -223,7 +239,7 @@ describe("WifiPanel", () => {
     it("shows nothing without a device", async () => {
       const { container } = await shown(Ok(None()));
 
-      expect(container).toBeEmptyDOMElement();
+      expect(container.textContent).toBe("");
     });
   });
 
@@ -306,6 +322,14 @@ describe("WifiPanel", () => {
       expect(screen.getByRole("status")).toHaveTextContent(
         "No other networks nearby",
       );
+    });
+
+    it("counts the saved networks on their button", async () => {
+      await shown(Ok(Some(WIFI)));
+
+      expect(
+        screen.getByRole("button", { name: "1 saved" }),
+      ).toBeInTheDocument();
     });
 
     it("says what to try when nothing at all is in range", async () => {
@@ -439,6 +463,43 @@ describe("WifiPanel", () => {
       await userEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
       expect(panel.asked.slice(1)).toStrictEqual([["disconnect", DEVICE]]);
+    });
+  });
+
+  describe("saved networks", () => {
+    it("opens their page from the foot of the section", async () => {
+      await shown(Ok(Some(WIFI)));
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /^\d+ saved$/ }),
+      );
+
+      expect(
+        within(screen.getByRole("list", { name: "Saved networks" })).getByText(
+          "Connected · Secured",
+        ),
+      ).toBeVisible();
+    });
+
+    it("can be managed with the radio off", async () => {
+      await shown(
+        Ok(
+          Some({
+            ...WIFI,
+            connection: undefined,
+            enabled: false,
+            networks: [],
+          }),
+        ),
+      );
+
+      expect(screen.getByRole("button", { name: /^\d+ saved$/ })).toBeVisible();
+    });
+
+    it("leaves the way in out when nothing is saved", async () => {
+      await shown(Ok(Some({ ...WIFI, saved: [] })));
+
+      expect(screen.queryByRole("button", { name: /^\d+ saved$/ })).toBeNull();
     });
   });
 

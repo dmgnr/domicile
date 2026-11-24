@@ -110,20 +110,48 @@ export const subgrouped = (tiling: Tiling): Tiling => {
       );
 };
 
-/** `layout tabbed` / `layout stacking` on the container around the focus. */
+/**
+ * `layout tabbed` / `layout stacking` on the container around the focus. A
+ * group already in `layout` passes it to the split around it, merging that
+ * split's groups.
+ */
 export const laidOut = (tiling: Tiling, layout: Layout): Tiling =>
-  rearranged(tiling, (root, path) => relaid(root, path, () => layout));
+  rearranged(
+    tiling,
+    (root, path) => splitAroundSame(root, path, layout),
+    (root, at) => relaid(root, at, () => layout),
+  );
 
 /**
  * `layout toggle split`: a row becomes a column, and anything else a row. For
  * a window alone in its group, the split around the group.
  */
 export const splitToggled = (tiling: Tiling): Tiling =>
-  rearranged(tiling, (root, path) =>
-    relaid(root, aloneIn(root, path), (was) =>
+  rearranged(tiling, aloneIn, (root, at) =>
+    relaid(root, at, (was) =>
       was === Layout.SplitH ? Layout.SplitV : Layout.SplitH,
     ),
   );
+
+// The path to the split around the group `relaid` would change, when that
+// group is already in `layout`. Else `path`.
+const splitAroundSame = (
+  root: LayoutNode,
+  path: readonly number[],
+  layout: Layout,
+): readonly number[] => {
+  const group =
+    nodeAt(root, path).kind === NodeKind.Container ? path : path.slice(0, -1);
+  const node = nodeAt(root, group);
+  const around =
+    group.length === 0 ? undefined : nodeAt(root, group.slice(0, -1));
+  return node.kind === NodeKind.Container &&
+    node.layout === layout &&
+    around?.kind === NodeKind.Container &&
+    !showsOneChild(around.layout)
+    ? group.slice(0, -1)
+    : path;
+};
 
 // The path to the container around the group of a window alone in its group,
 // which `relaid` then changes. Else `path`.
@@ -200,23 +228,26 @@ const merged = (container: Container, layout: Layout): Container => {
   );
 };
 
-// Edits the tree, then puts commands back on the same window, or on the same
-// container: a relaid container keeps its path.
+// Edits the tree at the path `at` picks from the focus path, then puts
+// commands back on the same window, or on the container edited: a relaid
+// container keeps its path.
 const rearranged = (
   tiling: Tiling,
-  into: (root: LayoutNode, path: readonly number[]) => LayoutNode,
+  at: (root: LayoutNode, path: readonly number[]) => readonly number[],
+  into: (root: LayoutNode, at: readonly number[]) => LayoutNode,
 ): Tiling => {
   const { root } = tiling;
   if (root === undefined) {
     return tiling;
   } else {
     const path = focusPathOf(root, tiling.depth);
+    const target = at(root, path);
     const after = withFocusOn(
-      { ...tiling, root: into(root, path) },
+      { ...tiling, root: into(root, target) },
       focusedWindowIn(root),
     );
     return path.length === focusChainOf(root).length
       ? after
-      : { ...after, depth: path.length };
+      : { ...after, depth: target.length };
   }
 };

@@ -11,11 +11,13 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::browser_profiles::BrowserProfileList;
 use crate::command::{
-    clear_browsing_data_line, clear_site_data_line, config_extensions_line,
-    configure_extension_line, delete_history_line, disable_while_typing_line, extensions_line,
-    history_line, load_shell_line, load_unpacked_line, media_devices_line, open_app_line,
-    open_url_line, reply, run_app_line, set_extension_enabled_line, set_media_device_line,
+    browser_profiles_line, clear_browsing_data_line, clear_site_data_line, config_extensions_line,
+    configure_extension_line, delete_history_line, devtools_line, disable_while_typing_line,
+    extensions_line, history_line, load_shell_line, load_unpacked_line, media_devices_line,
+    open_app_line, open_url_line, pin_browser_site_line, reply, run_app_line,
+    set_extension_enabled_line, set_log_levels_line, set_media_device_line,
     set_site_permission_line, site_data_line, site_permissions_line, uninstall_extension_line,
     visits_line, Reply, NO_SHELL_WINDOW,
 };
@@ -23,6 +25,7 @@ use crate::control::AppReuse;
 use crate::extensions::{ExtensionSettings, InstalledExtension};
 use crate::history::{BrowsingData, HistoryItem, HistoryQuery};
 use crate::media_devices::{MediaDevices, MediaKind};
+use crate::shell_path::Shell;
 use crate::site_data::SiteData;
 use crate::site_permissions::{SitePermission, SiteSettings};
 
@@ -68,24 +71,24 @@ pub enum CommandError {
     },
 }
 
-/// Tells the engine at `socket` to serve `module` from `root`.
-pub fn load_shell(
+/// Tells the engine at `socket` to serve `shell`.
+pub fn load_shell(socket: &Path, shell: &Shell, patience: Duration) -> Result<(), CommandError> {
+    carry_out(socket, &load_shell_line(shell), Reply::Loaded, patience)
+}
+
+/// Tells the engine at `socket` to open `url` in the shell.
+pub fn open_url(
     socket: &Path,
-    root: &Path,
-    module: &Path,
+    url: &str,
+    profile: Option<&str>,
     patience: Duration,
 ) -> Result<(), CommandError> {
     carry_out(
         socket,
-        &load_shell_line(root, module),
-        Reply::Loaded,
+        &open_url_line(url, profile),
+        Reply::Opened,
         patience,
     )
-}
-
-/// Tells the engine at `socket` to open `url` in the shell.
-pub fn open_url(socket: &Path, url: &str, patience: Duration) -> Result<(), CommandError> {
-    carry_out(socket, &open_url_line(url), Reply::Opened, patience)
 }
 
 /// Tells the engine at `socket` to run the app module `module` under `root`
@@ -100,17 +103,19 @@ pub fn run_app(
 }
 
 /// Tells the engine at `socket` to open `url` in an app window, as app `id`'s
-/// when there is one, reusing its open window as `reuse` says.
+/// when there is one, reusing its open window as `reuse` says, and a new one
+/// in browser profile `profile` or with none its site's.
 pub fn open_app(
     socket: &Path,
     url: &str,
     id: Option<&str>,
     reuse: AppReuse,
+    profile: Option<&str>,
     patience: Duration,
 ) -> Result<(), CommandError> {
     carry_out(
         socket,
-        &open_app_line(url, id, reuse),
+        &open_app_line(url, id, reuse, profile),
         Reply::Opened,
         patience,
     )
@@ -211,16 +216,45 @@ pub fn extensions(
     }
 }
 
-/// Tells the engine at `socket` to enable or disable extension `id`.
+/// Tells the engine at `socket` to enable or disable extension `id`, in
+/// browser profile `profile` or the shell's own.
 pub fn set_extension_enabled(
     socket: &Path,
     id: &str,
     enabled: bool,
+    profile: Option<&str>,
     patience: Duration,
 ) -> Result<(), CommandError> {
     carry_out(
         socket,
-        &set_extension_enabled_line(id, enabled),
+        &set_extension_enabled_line(id, enabled, profile),
+        Reply::Set,
+        patience,
+    )
+}
+
+/// Asks the engine at `socket` for the desk's browser profiles.
+pub fn browser_profiles(
+    socket: &Path,
+    patience: Duration,
+) -> Result<BrowserProfileList, CommandError> {
+    match answered(socket, &browser_profiles_line(), patience)? {
+        Reply::BrowserProfiles(list) => Ok(list),
+        other => Err(unexpected(socket, &other)),
+    }
+}
+
+/// Tells the engine at `socket` to open `site` in browser profile `profile`
+/// from now on.
+pub fn pin_browser_site(
+    socket: &Path,
+    site: &str,
+    profile: &str,
+    patience: Duration,
+) -> Result<(), CommandError> {
+    carry_out(
+        socket,
+        &pin_browser_site_line(site, profile),
         Reply::Set,
         patience,
     )
@@ -308,6 +342,22 @@ pub fn clear_site_data(socket: &Path, host: &str, patience: Duration) -> Result<
     )
 }
 
+/// Tells the engine at `socket` to log at Chromium's minimum severity
+/// `min_level` and VLOG at `vmodule` in every process.
+pub fn set_log_levels(
+    socket: &Path,
+    min_level: i32,
+    vmodule: &str,
+    patience: Duration,
+) -> Result<(), CommandError> {
+    carry_out(
+        socket,
+        &set_log_levels_line(min_level, vmodule),
+        Reply::Set,
+        patience,
+    )
+}
+
 /// Tells the engine at `socket` whether the touchpads rest while a keyboard
 /// types, or with no `enabled` only asks, and returns whether they do.
 pub fn disable_while_typing(
@@ -317,6 +367,22 @@ pub fn disable_while_typing(
 ) -> Result<bool, CommandError> {
     match answered(socket, &disable_while_typing_line(enabled), patience)? {
         Reply::DisableWhileTyping { enabled } => Ok(enabled),
+        other => Err(unexpected(socket, &other)),
+    }
+}
+
+/// Sends DevTools Protocol `method` with `params` to browser window `window`
+/// of the engine at `socket`, by its id there, and returns the method's
+/// result.
+pub fn devtools(
+    socket: &Path,
+    window: &str,
+    method: &str,
+    params: &serde_json::Value,
+    patience: Duration,
+) -> Result<serde_json::Value, CommandError> {
+    match answered(socket, &devtools_line(window, method, params), patience)? {
+        Reply::DevTools { result } => Ok(result),
         other => Err(unexpected(socket, &other)),
     }
 }

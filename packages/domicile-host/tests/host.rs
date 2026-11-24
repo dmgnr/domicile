@@ -6,10 +6,12 @@
 use std::collections::BTreeMap;
 
 use domicile_host::ipc::apply_chrome_message;
-use domicile_host::{AppId, Appearances, Host, Mapped};
+use domicile_host::{AppId, Appearances, BrowserWindow, Host, Mapped};
 use domicile_protocol::{
-    AdaptiveSync, AppFrame, Appearance, ChromeMessage, CursorTheme, DisplayInfo, DisplayTransform,
-    HostMessage, Owner, Theme, PROTOCOL_VERSION,
+    AdaptiveSync, AppFrame, Appearance, Capturing, CapturingKind, ChromeMessage, CursorTheme,
+    DesktopStatus, Devices, DisplayHdr, DisplayInfo, DisplayTransform, HostMessage,
+    InputConnection, InputKind, ListedDisplay, ListedInput, ListedView, ListedWindow, MonitorInfo,
+    Owner, Theme, WindowKind, PROTOCOL_VERSION,
 };
 use domicile_scene::KeyboardTarget;
 
@@ -25,6 +27,229 @@ const OWNER: Owner = Owner {
 /// A window's identifier on `ext-foreign-toplevel-list-v1`, for tests about
 /// anything else.
 const LISTED: &str = "Vb1vFz0gXrYJ8Kq2sLmN4tPw6dHc9eRa";
+
+// ---- listings for `domicile list-*` ----------------------------------------
+
+#[test]
+fn each_display_is_listed_with_every_name_it_answers_to_and_whether_it_is_lit() {
+    // `domicile list-displays` prints the names `sleep-displays` takes, so
+    // they come from the monitors. A display with no monitor (a nested
+    // desktop's window) answers to its own name.
+    let mut host = Host::new();
+    let laptop = lying_down("drm-1", [0, 0], [1280, 800], 2);
+    let dock = lying_down("drm-2", [1280, 0], [1920, 1080], 1);
+    let window = lying_down("domicile-0", [3200, 0], [800, 600], 1);
+    host.describe_displays(vec![laptop.clone(), dock.clone(), window.clone()]);
+    host.describe_monitors(vec![
+        MonitorInfo {
+            names: vec!["drm-1".into(), "eDP-1".into(), "BOE NE135A1M-NY1".into()],
+            hdr: DisplayHdr::Unsupported,
+        },
+        MonitorInfo {
+            names: vec!["drm-2".into(), "DP-1".into()],
+            hdr: DisplayHdr::Unsupported,
+        },
+    ]);
+    host.describe_darkness(false, vec!["DP-1".into()]);
+
+    assert_eq!(
+        host.list_displays(),
+        HostMessage::DisplayList {
+            displays: vec![
+                ListedDisplay {
+                    display: laptop,
+                    names: vec!["drm-1".into(), "eDP-1".into(), "BOE NE135A1M-NY1".into()],
+                    lit: true,
+                },
+                ListedDisplay {
+                    display: dock,
+                    names: vec!["drm-2".into(), "DP-1".into()],
+                    lit: false,
+                },
+                ListedDisplay {
+                    display: window.clone(),
+                    names: vec!["domicile-0".into()],
+                    lit: true,
+                },
+            ]
+        }
+    );
+
+    host.describe_darkness(true, Vec::new());
+    let HostMessage::DisplayList { displays } = host.list_displays() else {
+        unreachable!("list_displays answers with a display list")
+    };
+    assert!(
+        displays.iter().all(|listed| !listed.lit),
+        "blanked or slept together, none is lit: {displays:?}"
+    );
+}
+
+#[test]
+fn every_window_is_listed_native_and_browser_alike() {
+    // A script sees one list of windows, whoever draws them, each by its
+    // `ext-foreign-toplevel-list-v1` identifier. Undrawn windows are not
+    // listed, as the chromes have not heard of them.
+    let mut host = Host::new();
+    let owner = Owner { pid: 4242, ..OWNER };
+    let editor = host.app_created(owner, "kD3mQ7nW1zT5yB8vC2xF6hJ9pL4sR0gA".to_string());
+    host.app_mapped(&editor, mapped());
+    host.app_titled(&editor, Some("notes.org".into()));
+    host.app_desktop_id(&editor, "emacs".into());
+    host.app_created(OWNER, "nW1zT5yB8vC2xF6hJ9pL4sR0gAkD3mQ7".to_string());
+    host.handle_chrome_message(ChromeMessage::FocusApp {
+        app_id: editor.clone(),
+    })
+    .unwrap();
+    host.browser_windows(vec![
+        BrowserWindow {
+            id: "3".into(),
+            title: "Inbox".into(),
+            app_id: "mail".into(),
+            url: "https://mail.example/".into(),
+            private: false,
+            views: Vec::new(),
+        },
+        BrowserWindow {
+            id: "7".into(),
+            title: "Example".into(),
+            app_id: String::new(),
+            url: "https://example.com/".into(),
+            private: true,
+            views: Vec::new(),
+        },
+    ]);
+    host.browser_toplevel_ids(BTreeMap::from([
+        (
+            "3".to_string(),
+            "Xy7pQ2mN8vB4cZ1kL6tR9wF3hD5sJ0gE".to_string(),
+        ),
+        (
+            "7".to_string(),
+            "aU2iO9pE4rT7yW1qZ5xC8vB3nM6lK0jH".to_string(),
+        ),
+    ]));
+
+    assert_eq!(
+        host.list_windows(),
+        HostMessage::WindowList {
+            windows: vec![
+                ListedWindow {
+                    id: "kD3mQ7nW1zT5yB8vC2xF6hJ9pL4sR0gA".into(),
+                    kind: WindowKind::Native,
+                    title: "notes.org".into(),
+                    app: Some("emacs".into()),
+                    pid: Some(4242),
+                    size: Some(SIZE),
+                    focused: true,
+                    urgent: false,
+                    url: None,
+                    private: false,
+                    engine_id: None,
+                    views: Vec::new(),
+                },
+                ListedWindow {
+                    id: "Xy7pQ2mN8vB4cZ1kL6tR9wF3hD5sJ0gE".into(),
+                    kind: WindowKind::Browser,
+                    title: "Inbox".into(),
+                    app: Some("mail".into()),
+                    pid: None,
+                    size: None,
+                    focused: false,
+                    urgent: false,
+                    url: Some("https://mail.example/".into()),
+                    private: false,
+                    engine_id: Some("3".into()),
+                    views: Vec::new(),
+                },
+                ListedWindow {
+                    id: "aU2iO9pE4rT7yW1qZ5xC8vB3nM6lK0jH".into(),
+                    kind: WindowKind::Browser,
+                    title: "Example".into(),
+                    app: None,
+                    pid: None,
+                    size: None,
+                    focused: false,
+                    urgent: false,
+                    url: Some("https://example.com/".into()),
+                    private: true,
+                    engine_id: Some("7".into()),
+                    views: Vec::new(),
+                },
+            ]
+        }
+    );
+}
+
+#[test]
+fn a_browser_window_lists_the_views_it_holds() {
+    // An Electron app such as Claude draws its whole page in views, so an
+    // agent reads and drives them, not the window's empty page.
+    let mut host = Host::new();
+    let sidebar = ListedView {
+        id: "8".into(),
+        position: [0, 0],
+        size: [200, 600],
+    };
+    let chat = ListedView {
+        id: "9".into(),
+        position: [200, 40],
+        size: [600, 560],
+    };
+    host.browser_windows(vec![BrowserWindow {
+        id: "5".into(),
+        title: "Claude".into(),
+        app_id: "claude-desktop".into(),
+        url: "app://claude/".into(),
+        private: false,
+        views: vec![sidebar.clone(), chat.clone()],
+    }]);
+    host.browser_toplevel_ids(BTreeMap::from([(
+        "5".to_string(),
+        "Xy7pQ2mN8vB4cZ1kL6tR9wF3hD5sJ0gE".to_string(),
+    )]));
+
+    let HostMessage::WindowList { windows } = host.list_windows() else {
+        unreachable!("list_windows answers with a window list")
+    };
+    assert_eq!(windows[0].views, [sidebar, chat]);
+}
+
+#[test]
+fn the_status_says_how_the_desktop_is_and_what_is_holding_or_watching_it() {
+    // What a person checks before walking away: the theme, the lock, the
+    // keymap, whether the screens are off, what keeps them on, and what is
+    // recording or controlling the desktop.
+    let mut host = Host::new();
+    let remote = Capturing {
+        id: 2,
+        app_id: "org.example.Remote".into(),
+        kind: CapturingKind::InputCapture {
+            devices: Devices::default(),
+        },
+    };
+    host.set_portal_requests(Vec::new(), vec![remote.clone()]);
+    host.describe_darkness(true, Vec::new());
+
+    assert_eq!(
+        host.status(true, Some("dvorak".into()), vec!["Firefox".into()]),
+        HostMessage::Status(DesktopStatus {
+            theme: Theme::Dark,
+            locked: true,
+            keymap: Some("dvorak".into()),
+            screens_off: true,
+            held_awake_by: vec!["Firefox".into()],
+            capturing: vec![remote],
+        })
+    );
+    // Monitors slept one by one leave the rest lit.
+    host.describe_darkness(false, vec!["DP-1".into()]);
+    let HostMessage::Status(status) = host.status(false, None, Vec::new()) else {
+        unreachable!("status answers with a status")
+    };
+    assert!(!status.screens_off);
+    assert!(status.capturing.len() == 1);
+}
 
 // ---- app lifecycle --------------------------------------------------------
 
@@ -740,6 +965,25 @@ fn a_popup_is_announced_as_its_own_app_over_its_window() {
         .is_none());
 }
 
+/// A press on a menu belongs to the window under it, so focusing a menu (or a
+/// submenu) focuses that window and the menu's grab holds.
+#[test]
+fn focusing_a_popup_focuses_its_window() {
+    let mut host = Host::new();
+    let window = drawn(&mut host);
+    let (menu, _) = host
+        .popup_placed(&window, (12.0, 30.0), (180.0, 240.0), true)
+        .unwrap();
+    let (submenu, _) = host
+        .popup_placed(&menu, (180.0, 0.0), (100.0, 100.0), true)
+        .unwrap();
+
+    host.handle_chrome_message(ChromeMessage::FocusApp { app_id: submenu })
+        .unwrap();
+
+    assert_eq!(host.focus_holder(), Some(window));
+}
+
 #[test]
 fn a_popup_moved_is_placed_again_and_closed_like_a_window() {
     let mut host = Host::new();
@@ -1023,6 +1267,65 @@ fn the_displays_are_answered_after_the_welcome() {
     );
 }
 
+#[test]
+fn a_display_is_found_by_any_name_a_profile_calls_it() {
+    // A person names a monitor by its connector or panel, not by the
+    // `drm-<id>` it is advertised as.
+    let mut host = Host::new();
+    host.describe_monitors(vec![laptop(), monitor(&["HDMI-A-1"])]);
+
+    assert_eq!(host.display_named("drm-1"), Ok("drm-1"));
+    assert_eq!(host.display_named("eDP-1"), Ok("drm-1"));
+    assert_eq!(host.display_named("BOE NE135A1M-NY1"), Ok("drm-1"));
+    assert_eq!(host.display_named("HDMI-A-1"), Ok("HDMI-A-1"));
+}
+
+#[test]
+fn a_display_not_found_lists_every_display_by_its_names() {
+    let mut host = Host::new();
+    host.describe_monitors(vec![laptop(), monitor(&["HDMI-A-1"])]);
+
+    assert_eq!(
+        host.display_named("DP-1"),
+        Err(
+            r#"no display "DP-1"; displays: "drm-1" / "eDP-1" / "BOE NE135A1M-NY1", "HDMI-A-1""#
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_name_two_displays_share_finds_neither() {
+    // Identical monitors with no serial share a panel name.
+    let mut host = Host::new();
+    host.describe_monitors(vec![
+        monitor(&["drm-1", "DP-1", "DEL DELL U2720Q"]),
+        monitor(&["drm-2", "DP-2", "DEL DELL U2720Q"]),
+    ]);
+
+    assert_eq!(host.display_named("drm-2"), Ok("drm-2"));
+    assert_eq!(
+        host.display_named("DEL DELL U2720Q"),
+        Err(
+            r#"2 displays are "DEL DELL U2720Q"; displays: "drm-1" / "DP-1" / "DEL DELL U2720Q", "drm-2" / "DP-2" / "DEL DELL U2720Q""#
+                .to_string()
+        )
+    );
+}
+
+/// The laptop panel, advertised as `drm-1`.
+fn laptop() -> MonitorInfo {
+    monitor(&["drm-1", "eDP-1", "BOE NE135A1M-NY1"])
+}
+
+/// A monitor answering to `names`, the first its output name.
+fn monitor(names: &[&str]) -> MonitorInfo {
+    MonitorInfo {
+        names: names.iter().map(|name| name.to_string()).collect(),
+        hdr: DisplayHdr::Unsupported,
+    }
+}
+
 // ---- theme ----------------------------------------------------------------
 
 #[test]
@@ -1147,6 +1450,9 @@ fn lying_down(name: &str, position: [i32; 2], size: [u32; 2], scale: u32) -> Dis
         mode: size,
         refresh_mhz: 0,
         adaptive_sync: AdaptiveSync::Unsupported,
+        hdr: DisplayHdr::Unsupported,
+        peak_luminance: 0,
+        sdr_white: 0,
         transform: DisplayTransform::Normal,
     }
 }
@@ -1168,4 +1474,57 @@ fn drawn(host: &mut Host) -> AppId {
     let app = host.app_created(OWNER, LISTED.to_string());
     host.app_mapped(&app, mapped());
     app
+}
+
+#[test]
+fn the_inputs_listed_are_the_engines_last_report() {
+    let mut host = Host::new();
+    assert_eq!(
+        host.list_inputs(),
+        HostMessage::InputList { inputs: Vec::new() }
+    );
+
+    let keyboard = ListedInput {
+        id: 4,
+        name: "AT Translated Set 2 keyboard".into(),
+        kind: InputKind::Keyboard,
+        connection: InputConnection::Internal,
+        sys_path: "/sys/devices/platform/i8042/serio0/input/input4".into(),
+        vendor: 1,
+        product: 1,
+    };
+    host.input_devices(vec![keyboard.clone()]);
+    assert_eq!(
+        host.list_inputs(),
+        HostMessage::InputList {
+            inputs: vec![keyboard]
+        }
+    );
+}
+
+#[test]
+fn a_native_window_is_found_by_its_toplevel_id_and_others_are_refused_by_name() {
+    let mut host = Host::new();
+    let owner = Owner { pid: 4242, ..OWNER };
+    let editor = host.app_created(owner, "kD3mQ7nW1zT5yB8vC2xF6hJ9pL4sR0gA".to_string());
+    host.app_mapped(&editor, mapped());
+    host.app_created(OWNER, "nW1zT5yB8vC2xF6hJ9pL4sR0gAkD3mQ7".to_string());
+    host.browser_toplevel_ids(BTreeMap::from([(
+        "3".to_string(),
+        "Xy7pQ2mN8vB4cZ1kL6tR9wF3hD5sJ0gE".to_string(),
+    )]));
+
+    assert_eq!(
+        host.native_window("kD3mQ7nW1zT5yB8vC2xF6hJ9pL4sR0gA"),
+        Ok((editor, 4242))
+    );
+    let browser = host
+        .native_window("Xy7pQ2mN8vB4cZ1kL6tR9wF3hD5sJ0gE")
+        .expect_err("a browser window is the shell's");
+    assert!(browser.contains("browser window"), "{browser}");
+    // An undrawn window is not listed, so it is not found either.
+    let undrawn = host
+        .native_window("nW1zT5yB8vC2xF6hJ9pL4sR0gAkD3mQ7")
+        .expect_err("not listed");
+    assert!(undrawn.contains("list-windows"), "{undrawn}");
 }

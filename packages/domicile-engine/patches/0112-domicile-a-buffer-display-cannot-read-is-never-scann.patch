@@ -51,10 +51,10 @@ skip visible.
  2 files changed, 41 insertions(+), 2 deletions(-)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 4b4eb3e..d5eded9 100644
+index 5c0ba08..b9d418a 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -270,6 +270,7 @@ source_set("gbm_unittests") {
+@@ -272,6 +272,7 @@ source_set("gbm_unittests") {
      "domicile/drm_sleep_unittest.cc",
      "domicile/drm_vt_switcher_unittest.cc",
      "domicile/edid_name_unittest.cc",
@@ -63,7 +63,7 @@ index 4b4eb3e..d5eded9 100644
      # evdev's, not this platform's: `//ui/events/ozone/evdev:unittests` is
      # linked only into `events_unittests`, which no job here builds, and the
 diff --git a/ui/ozone/platform/drm/gpu/gbm_pixmap.cc b/ui/ozone/platform/drm/gpu/gbm_pixmap.cc
-index b707492..999a840 100644
+index 82e4d47..721aa5b 100644
 --- a/ui/ozone/platform/drm/gpu/gbm_pixmap.cc
 +++ b/ui/ozone/platform/drm/gpu/gbm_pixmap.cc
 @@ -6,10 +6,15 @@
@@ -105,9 +105,9 @@ index b707492..999a840 100644
 +}  // namespace
 +
  GbmPixmap::GbmPixmap(GbmSurfaceFactory* surface_manager,
+                      scoped_refptr<DrmDevice> drm_device,
                       std::unique_ptr<GbmBuffer> buffer,
-                      scoped_refptr<DrmFramebuffer> framebuffer)
-@@ -76,7 +98,23 @@ bool GbmPixmap::ScheduleOverlayPlane(
+@@ -82,7 +104,23 @@ bool GbmPixmap::ScheduleOverlayPlane(
      gfx::AcceleratedWidget widget,
      const gfx::OverlayPlaneData& overlay_plane_data,
      gfx::GpuFenceHandle acquire_fence) {

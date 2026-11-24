@@ -6,6 +6,8 @@ rtkit: smooth drawing while the machine is busy, without the domicile group
 hwdata: monitor makers' names
 libpulse: pactl, for the volume readout
 curl: bookmark icons and the captive portal check
+wl-clipboard: Electron apps' clipboard
+xdg-utils: Electron apps' link handlers
 xdg-desktop-portal: portals for apps
 gsettings-desktop-schemas: the engine's GSettings schemas, without which it logs errors
 networkmanager: Miracast casts to TVs over Wi-Fi Direct

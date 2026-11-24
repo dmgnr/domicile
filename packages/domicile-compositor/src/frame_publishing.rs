@@ -11,7 +11,7 @@ use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_surface::WlSurf
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::shm::with_buffer_contents;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::buffer_transform::Sampled;
 use crate::dmabuf_descriptor::descriptor_from;
@@ -19,9 +19,9 @@ use crate::engine_session::{EngineSession, Remapped, Submission, Submitted};
 use crate::frame_descriptor::FrameDescriptor;
 use crate::frame_pacing::Paced;
 use crate::memory_frames::{MemoryError, MemoryFrame};
-use crate::shm_upload::{render_modifiers, shm_shape, CopyError};
+use crate::shm_upload::{render_modifiers, shm_shape, upload_fourcc, CopyError};
 use crate::surface_commit::{committed_buffer, CommittedBuffer, Mapping};
-use crate::uploads::{UploadId, Uploads};
+use crate::uploads::{Shape, UploadId, Uploads};
 use crate::DomicileCompositor;
 use crate::{casting, engine_damage, gbm, shm_upload};
 
@@ -244,6 +244,10 @@ impl DomicileCompositor {
         let Some(session) = self.engine.as_mut() else {
             return Published::NotShown;
         };
+        session.describe(
+            app_id,
+            crate::color_management::committed_color(commit.surface),
+        );
         let submission = session.submit(
             app_id,
             submitted,
@@ -289,7 +293,7 @@ impl DomicileCompositor {
             Ok(copied) => copied,
             Err(why) => {
                 if self.shm_refused.first(app_id) {
-                    warn!(app_id, %why, "this client's window will be blank");
+                    error!(app_id, %why, "this client's window will be blank");
                 }
                 return Published::NotShown;
             }
@@ -437,10 +441,14 @@ impl DomicileCompositor {
         let gpu = self.gpu.as_mut().ok_or(ShmRefused::NoRenderer)?;
         let gbm = gpu.gbm.as_ref().ok_or(ShmRefused::NoAllocator)?;
         let shape = shm_shape(commit.buffer).ok_or(ShmRefused::Unreadable)?;
-        let modifiers = render_modifiers(&gpu.renderer, shape.fourcc);
+        let drawn = Shape {
+            fourcc: upload_fourcc(&gpu.renderer, shape.fourcc),
+            ..shape
+        };
+        let modifiers = render_modifiers(&gpu.renderer, drawn.fourcc);
         let taken = self.uploads.take(
             app_id,
-            shape,
+            drawn,
             |upload| matches!(upload, Upload::Gpu(_)),
             |shape| gbm.allocate(shape, &modifiers).map(Upload::Gpu),
         )?;

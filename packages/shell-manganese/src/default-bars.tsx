@@ -9,6 +9,7 @@ import { Keymap } from "@domicile-desktop/manganese-bar-module-keymap";
 import { LauncherButton } from "@domicile-desktop/manganese-bar-module-launcher-button";
 import { Notifications } from "@domicile-desktop/manganese-bar-module-notifications";
 import { Sharing } from "@domicile-desktop/manganese-bar-module-sharing";
+import { Agents } from "@domicile-desktop/manganese-bar-module-sharing/agents";
 import { Tray } from "@domicile-desktop/manganese-bar-module-tray";
 import { WorkspaceSwitcher } from "@domicile-desktop/manganese-bar-module-workspace-switcher";
 import { QuickSettings } from "@domicile-desktop/manganese-quick-settings";
@@ -19,7 +20,8 @@ import { Fragment } from "react";
  *
  * The launcher button is first, with the tray right after it: they share one
  * item, as the bar puts its item gap around each item. The sharing indicator
- * leads the right column, so it is seen, then the keep awake eye, casting to TVs
+ * and the agents in control lead the right column, so they are seen, then the
+ * keep awake eye, casting to TVs
  * and downloads. The keymap, which shows only on a keyboard with several, is next, then
  * quick settings. The bell is last because the drawer it opens slides out from
  * that edge.
@@ -35,6 +37,7 @@ export const DEFAULT_BAR: BarLayout = {
   ],
   right: [
     <Sharing key="sharing" />,
+    <Agents key="agents" />,
     <KeptAwake key="kept-awake" />,
     <Cast key="cast" />,
     <Downloads key="downloads" />,

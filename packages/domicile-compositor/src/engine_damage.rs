@@ -21,8 +21,8 @@ pub struct Frame {
     pub crop: (i32, i32, i32, i32),
     /// The buffer's size in pixels.
     pub buffer: (u32, u32),
-    /// Whether nothing turned or scaled the buffer. A later upright commit's
-    /// damage misses pixels a turned one put elsewhere.
+    /// Whether nothing turned the buffer. A later upright commit's damage
+    /// misses pixels a turned one put elsewhere.
     pub upright: bool,
     /// For an shm frame, copied through the surface's texture, the fourcc it
     /// was uploaded as. `None` for a client's dmabuf.

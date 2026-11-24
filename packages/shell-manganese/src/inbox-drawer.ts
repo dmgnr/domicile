@@ -106,6 +106,7 @@ export const openInbox = (
       domicile.browser.openApp(inbox.url, {
         id: inbox.appId,
         reuse: AppReuse.Focus,
+        ...profileOf(inbox),
       });
       break;
     }
@@ -125,10 +126,16 @@ export const launcherAppsOf = (inboxes: readonly Inbox[]): WebApp[] =>
         return inbox.app === undefined ? [] : [{ ...inbox.app, name }];
       }
       case InboxKind.Window: {
-        return [{ appId: inbox.appId, name, url: inbox.url }];
+        return [
+          { appId: inbox.appId, name, url: inbox.url, ...profileOf(inbox) },
+        ];
       }
     }
   });
+
+/** An inbox window's browser profile, as `openApp` takes it: none for its site's. */
+const profileOf = ({ profile }: { profile?: string }): { profile?: string } =>
+  profile === undefined ? {} : { profile };
 
 /**
  * The app ids whose windows run in the background: each inbox in a window's.
@@ -206,6 +213,7 @@ const useWindowCounts = (domicile: Domicile, inboxes: readonly Inbox[]) => {
           domicile.browser.openApp(inbox.url, {
             id: inbox.appId,
             reuse: AppReuse.Focus,
+            ...profileOf(inbox),
           });
         }
       }

@@ -1,8 +1,8 @@
 // Search URLs for launcher queries that are neither a file nor a URL.
 //
 // A bang tag such as `!yt` or `!wiki` anywhere in the query picks the engine;
-// untagged queries go to Google. Tags are often appended after the words, so
-// any position counts.
+// untagged queries go to Google. `!g` names Google itself. Tags are often
+// appended after the words, so any position counts.
 //
 // Some tags also resolve names to pages: `!gh cprussin/domicile` opens the
 // repository, and the search becomes the second option.
@@ -13,13 +13,14 @@ const GOOGLE = "https://google.com/search?q=%QUERY%";
 /** The sites a tag can send a query to. */
 export enum Engine {
   GitHub,
+  Google,
   GoogleImages,
   GoogleMaps,
   Wikipedia,
   YouTube,
 }
 
-/** A query a tag sent somewhere other than Google. */
+/** A query a tag sent to its engine. */
 export type TaggedSearch = {
   engine: Engine;
   /** The words, with the tag taken out. */
@@ -47,6 +48,7 @@ export type TaggedSite = {
  * Keys keep the `!` because a bare `yt` may be a search term.
  */
 export const TAGS: Readonly<Record<string, Engine>> = {
+  "!g": Engine.Google,
   "!gh": Engine.GitHub,
   "!im": Engine.GoogleImages,
   "!maps": Engine.GoogleMaps,
@@ -57,6 +59,7 @@ export const TAGS: Readonly<Record<string, Engine>> = {
 /** How a query becomes a URL on each engine. */
 const ENGINE_URLS: Readonly<Record<Engine, string>> = {
   [Engine.GitHub]: "https://github.com/search?q=%QUERY%",
+  [Engine.Google]: GOOGLE,
   [Engine.GoogleImages]: "https://www.google.com/search?q=%QUERY%&tbm=isch",
   [Engine.GoogleMaps]: "https://www.google.com/maps/search/%QUERY%",
   [Engine.Wikipedia]:

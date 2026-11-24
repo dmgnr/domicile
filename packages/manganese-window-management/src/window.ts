@@ -98,6 +98,10 @@ export const ShellWindow = {
    * - `isPrivate`: whether the page is private. Its address bar says so.
    * - `isApp`: whether this is an app window (`domicile open --app`). Drawn
    *   without an address bar.
+   * - `appId`: the app window's id, its app's desktop id; `""` for none. An
+   *   app window draws its app's icon over its page's.
+   * - `isHidden`: whether its Electron app hid it. It stays open, its page
+   *   running, on no workspace until the app shows it again.
    */
   Browser: (
     windowId: string,
@@ -106,7 +110,10 @@ export const ShellWindow = {
     popupWindow: number | undefined,
     isPrivate: boolean,
     isApp: boolean,
+    appId = "",
+    isHidden = false,
   ) => ({
+    appId,
     /**
      * The page's description, or `undefined` for none. The view reports it,
      * as it does the icon.
@@ -119,6 +126,7 @@ export const ShellWindow = {
     icon: undefined as string | undefined,
     id: browserWindowId(windowId),
     isApp,
+    isHidden,
     isPrivate,
     kind: WindowKind.Browser as const,
     popupWindow,

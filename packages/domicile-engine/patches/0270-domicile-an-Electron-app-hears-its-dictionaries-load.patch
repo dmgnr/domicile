@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Tue, 24 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an Electron app hears its dictionaries load
+
+An Electron app's session fires spellcheck-dictionary-initialized as each
+dictionary it checks spelling with loads. An app's sessions are partitions
+of the shell's profile, so its dictionaries are that profile's.
+SpellcheckService tells chrome/browser/domicile/domicile_spellcheck.h of
+each one that loads, which passes the shell profile's on to the apps.
+---
+ chrome/browser/spellchecker/spellcheck_service.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/chrome/browser/spellchecker/spellcheck_service.cc b/chrome/browser/spellchecker/spellcheck_service.cc
+index 2be97a9..3f55296 100644
+--- a/chrome/browser/spellchecker/spellcheck_service.cc
++++ b/chrome/browser/spellchecker/spellcheck_service.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/spellchecker/spellcheck_service.h"
+ 
++#include "chrome/browser/domicile/domicile_spellcheck.h"
++
+ #include <algorithm>
+ #include <iterator>
+ #include <memory>
+@@ -696,6 +698,9 @@ void SpellcheckService::OnCustomDictionaryChanged(
+ void SpellcheckService::OnHunspellDictionaryInitialized(
+     const std::string& language) {
+   InitForAllRenderers();
++  // Domicile: Electron apps' sessions hear of the shell's profile's. See
++  // chrome/browser/domicile/domicile_spellcheck.h.
++  domicile::SpellcheckDictionaryInitialized(*context_, language);
+ }
+ 
+ void SpellcheckService::OnHunspellDictionaryDownloadBegin(

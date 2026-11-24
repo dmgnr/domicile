@@ -6,7 +6,7 @@ import { consentAddress, REDIRECT, redirectCode } from "./consent";
 const CLIENT = { id: "client.apps.googleusercontent.com", secret: "s3cret" };
 
 describe("consentAddress", () => {
-  it("asks for offline access to labels and headers, for the account", () => {
+  it("asks for offline access to labels, headers, settings and drafts, for the account", () => {
     const asked = new URL(consentAddress(CLIENT, "me@example.com", "st4te"));
 
     expect(asked.origin + asked.pathname).toBe(
@@ -19,7 +19,8 @@ describe("consentAddress", () => {
       prompt: "consent",
       redirect_uri: REDIRECT,
       response_type: "code",
-      scope: "https://www.googleapis.com/auth/gmail.metadata",
+      scope:
+        "https://www.googleapis.com/auth/gmail.metadata https://www.googleapis.com/auth/gmail.settings.basic https://www.googleapis.com/auth/gmail.compose",
       state: "st4te",
     });
   });

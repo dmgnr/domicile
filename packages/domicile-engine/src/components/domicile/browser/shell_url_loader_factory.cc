@@ -9,6 +9,8 @@
 
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
@@ -16,8 +18,11 @@
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "components/domicile/browser/app_roots.h"
 #include "components/domicile/browser/desk_lock.h"
+#include "components/domicile/browser/shell_dev_server.h"
 #include "components/domicile/browser/shell_source.h"
 #include "components/domicile/common/domicile_scheme.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/file_url_loader.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/filename_util.h"
@@ -406,6 +411,16 @@ void ShellURLLoaderFactory::CreateLoaderAndStart(
 
   if (!home && bare) {
     ServeShellDocument(std::move(client));
+    return;
+  }
+
+  // `domicile dev`: the dev server answers, from the IO thread, which watches
+  // its socket. Read per request, as the document is.
+  if (!home && ShellSource::Get().Files() == ShellFiles::kDevServer) {
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(&LoadFromDevServer, ShellSource::Get().Root(), request,
+                       std::move(loader), std::move(client)));
     return;
   }
 

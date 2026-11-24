@@ -19,7 +19,7 @@ job builds it on `crux`.
  2 files changed, 30 deletions(-)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 23c01e6..93ccdd8 100644
+index 039fb98..d5e8bdc 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -280,10 +280,6 @@ generated_dictionary_sources_in_modules = [
@@ -33,7 +33,7 @@ index 23c01e6..93ccdd8 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event_init.cc",
-@@ -2347,26 +2343,10 @@ generated_interface_sources_in_modules = [
+@@ -2351,26 +2347,10 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_clipboard_entry.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_extension.h",

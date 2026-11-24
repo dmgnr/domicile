@@ -8,8 +8,8 @@ import { hstack } from "../styled-system/patterns";
 export type Place = { start: number; width: number };
 
 /**
- * Calls `onPlace` with `chip`'s place in its row now and whenever the row's
- * layout changes, until the returned function stops it.
+ * Calls `onPlace` with `chip`'s place in its row once the row is laid out and
+ * whenever its layout changes, until the returned function stops it.
  */
 export type MeasureChip = (
   chip: HTMLElement,
@@ -114,21 +114,24 @@ export const Workspaces = ({
   );
 };
 
-/** `MeasureChip` from offsets, again whenever the row resizes. */
+/**
+ * `MeasureChip` from offsets, whenever the row resizes. Starts with the
+ * observer's first callback, after the frame's layout, rather than reading
+ * offsets now: a read while React commits a workspace switch would restyle
+ * and lay out the whole desk at once, stalling the slide's first frame.
+ */
 const offsetPlace: MeasureChip = (chip, onPlace) => {
   const row = chip.parentElement;
   if (row === null) {
     throw new Error("manganese: workspace chip has no row");
   }
-  const measure = () => {
+  const observer = new ResizeObserver(() => {
     onPlace({
       start: chip.offsetLeft,
       width: chip.offsetWidth,
     });
-  };
-  const observer = new ResizeObserver(measure);
+  });
   observer.observe(row);
-  measure();
   return () => {
     observer.disconnect();
   };

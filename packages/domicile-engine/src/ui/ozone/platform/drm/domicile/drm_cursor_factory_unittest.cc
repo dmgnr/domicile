@@ -10,8 +10,10 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/run_loop.h"
+#include "base/test/mock_log.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -105,6 +107,9 @@ base::flat_map<mojom::CursorType, XCursorImages> FakeTheme(
     const DeskCursorTheme& theme,
     int size) {
   base::flat_map<mojom::CursorType, XCursorImages> cursors;
+  if (theme.name == "Missing") {
+    return cursors;
+  }
   cursors[mojom::CursorType::kPointer] = {
       .frames = {Square(size, SK_ColorRED)}, .hotspot = gfx::Point(3, 4)};
   cursors[mojom::CursorType::kWait] = {
@@ -238,6 +243,86 @@ TEST_F(DrmCursorFactoryThemeTest, AnotherThemeReplacesTheCursorsOfTheLast) {
   source_.Set(std::nullopt);
 
   EXPECT_EQ(factory_.GetDefaultCursor(mojom::CursorType::kHand), nullptr);
+}
+
+// A monitor at another density asks for a size not loaded yet. The nearest
+// loaded size stands in until it loads, so the pointer stays the theme's
+// across a hotplug instead of turning into Chromium's art.
+TEST_F(DrmCursorFactoryThemeTest, TheNearestLoadedSizeStandsInWhileOneLoads) {
+  source_.Set(DeskCursorTheme{.name = "Amber", .size = 24});
+  factory_.GetDefaultCursor(mojom::CursorType::kPointer, 1.0f);
+  WaitForCursors();
+  factory_.GetDefaultCursor(mojom::CursorType::kPointer, 2.0f);
+  WaitForCursors();
+
+  const scoped_refptr<BitmapCursor> stand_in = BitmapCursor::FromPlatformCursor(
+      factory_.GetDefaultCursor(mojom::CursorType::kPointer, 1.75f));
+  ASSERT_NE(stand_in, nullptr);
+  ASSERT_EQ(stand_in->bitmaps().size(), 1u);
+  // 42 pixels is nearer 48 than 24.
+  EXPECT_EQ(stand_in->bitmaps()[0].width(), 48);
+  EXPECT_EQ(stand_in->cursor_image_scale_factor(), 2.0f);
+  EXPECT_EQ(stand_in->hotspot(), gfx::Point(3, 4));
+
+  WaitForCursors();
+  const scoped_refptr<BitmapCursor> loaded = BitmapCursor::FromPlatformCursor(
+      factory_.GetDefaultCursor(mojom::CursorType::kPointer, 1.75f));
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->bitmaps()[0].width(), 42);
+  EXPECT_EQ(loaded->cursor_image_scale_factor(), 1.75f);
+}
+
+// Chromium's art while the first size loads is expected on every start, so
+// it is no error: the theme's own failures are.
+TEST_F(DrmCursorFactoryThemeTest,
+       DrawingChromiumsArtWhileTheThemeLoadsIsNoError) {
+  source_.Set(DeskCursorTheme{.name = "Amber", .size = 24});
+  base::test::MockLog log;
+  EXPECT_CALL(log, Log).Times(testing::AnyNumber());
+  EXPECT_CALL(log, Log(logging::LOGGING_ERROR, testing::_, testing::_,
+                       testing::_, testing::_))
+      .Times(0);
+  log.StartCapturingLogs();
+
+  factory_.GetDefaultCursor(mojom::CursorType::kPointer, 2.0f);
+  factory_.GetDefaultCursor(mojom::CursorType::kHand, 2.0f);
+
+  log.StopCapturingLogs();
+  WaitForCursors();
+}
+
+TEST_F(DrmCursorFactoryThemeTest, ACursorTheThemeLacksIsAnError) {
+  source_.Set(DeskCursorTheme{.name = "Amber", .size = 24});
+  factory_.GetDefaultCursor(mojom::CursorType::kPointer);
+  WaitForCursors();
+  base::test::MockLog log;
+  EXPECT_CALL(log, Log).Times(testing::AnyNumber());
+  EXPECT_CALL(log, Log(logging::LOGGING_ERROR, testing::_, testing::_,
+                       testing::_, testing::HasSubstr("has no cursor for")))
+      .Times(1);
+  log.StartCapturingLogs();
+
+  // Once per type, not once per pointer move.
+  EXPECT_EQ(factory_.GetDefaultCursor(mojom::CursorType::kHand), nullptr);
+  EXPECT_EQ(factory_.GetDefaultCursor(mojom::CursorType::kHand), nullptr);
+
+  log.StopCapturingLogs();
+}
+
+TEST_F(DrmCursorFactoryThemeTest, AThemeOffTheXCursorPathIsAnError) {
+  source_.Set(DeskCursorTheme{.name = "Missing", .size = 24});
+  factory_.GetDefaultCursor(mojom::CursorType::kPointer);
+  base::test::MockLog log;
+  EXPECT_CALL(log, Log).Times(testing::AnyNumber());
+  EXPECT_CALL(log, Log(logging::LOGGING_ERROR, testing::_, testing::_,
+                       testing::_, testing::HasSubstr("no cursor theme")))
+      .Times(1);
+  log.StartCapturingLogs();
+
+  WaitForCursors();
+
+  log.StopCapturingLogs();
+  EXPECT_EQ(factory_.GetDefaultCursor(mojom::CursorType::kPointer), nullptr);
 }
 
 }  // namespace

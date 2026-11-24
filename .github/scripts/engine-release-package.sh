@@ -114,6 +114,16 @@ done
 mkdir "$STAGE/$NAME/locales"
 cp -a "$BUILD"/locales/*.pak "$STAGE/$NAME/locales/"
 
+# Required: the Hunspell dictionaries the engine checks spelling with, which it
+# never downloads (patch 0246). The build's `domicile_dictionaries` target
+# copies them.
+ls "$BUILD"/dictionaries/*.bdic >/dev/null 2>&1 || {
+  echo "::error::the build produced no dictionaries/*.bdic; the engine would check no spelling" >&2
+  exit 1
+}
+mkdir "$STAGE/$NAME/dictionaries"
+cp -a "$BUILD"/dictionaries/*.bdic "$STAGE/$NAME/dictionaries/"
+
 # Strip every ELF: `chrome`'s symbol table alone is 248.5 MB. The dynamic
 # symbols that `dlsym` reads stay. The build directory keeps its symbols, for
 # the measurements in docs/architecture/ENGINE-FORK-MEASUREMENTS.md.

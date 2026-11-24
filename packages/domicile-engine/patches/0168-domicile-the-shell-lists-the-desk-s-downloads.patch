@@ -18,7 +18,7 @@ job builds it on `crux`.
  3 files changed, 21 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index e103a26..1f3e82d 100644
+index 649bd0a..094efe1 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -8,6 +8,7 @@
@@ -29,7 +29,7 @@ index e103a26..1f3e82d 100644
  #include "chrome/browser/domicile/domicile_extension_tray.h"
  #include "chrome/browser/domicile/domicile_pointer_warp.h"
  #include "chrome/browser/domicile/domicile_shell_fetch.h"
-@@ -685,6 +686,21 @@ void PopulateChromeFrameBinders(
+@@ -717,6 +718,21 @@ void PopulateChromeFrameBinders(
          domicile::BindCastSinks(frame, std::move(receiver));
        }));
  
@@ -52,7 +52,7 @@ index e103a26..1f3e82d 100644
    //
    // Gated at BIND time like the browser windows, and for their reason: a page
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 49be672..220f064 100644
+index db52893..171bba6 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -1566,6 +1566,8 @@ generated_enumeration_sources_in_modules = [
@@ -64,7 +64,7 @@ index 49be672..220f064 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_theme.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_theme.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_tray_action.cc",
-@@ -2351,6 +2353,8 @@ generated_interface_sources_in_modules = [
+@@ -2355,6 +2357,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_browser_window.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_cast_sink.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_cast_sink.h",

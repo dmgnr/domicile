@@ -4,6 +4,8 @@ Meta+Shift+V shows what you copied, newest first. Pick one to paste it next.
 
 - It opens on the copy before your current one, so Enter swaps back to it.
 - Type to narrow the list. Arrows or the pointer pick another row.
+- Remove a copy with its Remove button, or press Delete on its row. Removing
+  what is on your clipboard empties the clipboard.
 
 ![Clipboard history](../media/tour-clipboard.png)
 

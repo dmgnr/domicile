@@ -6,8 +6,10 @@ import { Children } from "react";
 import { css, cva } from "../../styled-system/css";
 import { flex } from "../../styled-system/patterns";
 import { Button } from "../Button/Button";
+import type { Point } from "../ContextMenu/ContextMenu";
 import type { RowMotion } from "../LeavingRows/LeavingRow";
 import { LeavingRow } from "../LeavingRows/LeavingRow";
+import { newTabClick } from "../new-tab-click";
 import "../stylesheet";
 
 export const SURFACES = ["plain", "filled"] as const;
@@ -50,14 +52,36 @@ type Common = {
 type Props = Common &
   (
     | {
+        /**
+         * Buttons beside the row's own button rather than in it, such as a
+         * pin, after `end`.
+         */
+        actions?: ReactNode | undefined;
         /** While its request is out. */
         busy?: boolean | undefined;
         /** Names the button, when its text alone would not. */
         name?: string | undefined;
         /** Makes the whole row one button. Its `end` must not be a control. */
         onPress: () => void;
+        /**
+         * A middle click or a Ctrl+click on the row, for the row's thing
+         * elsewhere, as a link opens in a new tab.
+         */
+        onPressInNew?: (() => void) | undefined;
+        /**
+         * A right click on the row, where it landed, such as to open the
+         * row's thing's own menu there. The page's menu doesn't show.
+         */
+        onSecondaryPress?: ((at: Point) => void) | undefined;
       }
-    | { busy?: undefined; name?: undefined; onPress?: undefined }
+    | {
+        actions?: undefined;
+        busy?: undefined;
+        name?: undefined;
+        onPress?: undefined;
+        onPressInNew?: undefined;
+        onSecondaryPress?: undefined;
+      }
   );
 
 /**
@@ -69,6 +93,7 @@ type Props = Common &
  * so rows keep one height.
  */
 export const ListRow = ({
+  actions,
   busy,
   children,
   detail,
@@ -80,6 +105,8 @@ export const ListRow = ({
   motion,
   name,
   onPress,
+  onPressInNew,
+  onSecondaryPress,
   surface = "plain",
 }: Props) => {
   const below = Children.toArray(children).length > 0;
@@ -136,15 +163,27 @@ export const ListRow = ({
       {onPress === undefined ? (
         <div className={rowStyles({ pressable: false })}>{face}</div>
       ) : (
-        <button
-          aria-busy={busy === true ? true : undefined}
-          aria-label={name}
-          className={rowStyles({ pressable: true })}
-          onClick={onPress}
-          type="button"
-        >
-          {face}
-        </button>
+        <Beside actions={actions}>
+          <button
+            aria-busy={busy === true ? true : undefined}
+            aria-label={name}
+            className={rowStyles({ pressable: true })}
+            onContextMenu={
+              onSecondaryPress === undefined
+                ? undefined
+                : (event) => {
+                    event.preventDefault();
+                    onSecondaryPress({ x: event.clientX, y: event.clientY });
+                  }
+            }
+            type="button"
+            {...(onPressInNew === undefined
+              ? { onClick: onPress }
+              : newTabClick(onPress, onPressInNew))}
+          >
+            {face}
+          </button>
+        </Beside>
       )}
       {folds ? (
         <Collapsible.Panel className={drawerStyles}>{under}</Collapsible.Panel>
@@ -172,6 +211,23 @@ export const ListRow = ({
     </LeavingRow>
   );
 };
+
+/** A pressed row's button, with its `actions` beside it when it has any. */
+const Beside = ({
+  actions,
+  children,
+}: {
+  actions: ReactNode;
+  children: ReactNode;
+}) =>
+  actions === undefined ? (
+    children
+  ) : (
+    <div className={pressedStyles}>
+      {children}
+      <span className={actionsStyles}>{actions}</span>
+    </div>
+  );
 
 /** A panel's list of {@link ListRow}s. */
 export const List = ({
@@ -246,6 +302,23 @@ const rowStyles = cva({
   },
 });
 
+// A pressed row's button, and its actions beside it. The button lights alone
+// under the pointer, and shrinks so a long label is cut short instead of
+// pushing the actions out.
+const pressedStyles = flex({
+  "& > button": { flex: 1, minInlineSize: 0 },
+  align: "center",
+  minInlineSize: 0,
+});
+
+// Inset as the row's own end is, so its buttons line up with other rows'.
+const actionsStyles = flex({
+  align: "center",
+  flexShrink: 0,
+  gap: 1,
+  paddingInlineEnd: 2,
+});
+
 // Only there to hold the disclosure's state; the item lays out its parts.
 const rootStyles = css({ display: "contents" });
 
@@ -276,6 +349,8 @@ const drawerStyles = css({
   },
   blockSize: "var(--collapsible-panel-height)",
   overflow: "hidden",
+  // main-thread animation: opens to its details' height once, moving what is
+  // below.
   transition: "block-size {durations.normal} {easings.out}",
 });
 
@@ -326,16 +401,18 @@ const belowStyles = cva({
     paddingInline: 2,
   }),
   variants: {
-    // Room above and below the folded details. The gap and the bottom match
-    // a `PanelFooter`'s top, so its rule and button sit evenly spaced. A
-    // footer's action stays inside the drawer's padding rather than hanging
-    // past it, so it keeps a gap from the tile's edge.
+    // Room above and below the folded details, as tight as the rows they
+    // fold under. A `PanelFooter` in it closes up to its rule to match, so
+    // its rule and button sit evenly spaced. Its action stays inside the
+    // drawer's padding rather than hanging past it, so it keeps a gap from
+    // the tile's edge.
     drawer: {
       false: {},
       true: {
+        "& > footer": { paddingBlockStart: 1.5 },
         "& > footer > button:last-child": { marginInlineEnd: 0 },
-        gap: 3,
-        paddingBlockEnd: 3,
+        gap: 1.5,
+        paddingBlockEnd: 1.5,
         paddingBlockStart: 1.5,
       },
     },

@@ -70,6 +70,11 @@ does it: [`examples/nixos`](/examples/nixos).
   imports = [domicile.nixosModules.default];
   programs.domicile.enable = true;
   services.displayManager.defaultSession = "domicile";
+
+  nix.settings = {
+    substituters = [ "https://packages.domicile-desktop.com/nix" ];
+    trusted-public-keys = [ "packages.domicile-desktop.com-1:iAulr298MtC52WMi2GPI8bqPEvOXHoQtSRAGOo0ny90=" ];
+  };
 }
 ```
 
@@ -87,6 +92,9 @@ does it: [`examples/nixos`](/examples/nixos).
 The system module adds the login session, the password check for the lock
 screen, battery and casting support. The home module writes your
 [config file](CONFIGURE.md#home-manager).
+
+`nix.settings` adds Domicile's binary cache, so a rebuild downloads Domicile
+instead of compiling it. The cache holds every `release` and `stable` commit.
 
 <!-- /tabs -->
 
@@ -132,11 +140,11 @@ domicile @domicile-desktop/manganese
 ## The newest build
 
 To run the newest `stable` build before it is released, download its package
-from [`packages-latest`](https://github.com/cprussin/domicile/releases/tag/packages-latest)
+from [`packages-latest`](https://github.com/cprussin/domicile-builds/releases/tag/packages-latest)
 and check it:
 
 ```sh
-base=https://github.com/cprussin/domicile/releases/download/packages-latest
+base=https://github.com/cprussin/domicile-builds/releases/download/packages-latest
 pkg=domicile_amd64.deb   # your package from the table below
 curl -fL -O "$base/$pkg" -O "$base/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS

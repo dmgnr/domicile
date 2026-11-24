@@ -16,7 +16,7 @@ or Super key).
 | Meta+Shift+Tab | Float the window, or tile it again |
 | Meta+Tab | Switch between floating and tiled windows |
 | Meta+Minus | Show or hide the scratchpad |
-| Four-finger swipe down / up | Pull the scratchpad down / push it back up |
+| Four-finger swipe down / up | Pull the scratchpad down / push it back up, once the overview is closed |
 | Meta+Shift+Minus | Move the window to the scratchpad |
 
 ## Workspaces
@@ -27,13 +27,13 @@ or Super key).
 | Meta+Shift+1 … Meta+Shift+0 | Send the window to workspace 1–10 |
 | Four-finger swipe left / right | Go to the next / previous workspace on this monitor |
 | Touchscreen: swipe in from the right / left edge | Go to the next / previous workspace on this monitor |
-| Meta+O, four-finger pinch in | [The overview](WINDOWS.md#overview): your workspaces side by side |
+| Meta+O, four-finger pinch in, four-finger swipe up | [The overview](WINDOWS.md#overview): your workspaces side by side |
 
 ## Layout
 
 | Keys | Does |
 |---|---|
-| Meta+W | Tabs; merges a selected split into one group |
+| Meta+W | Stacked group back to tabs; otherwise merges the groups side by side into one tabbed group |
 | Meta+S | Stacked |
 | Meta+E | Splits a group's tabs side by side, switching between across and down |
 | Meta+B / Meta+V | Move the window out of its group, to the right / below |

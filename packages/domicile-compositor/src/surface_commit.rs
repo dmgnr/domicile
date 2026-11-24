@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::Buffer as _;
+use smithay::reexports::wayland_server::Resource as _;
 use smithay::reexports::wayland_server::{
     protocol::{wl_buffer, wl_surface::WlSurface},
     Client,
@@ -30,7 +31,7 @@ use smithay::{
 use tracing::debug;
 
 use crate::buffer_transform::{crop_in_buffer, upright_size, Sampled};
-use crate::client_damage::take_damage;
+use crate::client_damage::{exact_damage, take_damage};
 use crate::clients::ClientState;
 use crate::dmabuf_import::DmabufImporter;
 use crate::engine::NEWEST_BOX;
@@ -123,12 +124,25 @@ pub struct LastBuffer {
     mapping: Mapping,
 }
 
+impl LastBuffer {
+    /// The surface's logical size while it shows this buffer.
+    pub fn logical_size(&self) -> (f64, f64) {
+        let (width, height) = surface_size(
+            upright_size(self.size, self.mapping.buffer_transform),
+            self.mapping.buffer_scale,
+            self.mapping.viewport.size,
+        );
+        (f64::from(width), f64::from(height))
+    }
+}
+
 /// The role a surface committed in, for the steps of a commit that differ.
 #[derive(Clone)]
 pub enum Role {
     Toplevel(ToplevelSurface),
     Popup(PopupSurface),
-    Bubble,
+    /// See `crate::subsurfaces`.
+    Subsurface,
     /// An input method's candidate list. See `text_input.rs`.
     Candidates,
 }
@@ -145,6 +159,18 @@ enum Committer {
 pub enum CommittedBuffer {
     Pixels { width: u32, height: u32 },
     Gpu(Dmabuf),
+}
+
+impl Role {
+    /// What a log line calls this role.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Role::Toplevel(_) => "toplevel",
+            Role::Popup(_) => "popup",
+            Role::Subsurface => "subsurface",
+            Role::Candidates => "candidates",
+        }
+    }
 }
 
 impl CommittedBuffer {
@@ -174,20 +200,11 @@ impl CompositorHandler for DomicileCompositor {
         self.tell_the_held_moves(surface);
     }
 
-    /// A destroyed bubble or candidate list goes at once: no commit will come
-    /// to notice it.
+    /// A destroyed subsurface or candidate list goes at once: no commit will
+    /// come to notice it.
     fn destroyed(&mut self, surface: &WlSurface) {
         self.candidates_destroyed(surface);
-        if let Some(at) = self
-            .bubbles
-            .iter()
-            .position(|bubble| bubble.surface == *surface)
-        {
-            let bubble = self.bubbles.remove(at);
-            self.by_surface.remove(&bubble.surface);
-            debug!(app_id = %bubble.app_id, "bubble destroyed -> Host::app_closed");
-            self.forget(&bubble.app_id);
-        }
+        self.subsurface_destroyed(surface);
     }
 }
 
@@ -196,7 +213,7 @@ impl DomicileCompositor {
     fn apply_the_commit(&mut self, surface: &WlSurface) {
         self.announce_a_new_popup(surface);
         self.place_a_repositioned_popup(surface);
-        self.place_the_bubbles(surface);
+        let children_changed = self.place_the_subsurfaces(surface);
         self.place_the_candidates(surface);
         let Some((committer, role)) = self.committer(surface) else {
             return;
@@ -266,7 +283,7 @@ impl DomicileCompositor {
                 let callbacks = std::mem::take(&mut attrs.frame_callbacks);
                 // Clear the accumulated damage, or it grows by a rectangle per
                 // commit for the window's life.
-                let damage = take_damage(&mut attrs.damage, attrs.buffer_scale);
+                let damage = take_damage(&mut attrs.damage, attrs.buffer_scale, viewport);
                 // The scale this buffer was drawn at. Read now; a client
                 // mid-scale-change may commit the next one differently.
                 let scale = attrs.buffer_scale;
@@ -302,11 +319,26 @@ impl DomicileCompositor {
                 .map(|last| last.size),
             _ => None,
         };
+        // Whether this commit puts up a frame of its own.
+        let draws = attached.is_some() || remaps.is_some();
         // The buffer's size in pixels, if this commit shows one.
         let buffer_size = match &attached {
             Some(buffer) => committed_buffer(buffer).map(|committed| committed.size()),
             None => remaps,
         };
+        tracing::trace!(
+            surface = ?surface.id(),
+            ?committer,
+            role = role.name(),
+            buffer = ?buffer_size,
+            gpu = matches!(attached.as_ref().and_then(committed_buffer), Some(CommittedBuffer::Gpu(_))),
+            remapped = remaps.is_some(),
+            unmapped,
+            scale = buffer_scale,
+            damage = ?damage.as_ref().map(|region| (region.x, region.y, region.width, region.height)),
+            callbacks = callbacks.len(),
+            "a commit"
+        );
         // A buffer of no known kind cannot be shown again.
         if let (Committer::App(app_id), true) = (
             &committer,
@@ -412,24 +444,15 @@ impl DomicileCompositor {
                     let pixels_a_point =
                         buffer_size.map_or((1.0, 1.0), |size| mapping.pixels_a_point(size));
                     self.cast_frame(app_id, &buffer, sampled, pixels_a_point, damage);
-                    // Surface damage maps to buffer pixels by the scale alone
-                    // only when nothing turns or scales the buffer.
-                    let upright =
-                        buffer_transform == Transform::Normal && viewport == Viewport::default();
+                    // A turned buffer's pixels land elsewhere on screen.
+                    let upright = buffer_transform == Transform::Normal;
                     let commit = Commit {
                         surface,
                         buffer: &buffer,
                         sampled,
                         at_box,
                         box_size,
-                        damage: damage.filter(|_| upright).map(|region| {
-                            (
-                                region.x as i32,
-                                region.y as i32,
-                                region.width as i32,
-                                region.height as i32,
-                            )
-                        }),
+                        damage: exact_damage(damage, buffer_transform),
                     };
                     // Before the submit, which numbers this commit's frame.
                     let last = self
@@ -516,6 +539,7 @@ impl DomicileCompositor {
         });
         let shown = shown.or(remapped);
         self.answer_when_shown(shown, callbacks, feedback);
+        self.show_the_subsurfaces(surface, children_changed, draws);
     }
 }
 
@@ -556,7 +580,7 @@ impl DomicileCompositor {
                 box_size: None,
             },
             // Sized by its own buffer.
-            Role::Bubble | Role::Candidates => Answered {
+            Role::Subsurface | Role::Candidates => Answered {
                 configured: None,
                 at_box: NEWEST_BOX,
                 box_size: None,

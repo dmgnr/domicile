@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor Prussin <connor@prussin.net>
+Date: Tue, 24 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: an Electron app's session keeps its code
+ cache where it says
+
+session.setCodeCachePath moves where a session's partition keeps the code
+V8 compiles for its scripts. The generated code cache is content's own, so
+content/public/browser/domicile_code_cache.h reaches it for
+//chrome/browser/domicile.
+---
+ content/browser/BUILD.gn        | 1 +
+ content/public/browser/BUILD.gn | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index 3c7e8f4..15ba5e0 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -966,6 +966,7 @@ source_set("browser") {
+     "dom_storage/dom_storage_context_wrapper.h",
+     "dom_storage/session_storage_namespace_handle_impl.cc",
+     "dom_storage/session_storage_namespace_handle_impl.h",
++    "domicile/domicile_code_cache.cc",
+     "domicile/domicile_desk.cc",
+     "domicile/domicile_desk.h",
+     "domicile/domicile_frame_sink_broker.cc",
+diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+index 453d180..3d62c23 100644
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -168,6 +168,7 @@ source_set("browser_sources") {
+     "document_user_data.cc",
+     "document_user_data.h",
+     "dom_storage_context.h",
++    "domicile_code_cache.h",
+     "domicile_desk.h",
+     "domicile_log_levels.h",
+     "download_item_utils.h",

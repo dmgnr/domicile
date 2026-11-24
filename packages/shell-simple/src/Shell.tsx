@@ -3,6 +3,8 @@
 // A minimal shell: one `<app>` per client the host announces, moved and resized
 // with Alt, and a terminal on Alt+Enter.
 
+import type { Result } from "@cprussin/option-result";
+import { Err, Ok } from "@cprussin/option-result";
 import { PortalDialogs } from "@domicile-desktop/component-library/PortalDialogs";
 import { useDomicile } from "@domicile-desktop/react/domicile-provider";
 import { APP_TAG_NAME } from "@domicile-desktop/sdk/app-element";
@@ -11,6 +13,7 @@ import type { ClientWindow } from "@domicile-desktop/sdk/desktop/windows";
 import { KeyAction } from "@domicile-desktop/sdk/key-action";
 import type { ShellKeybindings } from "@domicile-desktop/sdk/own-keybindings";
 import { ownedChords } from "@domicile-desktop/sdk/own-keybindings";
+import type { ShellCommandHelp } from "@domicile-desktop/sdk/shell-command";
 import type { CSSProperties, PointerEvent } from "react";
 import {
   Fragment,
@@ -51,6 +54,11 @@ const KEYBINDINGS = [
   ["Alt + right-drag", "resize (and raise)"],
   ["Alt + Enter", "open a terminal"],
 ] as const;
+
+/** The commands this shell runs, for `domicile list-shell-commands`. */
+const COMMANDS: readonly ShellCommandHelp[] = [
+  { description: "Open a terminal.", usage: "terminal" },
+];
 
 /** Default reporter for unknown commands. */
 const logToConsole = (error: string): void => {
@@ -116,12 +124,19 @@ export const Shell = ({
 
   // Handles the shell's one command. An effect event, so it reads current props
   // without rebinding the keys.
-  const onCommand = useEffectEvent((args: readonly string[]) => {
-    if (args.join(" ") === "terminal") {
-      domicile.processes.launch(TERMINAL_COMMAND);
-    } else {
-      report(`${SHELL}: no command \`${args.join(" ")}\``);
-    }
+  const onCommand = useEffectEvent(
+    (args: readonly string[]): Result<"ran", string> => {
+      if (args.join(" ") === "terminal") {
+        domicile.processes.launch(TERMINAL_COMMAND);
+        return Ok("ran");
+      } else {
+        return Err(`${SHELL}: no command \`${args.join(" ")}\``);
+      }
+    },
+  );
+
+  const reportRefusal = useEffectEvent((why: string) => {
+    report(why);
   });
 
   useEffect(() => {
@@ -161,9 +176,13 @@ export const Shell = ({
     // The engine finds the chord's key and sends its press whether it reaches
     // the page or a `<webview>`.
     const keys = bindKeys(domicile, keybindings, {
+      commands: COMMANDS,
       onCommand,
       // This shell has no modes to show.
       onModeChanged: () => undefined,
+      reportRefusal: (why) => {
+        reportRefusal(why);
+      },
     });
     return () => {
       unlisten();

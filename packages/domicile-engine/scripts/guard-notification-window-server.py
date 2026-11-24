@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""A notification server and the page guard-notification-window.sh loads.
+"""A notification server and the page that guard-notification-window.sh and
+guard-notification-site-icon.sh load.
 
-Two jobs, so the guard starts one helper:
+Two jobs, so each guard starts one helper:
 
 - Takes org.freedesktop.Notifications on the session bus and answers what
   Chrome's notification bridge asks: GetCapabilities, GetServerInformation and
-  Notify. It prints each Notify's hints, one `NOTIFY <summary> <hints>` line,
-  hints as JSON. Speaks the D-Bus wire protocol itself, because the guard's
-  shell has no D-Bus module for Python.
+  Notify. For each Notify it prints two lines:
+    `NOTIFY <summary> <hints>`, hints as JSON;
+    `ICON <summary> <color>`, the color at the center of its application
+    icon's file: `red`, `other`, or `none` when it names no PNG file.
+  Speaks the D-Bus wire protocol itself, because the guards' shell has no
+  D-Bus module for Python.
 - Serves `/notify`, a page that shows a notification named by its `?summary=`
-  once it is allowed to.
+  once it is allowed to: again every half second, `?times=` times in all (1
+  when absent). With `?favicon=red` the page's favicon is `/favicon.png`,
+  solid red; otherwise the site has no favicon.
 
-The guard seeds the profile so the page's origin may notify.
+The guards seed the profile so the page's origin may notify.
 """
 
 import argparse
@@ -21,6 +27,7 @@ import socket
 import struct
 import sys
 import threading
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -36,15 +43,27 @@ PAGE = """<!doctype html>
   <head>
     <meta charset="utf-8" />
     <title>a page that notifies</title>
+    {favicon}
   </head>
   <body>
     <script>
-      new Notification({summary});
-      console.log("GUARD notified");
+      let left = {times};
+      const notify = () => {{
+        new Notification({summary});
+        console.log("GUARD notified");
+        left -= 1;
+        if (left > 0) {{
+          setTimeout(notify, 500);
+        }}
+      }};
+      notify();
     </script>
   </body>
 </html>
 """
+
+# The side of the red favicon, in pixels: a site's usual favicon size.
+FAVICON_SIDE = 16
 
 # Message types and header fields of the D-Bus wire protocol.
 METHOD_CALL, METHOD_RETURN, ERROR, SIGNAL = 1, 2, 3, 4
@@ -252,6 +271,85 @@ class Bus:
         return message
 
 
+def png(width, height, rgba):
+    """An 8-bit RGBA PNG of `width` by `height` pixels all `rgba`."""
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    rows = b"".join(b"\0" + bytes(rgba) * width for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
+
+def center_of(data):
+    """The (r, g, b) at the center of 8-bit, non-interlaced PNG `data`."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    at = 8
+    idat = b""
+    while at < len(data):
+        (length,) = struct.unpack_from(">I", data, at)
+        kind = data[at + 4 : at + 8]
+        body = data[at + 8 : at + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat += body
+        at += 12 + length
+    channels = {2: 3, 6: 4}.get(color)
+    if depth != 8 or channels is None or interlace != 0:
+        raise ValueError(f"cannot read a PNG of depth {depth}, color {color}, interlace {interlace}")
+    raw = zlib.decompress(idat)
+    stride = width * channels
+    previous = bytearray(stride)
+    middle = height // 2
+    for y in range(middle + 1):
+        start = y * (stride + 1)
+        kind = raw[start]
+        row = bytearray(raw[start + 1 : start + 1 + stride])
+        for x in range(stride):
+            left = row[x - channels] if x >= channels else 0
+            up = previous[x]
+            corner = previous[x - channels] if x >= channels else 0
+            if kind == 1:
+                row[x] = (row[x] + left) & 0xFF
+            elif kind == 2:
+                row[x] = (row[x] + up) & 0xFF
+            elif kind == 3:
+                row[x] = (row[x] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                guess = left + up - corner
+                near = min(
+                    (abs(guess - left), left),
+                    (abs(guess - up), up),
+                    (abs(guess - corner), corner),
+                    key=lambda pair: pair[0],
+                )[1]
+                row[x] = (row[x] + near) & 0xFF
+        previous = row
+    pixel = previous[(width // 2) * channels :][:3]
+    return tuple(pixel)
+
+
+def color_of(app_icon):
+    """`red`, `other` or `none`: the center of the PNG file `app_icon` names."""
+    path = app_icon.removeprefix("file://")
+    if not path.startswith("/"):
+        return "none"
+    try:
+        with open(path, "rb") as file:
+            red, green, blue = center_of(file.read())
+    except (OSError, ValueError):
+        return "none"
+    return "red" if red > 200 and green < 60 and blue < 60 else "other"
+
+
 def serve_notifications(address):
     bus = Bus(address)
     bus.call_bus("Hello")
@@ -279,12 +377,13 @@ def serve_notifications(address):
             read = Reader(message["body"])
             read.take("s")
             read.take("u")
-            read.take("s")
+            app_icon = read.take("s")
             summary = read.take("s")
             read.take("s")
             read.strings()
             hints = read.hints()
             print(f"NOTIFY {summary} {json.dumps(hints, sort_keys=True)}", flush=True)
+            print(f"ICON {summary} {color_of(app_icon)}", flush=True)
             body = Writer()
             body.uint32(next_id)
             next_id += 1
@@ -295,16 +394,29 @@ def handler_for():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             url = urlsplit(self.path)
+            if url.path == "/favicon.png":
+                self.send(png(FAVICON_SIDE, FAVICON_SIDE, (255, 0, 0, 255)), "image/png")
+                return
             if url.path != "/notify":
                 self.send_error(404)
                 return
-            summary = parse_qs(url.query).get("summary", ["guard"])[0]
-            page = PAGE.format(summary=json.dumps(summary)).encode()
+            query = parse_qs(url.query)
+            summary = query.get("summary", ["guard"])[0]
+            times = int(query.get("times", ["1"])[0])
+            favicon = (
+                '<link rel="icon" href="/favicon.png" />'
+                if query.get("favicon", [""])[0] == "red"
+                else ""
+            )
+            page = PAGE.format(summary=json.dumps(summary), times=times, favicon=favicon)
+            self.send(page.encode(), "text/html; charset=utf-8")
+
+        def send(self, body, content_type):
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(page)))
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(page)
+            self.wfile.write(body)
 
         def log_message(self, *_):
             pass

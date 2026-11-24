@@ -5,6 +5,7 @@ domicile
 domicile-compositor
 domicile-open-url
 domicile-xdg-open
+domicile-xdg-email
 domicile-history
 domicile-settings
 domicile-app-host

@@ -17,4 +17,8 @@
   // read from the entry, because an extension may clear its popup again as
   // soon as the call answers.
   readonly attribute DOMString popup;
+
+  // The id of the browser profile the extension is in, which the popup opens
+  // in, as a <webview>'s `profile`.
+  readonly attribute DOMString profile;
 };

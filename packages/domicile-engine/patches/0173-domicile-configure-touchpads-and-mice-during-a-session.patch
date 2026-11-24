@@ -17,7 +17,7 @@ Subject: [PATCH] domicile: configure touchpads and mice during a session
  10 files changed, 197 insertions(+), 52 deletions(-)
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index ede8d67..6946a14 100644
+index 9cbe676..9397196 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -52,6 +52,8 @@ component("evdev") {
@@ -395,10 +395,10 @@ index d5b140d..205942d 100644
    // DOMICILE: null for a mouse, and until the factory attaches this.
    raw_ptr<TypingGuard> typing_guard_ = nullptr;
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index 01827be..af4ddb5 100644
+index ba429a9..77b62be 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -300,6 +300,7 @@ source_set("gbm_unittests") {
+@@ -302,6 +302,7 @@ source_set("gbm_unittests") {
      # console is the one platform whose touchpad goes through libinput.
      "//ui/events/ozone/evdev/domicile/absolute_mouse_event_converter_evdev_unittest.cc",
      "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
@@ -478,10 +478,10 @@ index 2bd62e5..bcf1a98 100644
        std::vector<DomicilePointerTarget> targets) override {
      CHECK(screen_) << "domicile: pointer targets before InitScreen";
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index faabf13..c2291e4 100644
+index 7c8b972..c1ce244 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
-@@ -456,6 +456,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -443,6 +443,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // DOMICILE: which display each tablet or touchscreen covers, replacing the
    // last list. A device it does not name covers none. DRM only, like the
    // layout above.

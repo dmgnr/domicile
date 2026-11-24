@@ -119,11 +119,13 @@ Patch `0110`:
 
 ## Links for applications
 
-- A link for an application (`zoommtg:`, `mailto:`) asks the shell
+- A link for an application (`zoommtg:`) asks the shell
   (`domicile-external-app`), not Chrome's dialog. Chrome's dialog anchors to
   the outermost WebContents, which for a guest is the shell's own window.
 - Patch `0176` adds `ExternalProtocolHandler::SetDialogOverride`;
   `chrome/browser/domicile/domicile_external_apps.h` sets it.
+- Chrome opens `mailto:` without asking, through `xdg-email`, which is
+  `domicile open` (see [THE-DOMICILE-BINARY.md](THE-DOMICILE-BINARY.md#opening-links)).
 - Chrome still decides whether to ask: blocked schemes open nothing, a
   remembered site opens at once. "Always allow" is Chrome's, in the profile.
 - A page outside any guest opens nothing.
@@ -204,6 +206,26 @@ Patch `0110`:
 - A crashed page was already reported (`renderProcessGone`); the shell now
   draws it too.
 
+## "Sign in with" (FedCM)
+
+- A site's "Sign in with" request (`navigator.credentials.get({identity})`)
+  asks the element as `domicile-identity`, one step at a time: loading, the
+  accounts, signed out of the provider, verifying, and an error. The shell
+  draws each, and each replaces the last. Patch `0212` has
+  `CreateIdentityRequestDialogController` make `IdentityDialog`
+  (`components/domicile/browser/identity_dialog.h`) in place of Chrome's
+  account chooser.
+- The step open when the request ends (the page navigated, or the request
+  was aborted) is withdrawn (`domicile-identity-withdrawn`).
+- Only the shell's dismissal counts as the user's close, which embargoes the
+  site's quiet requests as Chrome's close button does. A step the shell
+  ignores is dismissed without the embargo.
+- The provider's own pages (its sign-in page, a continuation, an error's
+  details) open as browser windows in the page's profile. The provider closes
+  one with `IdentityProvider.close()`.
+- A page outside any `<webview>` has every step refused, as Chrome does with
+  no dialog to show.
+
 ## Chrome's dialogs, sheets and floating windows
 
 No Chrome dialog is drawn. Chrome draws a page's dialogs over the outermost
@@ -214,17 +236,19 @@ asks the shell instead (the sections above). `RefuseChromeDialogs`
 - Patch `0183`: any Chrome dialog left is closed as it is shown, as a cancel,
   and logged at ERROR (`domicile: refused a Chrome dialog for ...`). A gap
   fails closed and shows in the log.
-- Payment Request and FedCM ("Sign in with Google"'s account chooser) are off
-  (FedCM by `--disable-blink-features=FedCm`, added for every renderer;
-  Payment Request by `payment_request_enabled` in patch `0183`'s
-  `OverrideWebPreferences`, which Blink reads over that switch).
-  Each asks with a Chrome sheet. A site falls back to its own checkout form or
-  sign-in page, as it does without passwords and passkeys.
-- Patch `0183`: picture-in-picture video is off
-  (`picture_in_picture_enabled`), since Chrome floats it in a window of its
-  own. A video has no picture-in-picture button and
-  `requestPictureInPicture()` is refused. Document picture-in-picture stays:
-  its window is the page's own, and a `<webview>` opens it as a shell window.
+- Payment Request is off (`payment_request_enabled` in patch `0183`'s
+  `OverrideWebPreferences`), since it asks with a Chrome sheet. A site falls
+  back to its own checkout form.
+- Picture-in-picture video is the shell's (patch `0213`,
+  `domicile_picture_in_picture.cc`). Chrome floats it in a window of its own;
+  here each video is listed in `DomicileHost.pictureInPictureVideos`, the
+  shell draws it in an `<app picture-in-picture="id">`, and
+  `actOnPictureInPictureVideo` plays, pauses, skips, goes back to the page or
+  closes it. `seekPictureInPictureVideo` moves it. A `<webview>`'s context
+  menu offers `picture-in-picture` over a video Blink can float. The video's
+  frame sink is made a child of the shell's while the element shows it.
+  Document picture-in-picture stays: its window is the page's own, and a
+  `<webview>` opens it as a shell window.
 
 ## Host shortcuts when nested
 
@@ -246,6 +270,18 @@ its own clients. A window holding an inhibitor gets the shell's grabbed chords
 while it has the keyboard. See
 [KEYBINDINGS.md](KEYBINDINGS.md#key-decisions). This is the other direction
 from patch `0038`, which is the engine asking a host compositor.
+
+## Energy Saver
+
+Chrome's Energy Saver turns on with the OS's power-saver profile, or unplugged
+below 20% battery. Patch `0232`:
+
+- It slows only the `<webview>`s other than the one that last took focus, to
+  30 fps. `src/components/domicile/browser/unfocused_web_views.h`.
+- The shell, native windows, Electron windows and the focused page keep their
+  full rate. Chrome slows every frame sink, which here is the whole desk.
+- Focus on the shell or a native window leaves the last focused page at full
+  rate.
 
 ## Chrome's own pages and strings
 
@@ -283,7 +319,10 @@ The engine leaves out Chrome's own UI, which the shell replaces.
 - `guard-webview-page-failure.sh`: error pages.
 - `guard-webview-resend-form.sh`: sending a form again.
 - `guard-webview-page-picker.sh`: pickers.
-- `guard-webview-chrome-sheets.sh`: Payment Request, FedCM and
-  picture-in-picture are off.
+- `guard-webview-sign-in-with.sh`: "Sign in with" asks the shell.
+- `guard-webview-chrome-sheets.sh`: Payment Request is off.
+- `guard-webview-video-picture-in-picture.sh`: the context menu puts a video
+  in picture-in-picture, it is listed to the shell, and its controls reach the
+  page.
 - `guard-browser-brand.sh`: the Google Chrome brand.
 - No guard reads the browser's offers.

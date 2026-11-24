@@ -96,19 +96,17 @@ cargo build -p domicile-launch --bin domicile \
 # `@domicile-desktop/component-library/vite-shell` pins.
 #
 # This script is not a child of `domicile`, so it reads the socket path from
-# the supervisor's output instead of duplicating `control_socket::address`.
-# The path is written only after "domicile is up.", because the socket is
-# bound before the engine starts and an earlier load would be refused.
+# the end of the supervisor's "domicile is up." line instead of duplicating
+# `control_socket::address`. That line comes once the engine runs, so a load
+# is not refused.
 echo "starting $SHELL_NAME"
-SOCK=""
 DOMICILE_ENGINE="$ENGINE" \
 DOMICILE_COMPOSITOR="$ROOT/target/debug/domicile-compositor" \
 DOMICILE_PAGE="$PAGE_DIR/shell.js" \
   "$ROOT/target/debug/domicile" "$SHELL_NAME" | while IFS= read -r line; do
   printf '%s\n' "$line"
   case "$line" in
-    (DOMICILE_SOCK=*) SOCK="${line#DOMICILE_SOCK=}" ;;
-    ("domicile is up."*) printf '%s\n' "$SOCK" >"$WORK/sock" ;;
+    ("domicile is up."*) printf '%s\n' "${line##*DOMICILE_SOCK=}" >"$WORK/sock" ;;
   esac
 done
 # Exit with the desktop's status, not the read loop's.

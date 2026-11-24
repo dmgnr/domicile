@@ -40,8 +40,8 @@ esac
 
 for name in manganese simple; do
   desktop="$(nix build --no-link --print-out-paths ".#$name")"
-  # Captured for the same reason: `--nope` exits non-zero.
-  said="$("$desktop/bin/$name" --nope 2>&1 || true)"
+  # Captured for the same reason: `nope` exits non-zero.
+  said="$("$desktop/bin/$name" nope 2>&1 || true)"
   case "$said" in
     (*"too many arguments"*) ;;
     (*)

@@ -118,4 +118,17 @@ describe("Markdown", () => {
     expect(html).toContain("Appearance");
     expect(html).toMatch(/<p[^>]*>After\.<\/p>/);
   });
+  test("pictures side by side in one paragraph are a carousel", () => {
+    const html = render(
+      "![The menu](media/tour-launcher.png)\n![The bar](media/tour-bar.png)",
+    );
+    expect(html).toContain('aria-roledescription="carousel"');
+    expect(html).toContain('aria-label="2 of 2"');
+  });
+
+  test("a picture on its own is not a carousel", () => {
+    expect(render("![The menu](media/tour-launcher.png)")).not.toContain(
+      "carousel",
+    );
+  });
 });

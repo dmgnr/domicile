@@ -39,6 +39,7 @@
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "components/domicile/common/synced_frame.h"
+#include "components/domicile/engine/buffer_color.h"
 #include "components/domicile/engine/engine_event_queue.h"
 #include "components/domicile/engine/domicile_engine_spike.h"
 #include "components/domicile/engine/probe_wait.h"
@@ -56,12 +57,16 @@
 #include "components/viz/common/frame_timing_details_map.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
+#include "components/viz/common/quads/surface_draw_quad.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "components/viz/common/resources/transferable_resource.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/common/surfaces/local_surface_id.h"
+#include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
+#include "components/viz/common/surfaces/surface_id.h"
+#include "components/viz/common/surfaces/surface_range.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/embedder/scoped_ipc_support.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -73,9 +78,13 @@
 #include "mojo/public/cpp/system/invitation.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_conversions.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/gpu_memory_buffer_handle.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/gpu_fence_handle.h"
@@ -100,6 +109,10 @@ constexpr base::TimeDelta kProbePatience = base::Seconds(30);
 // ui/ozone/platform/drm/domicile/drm_clipboard.h).
 constexpr char kClipboardText[] = "text/plain;charset=utf-8";
 
+// SDR content's white on an HDR display, in cd/m²: the BT.2408 reference
+// white, and `ui::DomicileDisplayLayout::sdr_white_nits`'s default.
+constexpr float kReferenceWhiteNits = 203.f;
+
 // Initializes the AtExitManager and mojo core once per process.
 //
 // The compositor is not a Chromium process, so the library provides both. They
@@ -114,6 +127,21 @@ void EnsureMojoInitialized() {
   (void)initialized;
 }
 
+// One of a surface's subsurfaces, as the compositor last set it
+// (domicile_surface_set_children): logical pixels from the top left of the
+// surface's crop.
+struct Subsurface {
+  DomicileSurfaceId surface = 0;
+  gfx::PointF position;
+  gfx::SizeF size;
+  bool above = false;
+};
+
+class Surface;
+
+// Finds a surface by its id, or null once it is gone.
+using SurfaceFinder = base::RepeatingCallback<Surface*(DomicileSurfaceId)>;
+
 // One brokered frame sink.
 //
 // Runs entirely on the engine's mojo thread and reports to the compositor only
@@ -122,8 +150,9 @@ void EnsureMojoInitialized() {
 class Surface : public mojom::SurfaceObserver,
                 public viz::mojom::CompositorFrameSinkClient {
  public:
-  Surface(DomicileSurfaceId id, EngineEventQueue* queue)
-      : id_(id), queue_(queue) {}
+  // `find` finds the subsurfaces this surface's frames embed.
+  Surface(DomicileSurfaceId id, EngineEventQueue* queue, SurfaceFinder find)
+      : id_(id), queue_(queue), find_(std::move(find)) {}
 
   Surface(const Surface&) = delete;
   Surface& operator=(const Surface&) = delete;
@@ -156,11 +185,18 @@ class Surface : public mojom::SurfaceObserver,
 
   const viz::FrameSinkId& frame_sink_id() const { return frame_sink_id_; }
 
+  // The color buffers imported from now on are drawn in. See
+  // domicile_surface_set_color.
+  const BufferColor& color() const { return color_; }
+  void SetColor(BufferColor color) { color_ = std::move(color); }
+
   // Wraps the browser's SharedImage as a resource for later Submit calls.
-  // `has_alpha` comes from FourccHasAlpha.
+  // `has_alpha` comes from FourccHasAlpha, and `hdr_metadata` is the color's
+  // the buffer was imported in.
   void Adopt(uint64_t buffer_id,
              gpu::ExportedSharedImage exported,
-             bool has_alpha) {
+             bool has_alpha,
+             const gfx::HDRMetadata& hdr_metadata) {
     scoped_refptr<gpu::ClientSharedImage> shared_image =
         gpu::ClientSharedImage::ImportUnowned(std::move(exported));
     if (!shared_image) {
@@ -170,8 +206,9 @@ class Surface : public mojom::SurfaceObserver,
         shared_image, viz::TransferableResource::ResourceSource::kUI,
         shared_image->creation_sync_token());
     resource.id = next_resource_id_;
+    resource.hdr_metadata = hdr_metadata;
     next_resource_id_ = viz::ResourceId(next_resource_id_.GetUnsafeValue() + 1);
-    resource_to_buffer_[resource.id] = buffer_id;
+    resource_to_buffer_[resource.id] = {buffer_id, shared_image};
     buffers_[buffer_id] = {std::move(shared_image), std::move(resource),
                            has_alpha};
   }
@@ -180,22 +217,64 @@ class Surface : public mojom::SurfaceObserver,
   // it: the browser holds the only reference to its SharedImage, and viz draws
   // a fallback image over any it cannot find.
   void Forget(uint64_t buffer_id) {
-    const bool unheld = holds_.Destroyed(buffer_id);
+    const std::optional<gpu::SyncToken> read_done =
+        holds_.Destroyed(buffer_id);
     auto iter = buffers_.find(buffer_id);
     if (iter != buffers_.end()) {
-      if (unheld) {
+      if (read_done.has_value()) {
         resource_to_buffer_.erase(iter->second.resource.id);
       }
       buffers_.erase(iter);
     }
-    if (unheld) {
-      broker_->DestroyBuffer(frame_sink_id_, buffer_id);
+    if (read_done.has_value()) {
+      broker_->DestroyBuffer(frame_sink_id_, buffer_id, *read_done);
     }
   }
 
   // Sends `submit` to viz, unless an earlier submit waits for its fence.
   void Submit(const SurfaceSubmit& submit) {
     Send(submits_.Push(AtFrame(submit)));
+  }
+
+  // Its frames from the next one on embed `children`, bottom to top.
+  void SetChildren(std::vector<Subsurface> children) {
+    children_ = std::move(children);
+    children_changed_ = true;
+  }
+
+  // Sends the last frame again, to show the subsurfaces set since. A newer
+  // frame on its way shows them, so it waits for that one instead.
+  void Redraw() {
+    if (!last_sent_.has_value() || !submits_.empty() || backlog_.holding() ||
+        !buffers_.contains(last_sent_->buffer)) {
+      return;
+    }
+    SubmitNow(*last_sent_, /*redraw=*/true);
+  }
+
+  // The surfaces a frame of `parent`'s embeds this one by, drawn at `size`
+  // device pixels and `scale`: the newest frame up to the box it is embedded
+  // at. Embeds it there anew, as a page embeds an <app>, when any of them
+  // changed; viz shows its last frame until one arrives at the new box.
+  viz::SurfaceRange EmbeddedIn(const viz::FrameSinkId& parent,
+                               const gfx::Size& size,
+                               float scale) {
+    if (!embedding_.has_value() || embedding_->parent != parent ||
+        embedding_->size != size || embedding_->scale != scale) {
+      embedder_.GenerateId();
+      embedding_ = Embedding{.parent = parent, .size = size, .scale = scale};
+      broker_->EmbedFrameSink(frame_sink_id_, parent,
+                              embedder_.GetCurrentLocalSurfaceId(), size,
+                              scale);
+    }
+    const viz::SurfaceId newest(frame_sink_id_,
+                                embedder_.GetCurrentLocalSurfaceId());
+    if (boxes_.empty()) {
+      return viz::SurfaceRange(std::nullopt, newest);
+    }
+    return viz::SurfaceRange(
+        viz::SurfaceId(frame_sink_id_, boxes_.front().local_surface_id),
+        newest);
   }
 
   // Holds `submit` until the browser puts its buffer's acquire fence in
@@ -272,7 +351,10 @@ class Surface : public mojom::SurfaceObserver,
   // client's buffer is drawn for the box it acked, so an old buffer stays at
   // its old size and id: viz keeps the page's frame waiting for the new one
   // rather than stretching the old one over it.
-  void SubmitNow(const SurfaceSubmit& submit) {
+  //
+  // A `redraw` sends the last frame again (Redraw), which the compositor did
+  // not submit and so is answered to no one.
+  void SubmitNow(const SurfaceSubmit& submit, bool redraw = false) {
     auto iter = buffers_.find(submit.buffer);
     if (iter == buffers_.end() || boxes_.empty() || submit.fence_refused) {
       if (submit.fence_refused) {
@@ -295,9 +377,16 @@ class Surface : public mojom::SurfaceObserver,
     // Blend buffers with alpha, such as a menu's transparent rounded corners.
     const bool opaque = !iter->second.has_alpha;
 
+    // A frame whose subsurfaces moved or changed redraws all of itself.
+    const bool whole = damage.IsEmpty() || children_changed_ || redraw;
+    children_changed_ = false;
     auto pass = viz::CompositorRenderPass::Create();
-    pass->SetNew(viz::CompositorRenderPassId{1}, rect,
-                 damage.IsEmpty() ? rect : damage, gfx::Transform());
+    pass->SetNew(viz::CompositorRenderPassId{1}, rect, whole ? rect : damage,
+                 gfx::Transform());
+    std::vector<viz::SurfaceRange> embedded;
+    // Viz draws a pass's quads front to back, so the subsurfaces over the
+    // window come first and those under it last.
+    AppendChildren(*pass, shown.scale * shown.zoom, /*above=*/true, embedded);
 
     // Drawn in the buffer's orientation, then turned onto the box.
     const domicile::BufferQuad placed =
@@ -323,6 +412,7 @@ class Surface : public mojom::SurfaceObserver,
                  /*nearest_neighbor=*/false, /*secure_output_only=*/false,
                  gfx::ProtectedVideoType::kClear,
                  /*is_tex_coords_normalized=*/true);
+    AppendChildren(*pass, shown.scale * shown.zoom, /*above=*/false, embedded);
 
     viz::CompositorFrame frame;
     frame.metadata.begin_frame_ack =
@@ -334,7 +424,13 @@ class Surface : public mojom::SurfaceObserver,
     // a window growing under the pointer would flash white at its new edges.
     frame.metadata.root_background_color = SkColors::kTransparent;
     frame.metadata.frame_token = ++next_frame_token_;
-    frames_.Sent(frame.metadata.frame_token);
+    // Kept alive and drawn: viz keeps only the surfaces a frame names.
+    frame.metadata.referenced_surfaces = std::move(embedded);
+    if (redraw) {
+      frames_.Redrawn();
+    } else {
+      frames_.Sent(frame.metadata.frame_token);
+    }
     viz::TransferableResource resource = iter->second.resource;
     // Viz waits on the token, which comes after the creation token on the
     // same stream, so it orders viz's read after the fence too.
@@ -348,6 +444,44 @@ class Surface : public mojom::SurfaceObserver,
         AtSyncedFrame(shown.local_surface_id, submit.frame), std::move(frame),
         std::nullopt, 0);
     holds_.Sent(submit.buffer);
+    last_sent_ = submit;
+  }
+
+  // Appends a quad embedding each subsurface `above` the window or under it,
+  // topmost first, at `scale` device pixels per logical one: the box shown's
+  // scale times its zoom. Each one's surface range
+  // goes in `embedded`.
+  void AppendChildren(viz::CompositorRenderPass& pass,
+                      float scale,
+                      bool above,
+                      std::vector<viz::SurfaceRange>& embedded) {
+    for (auto child = children_.rbegin(); child != children_.rend(); ++child) {
+      Surface* surface = find_.Run(child->surface);
+      if (child->above != above || !surface) {
+        continue;
+      }
+      const gfx::Size size =
+          gfx::ToRoundedSize(gfx::ScaleSize(child->size, scale));
+      if (size.IsEmpty()) {
+        continue;
+      }
+      const gfx::Point at =
+          gfx::ToRoundedPoint(gfx::ScalePoint(child->position, scale));
+      const viz::SurfaceRange range =
+          surface->EmbeddedIn(frame_sink_id_, size, scale);
+      viz::SharedQuadState* state = pass.CreateAndAppendSharedQuadState();
+      state->SetAll(gfx::Transform::MakeTranslation(at.x(), at.y()),
+                    gfx::Rect(size), gfx::Rect(size), gfx::MaskFilterInfo(),
+                    /*clip=*/std::nullopt, /*contents_opaque=*/false,
+                    /*opacity_f=*/1.f, SkBlendMode::kSrcOver,
+                    /*sorting_context=*/0, /*layer_id=*/0u,
+                    /*fast_rounded_corner=*/false);
+      viz::SurfaceDrawQuad* quad =
+          pass.CreateAndAppendDrawQuad<viz::SurfaceDrawQuad>();
+      quad->SetNew(state, gfx::Rect(size), gfx::Rect(size), range,
+                   SkColors::kTransparent, /*stretch_content=*/false);
+      embedded.push_back(range);
+    }
   }
 
   void OnCreated(base::OnceCallback<void(bool)> done,
@@ -361,16 +495,19 @@ class Surface : public mojom::SurfaceObserver,
   // The page chose this id and size. Forwarded as xdg_toplevel.configure.
   void OnSurfaceEmbedded(const viz::LocalSurfaceId& local_surface_id,
                          const gfx::Size& size,
-                         double scale) override {
+                         double scale,
+                         double zoom) override {
     boxes_.push_back({.number = ++last_box_,
                       .local_surface_id = local_surface_id,
                       .size = size,
-                      .scale = scale > 0 ? static_cast<float>(scale) : 1.f});
+                      .scale = scale > 0 ? static_cast<float>(scale) : 1.f,
+                      .zoom = zoom > 0 ? static_cast<float>(zoom) : 1.f});
     queue_->Push({.type = EngineEvent::Type::kConfigure,
                   .surface = id_,
                   .width = static_cast<uint32_t>(size.width()),
                   .height = static_cast<uint32_t>(size.height()),
                   .scale = scale,
+                  .zoom = zoom,
                   .box = last_box_});
   }
 
@@ -389,7 +526,7 @@ class Surface : public mojom::SurfaceObserver,
   void OnBeginFrame(const viz::BeginFrameArgs& args,
                     const viz::FrameTimingDetailsMap& timing_details,
                     std::vector<viz::ReturnedResource> resources) override {
-    Release(resources);
+    Release(std::move(resources));
     for (const auto& [frame_token, details] : timing_details) {
       const std::optional<uint64_t> number = frames_.Presented(frame_token);
       if (number.has_value()) {
@@ -406,10 +543,13 @@ class Surface : public mojom::SurfaceObserver,
   // the client's wl_surface.frame then.
   void DidReceiveCompositorFrameAck(
       std::vector<viz::ReturnedResource> resources) override {
-    Release(resources);
+    Release(std::move(resources));
     const std::optional<uint64_t> number = frames_.Acked();
     if (!number.has_value()) {
       LOG(ERROR) << "domicile: viz acked a frame this window never sent";
+      return;
+    }
+    if (*number == SurfaceFrames::kRedrawn) {
       return;
     }
     queue_->Push({.type = EngineEvent::Type::kFrameDone,
@@ -418,7 +558,7 @@ class Surface : public mojom::SurfaceObserver,
   }
   void ReclaimResources(
       std::vector<viz::ReturnedResource> resources) override {
-    Release(resources);
+    Release(std::move(resources));
   }
   void OnBeginFramePausedChanged(bool paused) override {}
   void OnCompositorFrameTransitionDirectiveProcessed(
@@ -444,14 +584,16 @@ class Surface : public mojom::SurfaceObserver,
   // Forwards returned resources as wl_buffer.release, so the client may draw
   // into the buffer again, and drops the imports of destroyed buffers viz no
   // longer holds.
-  void Release(const std::vector<viz::ReturnedResource>& resources) {
-    for (const viz::ReturnedResource& resource : resources) {
+  void Release(std::vector<viz::ReturnedResource> resources) {
+    for (viz::ReturnedResource& resource : resources) {
       auto iter = resource_to_buffer_.find(resource.id);
       if (iter == resource_to_buffer_.end()) {
         continue;
       }
-      const uint64_t buffer = iter->second;
-      switch (holds_.Returned(buffer, resource.count)) {
+      const uint64_t buffer = iter->second.buffer;
+      const gpu::SyncToken read_done = iter->second.shared_image->EndExport(
+          std::move(resource.shared_image_export_result));
+      switch (holds_.Returned(buffer, resource.count, read_done)) {
         case SurfaceHolds::Return::kRelease:
           queue_->Push({.type = EngineEvent::Type::kReleased,
                         .surface = id_,
@@ -459,7 +601,7 @@ class Surface : public mojom::SurfaceObserver,
           break;
         case SurfaceHolds::Return::kDestroy:
           resource_to_buffer_.erase(iter);
-          broker_->DestroyBuffer(frame_sink_id_, buffer);
+          broker_->DestroyBuffer(frame_sink_id_, buffer, read_done);
           break;
         case SurfaceHolds::Return::kKeep:
           break;
@@ -475,6 +617,7 @@ class Surface : public mojom::SurfaceObserver,
 
   const DomicileSurfaceId id_;
   const raw_ptr<EngineEventQueue> queue_;
+  const SurfaceFinder find_;
   // The engine's broker, which outlives its surfaces.
   raw_ptr<mojom::FrameSinkBroker> broker_ = nullptr;
 
@@ -488,22 +631,51 @@ class Surface : public mojom::SurfaceObserver,
     viz::LocalSurfaceId local_surface_id;
     gfx::Size size;
     float scale = 1.f;
+    // The embedding element's CSS `zoom`. The client draws `zoom` times
+    // denser, so its logical units are `scale` times `zoom` device pixels.
+    float zoom = 1.f;
   };
 
   viz::FrameSinkId frame_sink_id_;
+  BufferColor color_;
   // The box shown last, then every newer one, oldest first.
   base::circular_deque<Box> boxes_;
   uint64_t last_box_ = 0;
   // The synced frame submits go up at.
   uint32_t frame_ = 0;
   base::flat_map<uint64_t, Adopted> buffers_;
-  base::flat_map<viz::ResourceId, uint64_t> resource_to_buffer_;
+  // A resource's buffer, and the SharedImage that unpacks viz's returns of
+  // it. The SharedImage outlives the buffer's Forget until viz returns it.
+  struct Resource {
+    uint64_t buffer = 0;
+    scoped_refptr<gpu::ClientSharedImage> shared_image;
+  };
+  base::flat_map<viz::ResourceId, Resource> resource_to_buffer_;
   viz::ResourceId next_resource_id_{1};
   viz::FrameTokenGenerator next_frame_token_;
   SurfaceFrames frames_;
   SurfaceHolds holds_;
   SurfaceSubmits submits_;
   SurfaceBacklog backlog_;
+
+  // The subsurfaces its frames embed, bottom to top.
+  std::vector<Subsurface> children_;
+  // Whether they changed since the last frame, which then redraws whole.
+  bool children_changed_ = false;
+  // The last frame sent, for Redraw.
+  std::optional<SurfaceSubmit> last_sent_;
+
+  // Where it is embedded as a subsurface: its parent's sink, and its size in
+  // device pixels and scale there.
+  struct Embedding {
+    viz::FrameSinkId parent;
+    gfx::Size size;
+    float scale = 1.f;
+  };
+  std::optional<Embedding> embedding_;
+  // Allocates its ids as a subsurface, since its parent, not a page, embeds
+  // it.
+  viz::ParentLocalSurfaceIdAllocator embedder_;
 };
 
 // The planes DomicileCapturedFrame carries.
@@ -547,13 +719,13 @@ class Capture : public mojom::DisplayCaptureObserver {
   // started, so a refusal's closed pipes are not an ending.
   void Watch() {
     if (!control_.is_connected()) {
-      End();
+      End(0, std::string());
       return;
     }
     // Unretained: both pipes are members.
-    control_.set_disconnect_handler(
+    control_.set_disconnect_with_reason_handler(
         base::BindOnce(&Capture::End, base::Unretained(this)));
-    observer_.set_disconnect_handler(
+    observer_.set_disconnect_with_reason_handler(
         base::BindOnce(&Capture::End, base::Unretained(this)));
   }
 
@@ -617,10 +789,13 @@ class Capture : public mojom::DisplayCaptureObserver {
     queue_->Push(event);
   }
 
-  // The browser closed the capture.
-  void End() {
-    queue_->Push(
-        {.type = EngineEvent::Type::kCaptureEnded, .capture = id_});
+  // The browser closed the capture, saying `why` when it failed. The
+  // browser closes both pipes with the same reason, so the first to close
+  // tells the whole story.
+  void End(uint32_t, const std::string& why) {
+    queue_->Push({.type = EngineEvent::Type::kCaptureEnded,
+                  .capture = id_,
+                  .why = why});
     // Runs last: the owner destroys this.
     std::move(ended_).Run();
   }
@@ -667,6 +842,18 @@ class Displays : public mojom::DisplayListObserver {
     }
   }
 
+  // A switch rather than a cast, so a new state is a compile error here.
+  static int32_t HdrOf(mojom::Hdr hdr) {
+    switch (hdr) {
+      case mojom::Hdr::kUnsupported:
+        return DOMICILE_HDR_UNSUPPORTED;
+      case mojom::Hdr::kOff:
+        return DOMICILE_HDR_OFF;
+      case mojom::Hdr::kOn:
+        return DOMICILE_HDR_ON;
+    }
+  }
+
   // mojom::DisplayListObserver implementation.
   void OnDisplaysChanged(std::vector<mojom::DisplayPtr> displays) override {
     EngineEvent event{.type = EngineEvent::Type::kDisplays};
@@ -684,7 +871,12 @@ class Displays : public mojom::DisplayListObserver {
                         .refresh_mhz = one->refresh_mhz,
                         .connector = one->connector,
                         .gamma_size = one->gamma_size,
-                        .adaptive_sync = AdaptiveSyncOf(one->adaptive_sync)});
+                        .adaptive_sync = AdaptiveSyncOf(one->adaptive_sync),
+                        .hdr = HdrOf(one->hdr),
+                        .max_luminance = one->max_luminance,
+                        .max_average_luminance = one->max_average_luminance,
+                        .min_luminance = one->min_luminance,
+                        .sdr_white_nits = one->sdr_white_nits});
       for (const mojom::DisplayModePtr& mode : one->modes) {
         event.displays.back().modes.push_back(
             {.width = mode->size.width(),
@@ -794,10 +986,22 @@ class BrowserWindows : public mojom::BrowserWindowListObserver {
     EngineEvent event{.type = EngineEvent::Type::kBrowserWindows};
     event.browser_windows.reserve(windows.size());
     for (mojom::ListedBrowserWindowPtr& window : windows) {
+      std::vector<EngineBrowserView> views;
+      views.reserve(window->views.size());
+      for (mojom::ListedBrowserViewPtr& view : window->views) {
+        views.push_back(EngineBrowserView{.id = std::move(view->id),
+                                          .x = view->x,
+                                          .y = view->y,
+                                          .width = view->width,
+                                          .height = view->height});
+      }
       event.browser_windows.push_back(
           EngineBrowserWindow{.id = std::move(window->id),
                               .title = std::move(window->title),
-                              .app_id = std::move(window->app_id)});
+                              .app_id = std::move(window->app_id),
+                              .url = std::move(window->url),
+                              .off_the_record = window->off_the_record,
+                              .views = std::move(views)});
     }
     queue_->Push(event);
   }
@@ -805,6 +1009,81 @@ class BrowserWindows : public mojom::BrowserWindowListObserver {
  private:
   const raw_ptr<EngineEventQueue> queue_;
   mojo::Receiver<mojom::BrowserWindowListObserver> receiver_{this};
+};
+
+// The DomicileInputDeviceKind for `kind`.
+uint8_t InputDeviceKindOf(mojom::InputDeviceKind kind) {
+  switch (kind) {
+    case mojom::InputDeviceKind::kKeyboard:
+      return DOMICILE_INPUT_DEVICE_KEYBOARD;
+    case mojom::InputDeviceKind::kMouse:
+      return DOMICILE_INPUT_DEVICE_MOUSE;
+    case mojom::InputDeviceKind::kTouchpad:
+      return DOMICILE_INPUT_DEVICE_TOUCHPAD;
+    case mojom::InputDeviceKind::kTouchscreen:
+      return DOMICILE_INPUT_DEVICE_TOUCHSCREEN;
+    case mojom::InputDeviceKind::kPointingStick:
+      return DOMICILE_INPUT_DEVICE_POINTING_STICK;
+    case mojom::InputDeviceKind::kGraphicsTablet:
+      return DOMICILE_INPUT_DEVICE_GRAPHICS_TABLET;
+    case mojom::InputDeviceKind::kOther:
+      return DOMICILE_INPUT_DEVICE_OTHER;
+  }
+}
+
+// The DomicileInputDeviceConnection for `connection`.
+uint8_t InputDeviceConnectionOf(mojom::InputDeviceConnection connection) {
+  switch (connection) {
+    case mojom::InputDeviceConnection::kUnknown:
+      return DOMICILE_INPUT_CONNECTION_UNKNOWN;
+    case mojom::InputDeviceConnection::kInternal:
+      return DOMICILE_INPUT_CONNECTION_INTERNAL;
+    case mojom::InputDeviceConnection::kUsb:
+      return DOMICILE_INPUT_CONNECTION_USB;
+    case mojom::InputDeviceConnection::kBluetooth:
+      return DOMICILE_INPUT_CONNECTION_BLUETOOTH;
+  }
+}
+
+// Forwards the input devices the browser reads to the compositor, for
+// `domicile list-inputs`.
+class InputDevices : public mojom::InputDeviceListObserver {
+ public:
+  explicit InputDevices(EngineEventQueue* queue) : queue_(queue) {}
+
+  InputDevices(const InputDevices&) = delete;
+  InputDevices& operator=(const InputDevices&) = delete;
+
+  ~InputDevices() override = default;
+
+  mojo::PendingRemote<mojom::InputDeviceListObserver> BindRemote() {
+    return receiver_.BindNewPipeAndPassRemote();
+  }
+
+  // Reset on the binding thread, like Displays::Unbind.
+  void Unbind() { receiver_.reset(); }
+
+  // mojom::InputDeviceListObserver implementation.
+  void OnInputDevicesChanged(
+      std::vector<mojom::ListedInputDevicePtr> devices) override {
+    EngineEvent event{.type = EngineEvent::Type::kInputDevices};
+    event.input_devices.reserve(devices.size());
+    for (mojom::ListedInputDevicePtr& device : devices) {
+      event.input_devices.push_back(EngineInputDevice{
+          .name = std::move(device->name),
+          .sys_path = std::move(device->sys_path),
+          .id = device->id,
+          .vendor_id = device->vendor_id,
+          .product_id = device->product_id,
+          .kind = InputDeviceKindOf(device->kind),
+          .connection = InputDeviceConnectionOf(device->connection)});
+    }
+    queue_->Push(event);
+  }
+
+ private:
+  const raw_ptr<EngineEventQueue> queue_;
+  mojo::Receiver<mojom::InputDeviceListObserver> receiver_{this};
 };
 
 // Converts a client's dmabuf for mojo. Duplicates the fds; the caller keeps
@@ -962,7 +1241,11 @@ struct DomicileEngine {
     for (const domicile::EngineEvent& event : queue_.Drain()) {
       switch (event.type) {
         case domicile::EngineEvent::Type::kConfigure:
-          if (callbacks_.configure_box) {
+          if (callbacks_.configure_zoomed) {
+            callbacks_.configure_zoomed(callbacks_.user_data, event.surface,
+                                        event.width, event.height, event.scale,
+                                        event.zoom, event.box);
+          } else if (callbacks_.configure_box) {
             callbacks_.configure_box(callbacks_.user_data, event.surface,
                                      event.width, event.height, event.scale,
                                      event.box);
@@ -985,7 +1268,8 @@ struct DomicileEngine {
           // The strings belong to `event`, which lives in the drained vector
           // until the loop ends, so they outlive the callback as the header
           // promises.
-          if (callbacks_.adaptive_displays || callbacks_.moded_displays) {
+          if (callbacks_.hdr_displays || callbacks_.adaptive_displays ||
+              callbacks_.moded_displays) {
             // Every display's modes first, so the records can point into a
             // vector that no longer grows.
             std::vector<DomicileDisplayMode> modes;
@@ -1009,14 +1293,29 @@ struct DomicileEngine {
                   .mode_count = static_cast<uint32_t>(display.modes.size())});
               first += display.modes.size();
             }
-            if (callbacks_.adaptive_displays) {
-              std::vector<DomicileAdaptiveDisplay> adaptive;
-              adaptive.reserve(records.size());
-              for (size_t index = 0; index < records.size(); ++index) {
-                adaptive.push_back(DomicileAdaptiveDisplay{
-                    .moded = records[index],
-                    .adaptive_sync = event.displays[index].adaptive_sync});
+            std::vector<DomicileAdaptiveDisplay> adaptive;
+            adaptive.reserve(records.size());
+            for (size_t index = 0; index < records.size(); ++index) {
+              adaptive.push_back(DomicileAdaptiveDisplay{
+                  .moded = records[index],
+                  .adaptive_sync = event.displays[index].adaptive_sync});
+            }
+            if (callbacks_.hdr_displays) {
+              std::vector<DomicileHdrDisplay> hdr;
+              hdr.reserve(adaptive.size());
+              for (size_t index = 0; index < adaptive.size(); ++index) {
+                const domicile::EngineDisplay& display = event.displays[index];
+                hdr.push_back(DomicileHdrDisplay{
+                    .adaptive = adaptive[index],
+                    .hdr = display.hdr,
+                    .max_luminance = display.max_luminance,
+                    .max_average_luminance = display.max_average_luminance,
+                    .min_luminance = display.min_luminance,
+                    .sdr_white_nits = display.sdr_white_nits});
               }
+              callbacks_.hdr_displays(callbacks_.user_data, hdr.data(),
+                                      static_cast<uint32_t>(hdr.size()));
+            } else if (callbacks_.adaptive_displays) {
               callbacks_.adaptive_displays(
                   callbacks_.user_data, adaptive.data(),
                   static_cast<uint32_t>(adaptive.size()));
@@ -1089,7 +1388,10 @@ struct DomicileEngine {
           }
           break;
         case domicile::EngineEvent::Type::kCaptureEnded:
-          if (callbacks_.capture_ended) {
+          if (!event.why.empty() && callbacks_.capture_failed) {
+            callbacks_.capture_failed(callbacks_.user_data, event.capture,
+                                      event.why.c_str());
+          } else if (callbacks_.capture_ended) {
             callbacks_.capture_ended(callbacks_.user_data, event.capture);
           }
           break;
@@ -1123,9 +1425,52 @@ struct DomicileEngine {
           }
           break;
         case domicile::EngineEvent::Type::kBrowserWindows:
-          if (callbacks_.browser_windows) {
-            // `event` owns the strings until the loop ends, as for display
-            // names.
+          // `event` owns the strings until the loop ends, as for display
+          // names.
+          if (callbacks_.viewed_browser_windows) {
+            std::vector<DomicileListedBrowserWindow> records;
+            std::vector<DomicileBrowserWindowView> views;
+            records.reserve(event.browser_windows.size());
+            for (const domicile::EngineBrowserWindow& window :
+                 event.browser_windows) {
+              for (const domicile::EngineBrowserView& view : window.views) {
+                views.push_back(DomicileBrowserWindowView{
+                    .id = view.id.c_str(),
+                    .window = static_cast<uint32_t>(records.size()),
+                    .x = view.x,
+                    .y = view.y,
+                    .width = view.width,
+                    .height = view.height});
+              }
+              records.push_back(DomicileListedBrowserWindow{
+                  .id = window.id.c_str(),
+                  .title = window.title.c_str(),
+                  .app_id = window.app_id.c_str(),
+                  .url = window.url.c_str(),
+                  .off_the_record =
+                      static_cast<uint8_t>(window.off_the_record ? 1 : 0)});
+            }
+            callbacks_.viewed_browser_windows(
+                callbacks_.user_data, records.data(),
+                static_cast<uint32_t>(records.size()), views.data(),
+                static_cast<uint32_t>(views.size()));
+          } else if (callbacks_.listed_browser_windows) {
+            std::vector<DomicileListedBrowserWindow> records;
+            records.reserve(event.browser_windows.size());
+            for (const domicile::EngineBrowserWindow& window :
+                 event.browser_windows) {
+              records.push_back(DomicileListedBrowserWindow{
+                  .id = window.id.c_str(),
+                  .title = window.title.c_str(),
+                  .app_id = window.app_id.c_str(),
+                  .url = window.url.c_str(),
+                  .off_the_record =
+                      static_cast<uint8_t>(window.off_the_record ? 1 : 0)});
+            }
+            callbacks_.listed_browser_windows(
+                callbacks_.user_data, records.data(),
+                static_cast<uint32_t>(records.size()));
+          } else if (callbacks_.browser_windows) {
             std::vector<DomicileBrowserWindow> records;
             records.reserve(event.browser_windows.size());
             for (const domicile::EngineBrowserWindow& window :
@@ -1139,6 +1484,27 @@ struct DomicileEngine {
                                        static_cast<uint32_t>(records.size()));
           }
           break;
+        case domicile::EngineEvent::Type::kInputDevices:
+          if (callbacks_.input_devices) {
+            // `event` owns the strings until the loop ends, as for display
+            // names.
+            std::vector<DomicileInputDevice> records;
+            records.reserve(event.input_devices.size());
+            for (const domicile::EngineInputDevice& device :
+                 event.input_devices) {
+              records.push_back(
+                  DomicileInputDevice{.name = device.name.c_str(),
+                                      .sys_path = device.sys_path.c_str(),
+                                      .id = device.id,
+                                      .vendor_id = device.vendor_id,
+                                      .product_id = device.product_id,
+                                      .kind = device.kind,
+                                      .connection = device.connection});
+            }
+            callbacks_.input_devices(callbacks_.user_data, records.data(),
+                                     static_cast<uint32_t>(records.size()));
+          }
+          break;
       }
     }
   }
@@ -1149,6 +1515,14 @@ struct DomicileEngine {
                                       base::Unretained(this), app_id,
                                       &created));
     return created;
+  }
+
+  // Posted, so it lands before any import asked for after it.
+  void SetSurfaceColor(DomicileSurfaceId surface, domicile::BufferColor color) {
+    thread_.task_runner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&DomicileEngine::SetSurfaceColorOnThread,
+                       base::Unretained(this), surface, std::move(color)));
   }
 
   void DestroySurface(DomicileSurfaceId surface) {
@@ -1201,6 +1575,22 @@ struct DomicileEngine {
         base::BindOnce(&DomicileEngine::SubmitFencedBufferOnThread,
                        base::Unretained(this), surface, submit,
                        std::move(fence)));
+  }
+
+  // Posted like the submits, so it applies between the ones around it.
+  void SetChildren(DomicileSurfaceId surface,
+                   std::vector<domicile::Subsurface> children) {
+    thread_.task_runner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&DomicileEngine::SetChildrenOnThread,
+                       base::Unretained(this), surface, std::move(children)));
+  }
+
+  // Posted like the submits, so it follows the ones before it.
+  void Redraw(DomicileSurfaceId surface) {
+    thread_.task_runner()->PostTask(
+        FROM_HERE, base::BindOnce(&DomicileEngine::RedrawOnThread,
+                                  base::Unretained(this), surface));
   }
 
   // Posted like the submits, so it applies between the ones around it.
@@ -1283,7 +1673,31 @@ struct DomicileEngine {
                        base::Unretained(this), std::move(wanted)));
   }
 
-  // One moded layout record as mojom, with adaptive sync off.
+  // As ConfigureAdaptiveDisplays, with whether each wants HDR10.
+  void ConfigureHdrDisplays(const DomicileHdrLayout* layout, uint32_t count) {
+    std::vector<domicile::mojom::DisplayLayoutPtr> wanted;
+    wanted.reserve(count);
+    // SAFETY: as in ConfigureDisplays; `domicile_displays_configure_hdr` has
+    // refused a null pointer with a nonzero count.
+    const auto records =
+        UNSAFE_BUFFERS(base::span(layout, static_cast<size_t>(count)));
+    for (const DomicileHdrLayout& display : records) {
+      domicile::mojom::DisplayLayoutPtr one =
+          ModedLayoutOf(display.adaptive.moded);
+      one->adaptive_sync = display.adaptive.adaptive_sync != 0;
+      one->hdr = display.hdr != 0;
+      if (display.sdr_white_nits > 0) {
+        one->sdr_white_nits = display.sdr_white_nits;
+      }
+      wanted.push_back(std::move(one));
+    }
+    thread_.task_runner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&DomicileEngine::ConfigureDisplaysOnThread,
+                       base::Unretained(this), std::move(wanted)));
+  }
+
+  // One moded layout record as mojom, with adaptive sync and HDR off.
   static domicile::mojom::DisplayLayoutPtr ModedLayoutOf(
       const DomicileModedLayout& display) {
     domicile::mojom::DisplayLayoutPtr one = LayoutOf(display.layout);
@@ -1302,7 +1716,8 @@ struct DomicileEngine {
         domicile::TransformOf(display.transform), display.scale,
         gfx::Rect(display.desk_x, display.desk_y, display.desk_width,
                   display.desk_height),
-        std::nullopt, 0, /*adaptive_sync=*/false);
+        std::nullopt, 0, /*adaptive_sync=*/false, /*hdr=*/false,
+        domicile::kReferenceWhiteNits);
   }
 
   // Copies the records before posting: the ABI borrows them only for the call,
@@ -1379,6 +1794,13 @@ struct DomicileEngine {
         FROM_HERE,
         base::BindOnce(&DomicileEngine::SetGammaOnThread,
                        base::Unretained(this), display_id, std::move(ramp)));
+  }
+
+  void SetColorMatrix(int64_t display_id, std::vector<float> matrix) {
+    thread_.task_runner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&DomicileEngine::SetColorMatrixOnThread,
+                       base::Unretained(this), display_id, std::move(matrix)));
   }
 
   // Drops a kind this build does not know, from a newer compositor.
@@ -1621,6 +2043,12 @@ struct DomicileEngine {
     }
   }
 
+  void SetColorMatrixOnThread(int64_t display_id, std::vector<float> matrix) {
+    if (broker_) {
+      broker_->SetColorMatrix(display_id, matrix);
+    }
+  }
+
   void InjectInputOnThread(domicile::mojom::DeskInputPtr input) {
     if (broker_) {
       broker_->InjectInput(std::move(input));
@@ -1672,6 +2100,8 @@ struct DomicileEngine {
       // And the browser's windows, which capture tools list beside the
       // compositor's own.
       broker_->ObserveBrowserWindows(browser_windows_.BindRemote());
+      // And the input devices, for `domicile list-inputs`.
+      broker_->ObserveInputDevices(input_devices_.BindRemote());
     }
     *connected = broker_.is_bound();
   }
@@ -1682,7 +2112,11 @@ struct DomicileEngine {
       return;
     }
     const DomicileSurfaceId id = next_surface_id_++;
-    auto surface = std::make_unique<domicile::Surface>(id, &queue_);
+    // Unretained: the engine outlives its surfaces.
+    auto surface = std::make_unique<domicile::Surface>(
+        id, &queue_,
+        base::BindRepeating(&DomicileEngine::SurfaceById,
+                            base::Unretained(this)));
     domicile::Surface* raw = surface.get();
     surfaces_[id] = std::move(surface);
 
@@ -1719,6 +2153,14 @@ struct DomicileEngine {
     surfaces_.erase(iter);
   }
 
+  void SetSurfaceColorOnThread(DomicileSurfaceId surface,
+                               domicile::BufferColor color) {
+    auto iter = surfaces_.find(surface);
+    if (iter != surfaces_.end()) {
+      iter->second->SetColor(std::move(color));
+    }
+  }
+
   void ImportBufferOnThread(DomicileSurfaceId surface,
                             gfx::GpuMemoryBufferHandle handle,
                             const gfx::Size& size,
@@ -1731,21 +2173,26 @@ struct DomicileEngine {
 
     base::RunLoop loop(base::RunLoop::Type::kNestableTasksAllowed);
     domicile::Surface* raw = iter->second.get();
+    const domicile::BufferColor& color = raw->color();
     broker_->ImportBuffer(
         raw->frame_sink_id(), std::move(handle), size, fourcc,
+        color.color_space,
         base::BindOnce(
             [](base::RunLoop* loop, DomicileBufferId* imported,
-               domicile::Surface* surface, bool has_alpha, uint64_t id,
+               domicile::Surface* surface, bool has_alpha,
+               gfx::HDRMetadata hdr_metadata, uint64_t id,
                std::optional<gpu::ExportedSharedImage> exported) {
               // Without the SharedImage there is nothing to submit, so treat
               // the import as refused.
               if (id != 0 && exported.has_value()) {
-                surface->Adopt(id, std::move(exported).value(), has_alpha);
+                surface->Adopt(id, std::move(exported).value(), has_alpha,
+                               hdr_metadata);
                 *imported = id;
               }
               loop->Quit();
             },
-            &loop, imported, raw, domicile::FourccHasAlpha(fourcc)));
+            &loop, imported, raw, domicile::FourccHasAlpha(fourcc),
+            color.hdr_metadata));
     loop.Run();
   }
 
@@ -1757,19 +2204,24 @@ struct DomicileEngine {
                                  uint64_t request) {
     auto iter = surfaces_.find(surface);
     if (iter == surfaces_.end() || !broker_ || handle.is_null()) {
-      OnImported(surface, request, /*has_alpha=*/false, 0, std::nullopt);
+      OnImported(surface, request, /*has_alpha=*/false, gfx::HDRMetadata(), 0,
+                 std::nullopt);
       return;
     }
+    const domicile::BufferColor& color = iter->second->color();
     broker_->ImportBuffer(
         iter->second->frame_sink_id(), std::move(handle), size, fourcc,
+        color.color_space,
         base::BindOnce(&DomicileEngine::OnImported, base::Unretained(this),
-                       surface, request, domicile::FourccHasAlpha(fourcc)));
+                       surface, request, domicile::FourccHasAlpha(fourcc),
+                       color.hdr_metadata));
   }
 
   // The surface may have gone while the browser imported.
   void OnImported(DomicileSurfaceId surface,
                   uint64_t request,
                   bool has_alpha,
+                  const gfx::HDRMetadata& hdr_metadata,
                   uint64_t id,
                   std::optional<gpu::ExportedSharedImage> exported) {
     DomicileBufferId imported = 0;
@@ -1777,7 +2229,8 @@ struct DomicileEngine {
     // Without the SharedImage there is nothing to submit, so treat the import
     // as refused.
     if (iter != surfaces_.end() && id != 0 && exported.has_value()) {
-      iter->second->Adopt(id, std::move(exported).value(), has_alpha);
+      iter->second->Adopt(id, std::move(exported).value(), has_alpha,
+                          hdr_metadata);
       imported = id;
     }
     queue_.Push({.type = domicile::EngineEvent::Type::kImported,
@@ -1792,6 +2245,27 @@ struct DomicileEngine {
     if (iter != surfaces_.end()) {
       iter->second->Submit(submit);
     }
+  }
+
+  void SetChildrenOnThread(DomicileSurfaceId surface,
+                           std::vector<domicile::Subsurface> children) {
+    auto iter = surfaces_.find(surface);
+    if (iter != surfaces_.end()) {
+      iter->second->SetChildren(std::move(children));
+    }
+  }
+
+  void RedrawOnThread(DomicileSurfaceId surface) {
+    auto iter = surfaces_.find(surface);
+    if (iter != surfaces_.end()) {
+      iter->second->Redraw();
+    }
+  }
+
+  // A surface by its id, or null once it is gone.
+  domicile::Surface* SurfaceById(DomicileSurfaceId surface) {
+    auto iter = surfaces_.find(surface);
+    return iter == surfaces_.end() ? nullptr : iter->second.get();
   }
 
   void SyncSurfaceOnThread(DomicileSurfaceId surface, uint32_t frame) {
@@ -1958,6 +2432,7 @@ struct DomicileEngine {
     copies_.Unbind();
     compositing_.Unbind();
     browser_windows_.Unbind();
+    input_devices_.Unbind();
   }
 
   void RunOnThreadAndWait(base::OnceClosure task) {
@@ -1979,6 +2454,7 @@ struct DomicileEngine {
   domicile::Copies copies_{&queue_};
   domicile::Compositing compositing_{&queue_};
   domicile::BrowserWindows browser_windows_{&queue_};
+  domicile::InputDevices input_devices_{&queue_};
   base::Thread thread_;
   std::unique_ptr<mojo::core::ScopedIPCSupport> ipc_support_;
   mojo::Remote<domicile::mojom::FrameSinkBroker> broker_;
@@ -2041,6 +2517,15 @@ void domicile_surface_destroy(DomicileEngine* engine,
                               DomicileSurfaceId surface) {
   if (engine) {
     engine->DestroySurface(surface);
+  }
+}
+
+void domicile_surface_set_color(DomicileEngine* engine,
+                                DomicileSurfaceId surface,
+                                const DomicileColor* color) {
+  if (engine) {
+    engine->SetSurfaceColor(surface, color ? domicile::BufferColorFrom(*color)
+                                           : domicile::BufferColor());
   }
 }
 
@@ -2187,6 +2672,38 @@ void domicile_surface_sync(DomicileEngine* engine,
   }
 }
 
+void domicile_surface_set_children(DomicileEngine* engine,
+                                   DomicileSurfaceId surface,
+                                   const DomicileSubsurface* children,
+                                   uint32_t count) {
+  // A null array with a nonzero count is a caller bug.
+  CHECK(children || count == 0)
+      << "domicile: subsurfaces set from a null array";
+  if (!engine) {
+    return;
+  }
+  std::vector<domicile::Subsurface> set;
+  set.reserve(count);
+  // SAFETY: the ABI says `children` points at `count` records valid for this
+  // call, and a null pointer with a nonzero count was refused above.
+  const auto records =
+      UNSAFE_BUFFERS(base::span(children, static_cast<size_t>(count)));
+  for (const DomicileSubsurface& child : records) {
+    set.push_back({.surface = child.surface,
+                   .position = gfx::PointF(child.x, child.y),
+                   .size = gfx::SizeF(child.width, child.height),
+                   .above = child.above != 0});
+  }
+  engine->SetChildren(surface, std::move(set));
+}
+
+void domicile_surface_redraw(DomicileEngine* engine,
+                             DomicileSurfaceId surface) {
+  if (engine) {
+    engine->Redraw(surface);
+  }
+}
+
 void domicile_displays_configure(DomicileEngine* engine,
                                  const DomicileDisplayLayout* layout,
                                  uint32_t count) {
@@ -2212,6 +2729,15 @@ void domicile_displays_configure_adaptive(DomicileEngine* engine,
   // As domicile_displays_configure.
   if (engine && (layout || count == 0)) {
     engine->ConfigureAdaptiveDisplays(layout, count);
+  }
+}
+
+void domicile_displays_configure_hdr(DomicileEngine* engine,
+                                     const DomicileHdrLayout* layout,
+                                     uint32_t count) {
+  // As domicile_displays_configure.
+  if (engine && (layout || count == 0)) {
+    engine->ConfigureHdrDisplays(layout, count);
   }
 }
 
@@ -2264,6 +2790,18 @@ void domicile_displays_set_gamma(DomicileEngine* engine,
                                    base::ToVector(entries.first(size)),
                                    base::ToVector(entries.subspan(size, size)),
                                    base::ToVector(entries.last(size))));
+}
+
+void domicile_displays_set_color_matrix(DomicileEngine* engine,
+                                        int64_t display_id,
+                                        const float* matrix) {
+  if (!engine || !matrix) {
+    return;
+  }
+  // Nine, row-major; see the header. `UNSAFE_BUFFERS` is required to span an
+  // ABI pointer.
+  const auto entries = UNSAFE_BUFFERS(base::span(matrix, 9u));
+  engine->SetColorMatrix(display_id, base::ToVector(entries));
 }
 
 void domicile_clipboard_set(DomicileEngine* engine,

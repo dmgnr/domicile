@@ -28,9 +28,11 @@ class DomicileDeviceRequestEvent;
 class DomicileDialogEvent;
 class DomicileExternalAppEvent;
 class DomicilePickerEvent;
+class DomicileIdentityEvent;
 class DomicilePromptEvent;
 class DomicileSignInEvent;
 class DomicileFileChooserEvent;
+class DomicileHistory;
 class DomicileMediaDevices;
 class DomicilePermissionRequestEvent;
 class ExceptionState;
@@ -72,6 +74,9 @@ class CORE_EXPORT HTMLWebViewElement final
   void goForward();
   void goBackInNewWindow();
   void goForwardInNewWindow();
+  ScriptPromise<DomicileHistory> history(ScriptState*, ExceptionState&);
+  void goToHistoryEntry(int32_t id);
+  void goToHistoryEntryInNewWindow(int32_t id);
   void stop();
   void reload();
 
@@ -178,6 +183,11 @@ class CORE_EXPORT HTMLWebViewElement final
       const DomicileContextMenuEvent& menu,
       domicile::mojom::blink::WebViewContextMenuAction action,
       ExceptionState&);
+  // Replaces `menu`'s misspelled word with `word`. Throws as
+  // RunContextMenuAction.
+  void ReplaceMisspelling(const DomicileContextMenuEvent& menu,
+                          const String& word,
+                          ExceptionState&);
 
   // Releases a dispatched file chooser event once answered. See
   // `waiting_choosers_`.
@@ -199,6 +209,9 @@ class CORE_EXPORT HTMLWebViewElement final
   ScriptPromise<IDLLong> countMatches(ScriptState*,
                                       const String& selector,
                                       ExceptionState&);
+  ScriptPromise<IDLBoolean> clickMatch(ScriptState*,
+                                       const String& selector,
+                                       ExceptionState&);
 
   // Releases the permission request once answered. See
   // `permission_request_`.
@@ -218,6 +231,8 @@ class CORE_EXPORT HTMLWebViewElement final
 
   // Releases the prompt once answered. See `prompt_`.
   void PromptAnswered(DomicilePromptEvent&);
+  // Releases the sign-in step once answered. See `identity_`.
+  void IdentityAnswered(DomicileIdentityEvent&);
   // Releases the picker once answered. See `picker_`.
   void PickerAnswered(DomicilePickerEvent&);
 
@@ -317,6 +332,18 @@ class CORE_EXPORT HTMLWebViewElement final
                         bool shift_key,
                         bool meta_key,
                         bool repeat) override;
+
+  // Dispatches a modifier the page let go of as a `domicile-guest-keyup`
+  // KeyboardEvent on this element. See UnhandledModifierUp in
+  // components/domicile/mojom/web_view_guest.mojom.
+  void UnhandledModifierUp(const String& key, const String& code) override;
+  // The window this shows has a new page, in another browser profile: shows
+  // it in a new placeholder. See WebViewGuestClient.Replaced.
+  void Replaced() override;
+
+  // Dispatches `domicile-key-delivered`, which names no key. See KeyDelivered
+  // in components/domicile/mojom/web_view_guest.mojom.
+  void KeyDelivered() override;
 
   void ZoomChanged(double factor) override;
 
@@ -422,6 +449,16 @@ class CORE_EXPORT HTMLWebViewElement final
   // Dismisses the held prompt and dispatches `domicile-prompt-withdrawn`, so
   // the shell stops showing it.
   void PromptWithdrawn() override;
+  // Dispatches `domicile-identity`. If no listener calls `preventDefault()`,
+  // it is answered as unanswered after dispatch. See
+  // domicile_identity_event.h.
+  void IdentityRequested(
+      domicile::mojom::blink::WebViewIdentityRequestPtr request,
+      IdentityRequestedCallback callback) override;
+
+  // Answers the held sign-in step as unanswered and dispatches
+  // `domicile-identity-withdrawn`, so the shell stops showing it.
+  void IdentityWithdrawn() override;
   void PickerRequested(domicile::mojom::blink::WebViewPickerPtr picker,
                        PickerRequestedCallback callback) override;
   void PickerWithdrawn() override;
@@ -446,7 +483,9 @@ class CORE_EXPORT HTMLWebViewElement final
   // The `window` attribute for CreateGuest, or a null String if absent.
   String BrowserWindow() const;
 
-  // The `partition` attribute for CreateGuest, or empty if absent.
+  // The `profile` and `partition` attributes for CreateGuest, or empty if
+  // absent.
+  String Profile() const;
   String Partition() const;
 
   // Kept open while the element is in the document: the browser may hold the
@@ -535,6 +574,8 @@ class CORE_EXPORT HTMLWebViewElement final
   Member<DomicilePromptEvent> prompt_;
   // The open picker, held as `prompt_` is.
   Member<DomicilePickerEvent> picker_;
+  // The sign-in step the shell shows, held as `prompt_` is.
+  Member<DomicileIdentityEvent> identity_;
 
   // See sitePermissions().
   Vector<std::pair<String, String>> site_permissions_;

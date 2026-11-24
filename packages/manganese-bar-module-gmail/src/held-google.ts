@@ -22,6 +22,11 @@ export const INBOX =
 export const UNREAD =
   "https://gmail.googleapis.com/gmail/v1/users/me/messages?labelIds=INBOX&labelIds=UNREAD&maxResults=100";
 
+export const DRAFTS = "https://gmail.googleapis.com/gmail/v1/users/me/drafts";
+
+export const SEND_AS =
+  "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
+
 /** The address of message `id`'s sender and subject. */
 export const HEADERS = (id: string) =>
   `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`;

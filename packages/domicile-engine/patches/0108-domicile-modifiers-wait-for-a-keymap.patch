@@ -16,12 +16,12 @@ a keymap and a key, and checks the key carries no modifiers.
  1 file changed, 53 insertions(+)
 
 diff --git a/ui/ozone/platform/wayland/host/wayland_keyboard_unittest.cc b/ui/ozone/platform/wayland/host/wayland_keyboard_unittest.cc
-index babf740..3a0c884 100644
+index ef78afb..7135ba0 100644
 --- a/ui/ozone/platform/wayland/host/wayland_keyboard_unittest.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_keyboard_unittest.cc
-@@ -225,6 +225,59 @@ TEST_F(WaylandKeyboardTest, CapsLockModifier) {
-   EXPECT_EQ(ui::VKEY_A, key_event->key_code());
-   EXPECT_EQ(EventType::kKeyPressed, key_event->type());
+@@ -352,6 +352,59 @@ TEST_F(WaylandKeyboardTest, KeycodesWithoutDomCode) {
+   EXPECT_EQ(DomKey::FromCharacter('c'), key_event_c->GetDomKey());
+   EXPECT_EQ(VKEY_C, key_event_c->key_code());
  }
 +
 +// A seat with a keyboard whose host has sent no keymap yet. sway sends

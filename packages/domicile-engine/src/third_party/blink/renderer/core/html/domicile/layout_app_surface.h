@@ -26,6 +26,8 @@ class CORE_EXPORT LayoutAppSurface final : public LayoutReplaced {
 
  private:
   void UpdateAfterLayout() override;
+  // This element's CSS `zoom`, without the page's density and page zoom.
+  double CssZoom() const;
   PhysicalNaturalSizingInfo GetNaturalDimensions() const override;
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;

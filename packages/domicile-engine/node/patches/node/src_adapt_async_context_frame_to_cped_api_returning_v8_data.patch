@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "electron-claude[bot]"
+ <279139701+electron-claude[bot]@users.noreply.github.com>
+Date: Tue, 25 Aug 2026 18:36:43 +0000
+Subject: src: adapt async_context_frame to CPED API returning v8::Data
+
+V8 forwarded Isolate::[Get|Set]ContinuationPreservedEmbedderData to the
+V2 APIs, which use v8::Data instead of v8::Value.
+
+Refs: https://chromium-review.googlesource.com/c/v8/v8/+/8267927
+
+diff --git a/src/async_context_frame.cc b/src/async_context_frame.cc
+index 2e63790457337577966b215993c3cbb257796b62..a2afd577d42534024a7aec3b4f619d27a8460159 100644
+--- a/src/async_context_frame.cc
++++ b/src/async_context_frame.cc
+@@ -34,7 +34,7 @@ Scope::~Scope() {
+ }
+ 
+ Local<Value> current(Isolate* isolate) {
+-  return isolate->GetContinuationPreservedEmbedderDataV2().As<Value>();
++  return isolate->GetContinuationPreservedEmbedderData().As<Value>();
+ }
+ 
+ void set(Environment* env, Local<Value> value) {
+@@ -42,7 +42,7 @@ void set(Environment* env, Local<Value> value) {
+     return;
+   }
+ 
+-  env->isolate()->SetContinuationPreservedEmbedderDataV2(value);
++  env->isolate()->SetContinuationPreservedEmbedderData(value);
+ }
+ 
+ void set(Isolate* isolate, Local<Value> value) {

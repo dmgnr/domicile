@@ -19,6 +19,10 @@ namespace {
 // The bytes per pixel of every format `CapturedFourcc` names.
 constexpr uint32_t kBytesPerPixel = 4;
 
+// The reason code both pipes close with when the capture failed. The
+// description says why.
+constexpr uint32_t kCaptureFailed = 1;
+
 // Holds one frame's buffer for the producer. Closing the producer's end
 // destroys this, which gives the buffer back to viz.
 class FrameHold : public mojom::CapturedFrameHold {
@@ -68,7 +72,8 @@ DisplayCapture::DisplayCapture(
     : capturer_(std::move(connect)),
       control_(this, std::move(control)),
       observer_(std::move(observer)),
-      ended_(std::move(ended)) {
+      ended_(std::move(ended)),
+      gpu_(gpu) {
   // Unretained: both pipes are members, so neither handler outlives this.
   control_.set_disconnect_handler(base::BindOnce(
       &DisplayCapture::End, base::Unretained(this), std::string()));
@@ -110,6 +115,7 @@ void DisplayCapture::OnFrameCaptured(
     const gfx::Rect& content_rect,
     mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
         callbacks) {
+  captured_ = true;
   const std::optional<uint32_t> fourcc = CapturedFourcc(info->pixel_format);
   if (!fourcc.has_value()) {
     End("viz captured a format the producer cannot read, media pixel format " +
@@ -146,9 +152,21 @@ void DisplayCapture::OnFrameCaptured(
       std::move(hold));
 }
 
+void DisplayCapture::OnStopped() {
+  if (captured_) {
+    End("viz stopped the capture");
+    return;
+  }
+  End(std::string("viz stopped the capture before its first frame: it could "
+                  "not allocate ") +
+      (gpu_ ? "a dmabuf" : "shared memory") + " to capture into");
+}
+
 void DisplayCapture::End(const std::string& why) {
   if (!why.empty()) {
     LOG(ERROR) << "domicile: a display capture stopped: " << why;
+    control_.ResetWithReason(kCaptureFailed, why);
+    observer_.ResetWithReason(kCaptureFailed, why);
   }
   capturer_.StopAndResetConsumer();
   // Runs last: the owner destroys this.

@@ -23,10 +23,10 @@ does not fail closed instead of drawing a Chrome box over the desktop.
  3 files changed, 43 insertions(+)
 
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index c068b3d..3fbbe3d 100644
+index 5165548..389454d 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -5073,6 +5073,17 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
+@@ -5072,6 +5072,17 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
        web_prefs->preferred_color_scheme ==
            blink::mojom::PreferredColorScheme::kDark);
  
@@ -45,7 +45,7 @@ index c068b3d..3fbbe3d 100644
        GetRootScrollbarThemeColor(web_contents);
  
 diff --git a/components/web_modal/web_contents_modal_dialog_manager.cc b/components/web_modal/web_contents_modal_dialog_manager.cc
-index 94340c8..f39bf12 100644
+index 3f5dde8..b8f52ef 100644
 --- a/components/web_modal/web_contents_modal_dialog_manager.cc
 +++ b/components/web_modal/web_contents_modal_dialog_manager.cc
 @@ -8,6 +8,7 @@
@@ -94,10 +94,10 @@ index 94340c8..f39bf12 100644
    if (delegate_) {
      manager->HostChanged(
 diff --git a/components/web_modal/web_contents_modal_dialog_manager.h b/components/web_modal/web_contents_modal_dialog_manager.h
-index 19fe193..d58dd8b 100644
+index e6cfd97..7c067c1 100644
 --- a/components/web_modal/web_contents_modal_dialog_manager.h
 +++ b/components/web_modal/web_contents_modal_dialog_manager.h
-@@ -57,6 +57,14 @@ class WEB_MODAL_EXPORT WebContentsModalDialogManager
+@@ -55,6 +55,14 @@ class WEB_MODAL_EXPORT WebContentsModalDialogManager
    WebContentsModalDialogManagerDelegate* delegate() const { return delegate_; }
    void SetDelegate(WebContentsModalDialogManagerDelegate* d);
  

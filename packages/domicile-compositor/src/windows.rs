@@ -12,7 +12,7 @@ use smithay::wayland::{
     compositor::with_states,
     shell::xdg::{SurfaceCachedState, ToplevelSurface, XdgToplevelSurfaceData},
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 use domicile_protocol::HostMessage;
 
@@ -64,12 +64,6 @@ impl DomicileCompositor {
                     .find(|(id, _)| id == app_id)
                     .map(|(_, popup)| popup.wl_surface().clone())
             })
-            .or_else(|| {
-                self.bubbles
-                    .iter()
-                    .find(|bubble| bubble.app_id == app_id)
-                    .map(|bubble| bubble.surface.clone())
-            })
     }
 
     /// The window this surface is, if it is one this compositor announced.
@@ -80,32 +74,40 @@ impl DomicileCompositor {
     }
 
     /// The window `surface` draws for: itself, or the window under the popup
-    /// or bubble it is. `None` for the chrome.
+    /// or subsurface it is. `None` for the chrome.
     pub fn window_of(&self, surface: &WlSurface) -> Option<String> {
         match self.by_surface.get(surface) {
             Some((app_id, Role::Toplevel(_))) => Some(app_id.clone()),
-            Some((_, Role::Bubble)) => self
-                .bubbles
+            Some((_, Role::Subsurface)) => self
+                .subsurfaces
                 .iter()
-                .find(|bubble| bubble.surface == *surface)
-                .and_then(|bubble| self.window_of(&bubble.parent)),
+                .find(|subsurface| subsurface.surface == *surface)
+                .and_then(|subsurface| self.window_of(&subsurface.parent)),
             Some((_, Role::Candidates)) => self.window_of(&self.candidates_editor()?),
             // A popup, announced or not, or a surface with no role yet.
             Some((_, Role::Popup(_))) | None => {
                 let window = self.window_under_menus(surface);
                 match self.by_surface.get(&window) {
                     Some((app_id, Role::Toplevel(_))) => Some(app_id.clone()),
-                    Some((_, Role::Popup(_) | Role::Bubble | Role::Candidates)) | None => None,
+                    Some((_, Role::Popup(_) | Role::Subsurface | Role::Candidates)) | None => None,
                 }
             }
         }
+    }
+
+    /// The CSS `zoom` of the window `surface` draws for, which its popups
+    /// share. 1 for the chrome and for a window the page has not zoomed.
+    pub fn zoom_of(&self, surface: &WlSurface) -> f64 {
+        self.window_of(surface)
+            .and_then(|app_id| self.app_zoom.get(&app_id).copied())
+            .unwrap_or(1.0)
     }
 
     /// Where the page last put the window `surface` is, if it has said.
     pub fn bounds_of(&self, surface: &WlSurface) -> Option<domicile_scene::Bounds> {
         match self.by_surface.get(surface) {
             Some((app_id, Role::Toplevel(_))) => self.app_bounds.get(app_id).copied(),
-            Some((_, Role::Popup(_) | Role::Bubble | Role::Candidates)) | None => None,
+            Some((_, Role::Popup(_) | Role::Subsurface | Role::Candidates)) | None => None,
         }
     }
 
@@ -127,7 +129,7 @@ impl DomicileCompositor {
         // Collected so the host is unlocked before broadcasting. See
         // `title_changed`.
         let announce = self.hub.host.lock().unwrap().app_mapped(app_id, mapped);
-        debug!(%app_id, ?mapped, "toplevel drew -> app_appeared");
+        info!(%app_id, ?mapped, "toplevel drew -> app_appeared");
         for message in announce {
             self.hub.broadcast(message);
         }
@@ -213,6 +215,14 @@ impl DomicileCompositor {
             state.size = Some((resize.size.0 as i32, resize.size.1 as i32).into());
         });
         let serial = toplevel.send_configure();
+        tracing::trace!(
+            %app_id,
+            ?serial,
+            number = resize.number,
+            size = ?resize.size,
+            device_size = ?resize.device_size,
+            "configure -> client"
+        );
         let changed = self
             .configure_answers
             .get_mut(app_id)
@@ -281,6 +291,22 @@ impl DomicileCompositor {
         self.pinch_window_gone(app_id);
         self.swipe_window_gone(app_id);
         self.touch_window_gone(app_id);
+        self.forget_the_drawing(app_id);
+        // An app id can return (a reconnecting client), but it then names a
+        // different window.
+        if self.pointer_app.as_deref() == Some(app_id) {
+            self.pointer_app = None;
+            self.cursor_surface = None;
+            self.pointer_surface = None;
+        }
+        self.forget_pointer_constraint(app_id);
+        info!(%app_id, "gone -> Host::app_closed");
+        broadcast_closed(&self.hub, app_id);
+    }
+
+    /// Forget what `app_id` drew: a window, or a subsurface the host never
+    /// heard of.
+    pub fn forget_the_drawing(&mut self, app_id: &str) {
         // The surface stays on screen through the shell's close animation;
         // only frames that never went up come back now.
         let gone = self
@@ -302,6 +328,7 @@ impl DomicileCompositor {
         self.last_buffers.remove(app_id);
         self.unannounced.remove(app_id);
         self.app_bounds.remove(app_id);
+        self.app_zoom.remove(app_id);
         self.held_frames.forget(app_id);
         self.suspended.remove(app_id);
         self.presentations.forget(app_id);
@@ -310,15 +337,5 @@ impl DomicileCompositor {
         self.casting.window_gone(app_id);
         self.shm_refused.forget(app_id);
         self.first_frame_logged.forget(app_id);
-        // An app id can return (a reconnecting client), but it then names a
-        // different window.
-        if self.pointer_app.as_deref() == Some(app_id) {
-            self.pointer_app = None;
-            self.cursor_surface = None;
-            self.pointer_surface = None;
-        }
-        self.forget_pointer_constraint(app_id);
-        debug!(%app_id, "gone -> Host::app_closed");
-        broadcast_closed(&self.hub, app_id);
     }
 }

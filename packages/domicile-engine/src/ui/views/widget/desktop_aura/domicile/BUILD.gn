@@ -18,17 +18,52 @@ source_set("cursor_color_scheme") {
   deps = [ "//ui/base/cursor" ]
 }
 
+# Drags on a desk with no window manager to run them (Ozone DRM, headless).
+# The patch that adds it links it into //ui/views.
+source_set("desk_drag") {
+  sources = [
+    "desk_drag.cc",
+    "desk_drag.h",
+    "desk_drag_handler.cc",
+    "desk_drag_handler.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//ui/base",
+    "//ui/base/dragdrop/mojom",
+    "//ui/compositor",
+    "//ui/events",
+    "//ui/gfx",
+    "//ui/gfx/geometry",
+    "//ui/platform_window",
+    "//ui/platform_window/wm",
+  ]
+
+  deps = [
+    "//ui/aura",
+    "//ui/base/cursor",
+    "//ui/base/dragdrop:types",
+  ]
+}
+
 source_set("unit_tests") {
   testonly = true
 
-  sources = [ "cursor_color_scheme_unittest.cc" ]
+  sources = [
+    "cursor_color_scheme_unittest.cc",
+    "desk_drag_unittest.cc",
+  ]
 
   deps = [
     ":cursor_color_scheme",
+    ":desk_drag",
     "//base",
     "//skia",
     "//testing/gtest",
     "//ui/base/cursor",
+    "//ui/base/dragdrop:types",
     "//ui/native_theme",
+    "//ui/platform_window/wm",
   ]
 }

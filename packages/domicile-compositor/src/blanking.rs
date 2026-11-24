@@ -20,7 +20,7 @@ use smithay::wayland::{
     idle_inhibit::IdleInhibitHandler,
     shell::xdg::{ToplevelSurface, XdgToplevelSurfaceData},
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 use domicile_host::system::DisplayPower;
 
@@ -71,7 +71,7 @@ impl DomicileCompositor {
             return;
         };
         if self.display_sleep.stirred(Instant::now()) {
-            debug!(input, "somebody is at this desktop again; its screens wake");
+            info!(input, "somebody is at this desktop again; its screens wake");
             self.state_the_connectors();
         }
         let idle = &mut self.idle;
@@ -92,9 +92,10 @@ impl DomicileCompositor {
                 "input restarts the idle clock"
             );
         }
+        self.hub.stirred(now);
         match idle.stirred(now) {
             Some(Blanking::ComeBack) => {
-                debug!("somebody is at this desktop again; its screens come back on");
+                info!("somebody is at this desktop again; its screens come back on");
                 self.tell_the_chromes_whether_anybody_is_here();
                 self.state_the_connectors();
             }
@@ -117,7 +118,7 @@ impl DomicileCompositor {
         let edge = self.idle.elapsed(now, &on_the_desktop);
         let next = self.idle.next_check(now);
         if edge == Some(Blanking::GoDark) {
-            debug!(
+            info!(
                 connectors = self.engine_displays.len(),
                 "nobody is at this desktop; its screens go dark"
             );
@@ -195,6 +196,10 @@ impl DomicileCompositor {
     pub fn state_the_connectors(&self) {
         // Every blanking edge passes here.
         self.tell_the_portal_about_the_screensaver();
+        self.hub.host.lock().unwrap().describe_darkness(
+            self.the_screens_are_dark() || self.display_sleep.asleep(),
+            self.display_sleep.sleeping().to_vec(),
+        );
         let Some(session) = self.engine.as_ref() else {
             return;
         };
@@ -458,11 +463,11 @@ impl DomicileCompositor {
         };
         match edge {
             Blanking::GoDark => {
-                debug!("{why}; this desktop's screens go dark");
+                info!("{why}; this desktop's screens go dark");
                 self.state_the_connectors();
             }
             Blanking::ComeBack => {
-                debug!("{why}; this desktop's screens come back on");
+                info!("{why}; this desktop's screens come back on");
                 self.state_the_connectors();
             }
         }

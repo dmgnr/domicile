@@ -20,7 +20,7 @@ job builds it on `crux`.
  3 files changed, 23 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index ae64f19..100bfe9 100644
+index de41b3c..7c93170 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -9,6 +9,7 @@
@@ -31,7 +31,7 @@ index ae64f19..100bfe9 100644
  #include "chrome/browser/domicile/domicile_tab_helpers.h"
  #include "components/domicile/browser/app_channel.h"
  #include "components/domicile/browser/app_roots.h"
-@@ -653,6 +654,22 @@ void PopulateChromeFrameBinders(
+@@ -685,6 +686,22 @@ void PopulateChromeFrameBinders(
          domicile::BindBrowserWindows(frame, std::move(receiver));
        }));
  
@@ -55,7 +55,7 @@ index ae64f19..100bfe9 100644
    // calls only. See docs/architecture/APP-MODULES.md.
    //
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 74d7eb1..d8c0eb8 100644
+index c8f013d..082a579 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -278,6 +278,10 @@ generated_dictionary_sources_in_modules = [

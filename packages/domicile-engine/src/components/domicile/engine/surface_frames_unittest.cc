@@ -29,6 +29,18 @@ TEST(SurfaceFramesTest, AcksMatchFramesInTheOrderTheyWereSent) {
   EXPECT_FALSE(frames.Acked().has_value());
 }
 
+// A redraw shows a window's subsurfaces anew. The compositor did not submit
+// it, so its ack answers no frame and the numbers carry on past it.
+TEST(SurfaceFramesTest, ARedrawIsAckedInTurnButTakesNoNumber) {
+  SurfaceFrames frames;
+  frames.Sent(/*frame_token=*/1);
+  frames.Redrawn();
+  EXPECT_EQ(frames.Sent(/*frame_token=*/3), 2u);
+  EXPECT_EQ(frames.Acked(), 1u);
+  EXPECT_EQ(frames.Acked(), SurfaceFrames::kRedrawn);
+  EXPECT_EQ(frames.Acked(), 2u);
+}
+
 TEST(SurfaceFramesTest, AFrameIsPresentedOnceByItsToken) {
   SurfaceFrames frames;
   frames.Sent(/*frame_token=*/5);

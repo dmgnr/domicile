@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/gfx/geometry/point.h"
@@ -22,6 +23,8 @@ constexpr drmModeModeInfo kMode = {.hdisplay = 6, .vdisplay = 4};
 // A card with no 3D (2D virtio-gpu, simpledrm) has no GBM. `ScreenManager`
 // modesets it with a dumb buffer (patch 0135).
 TEST(DrmNoGbmModesetTest, ModesetsADeviceWithNoGbm) {
+  // A DrmDevice is deleted on the sequence it was made on.
+  base::test::SingleThreadTaskEnvironment task_environment;
   auto drm = base::MakeRefCounted<FakeDrmDevice>(/*gbm_device=*/nullptr);
   drm->ResetStateWithDefaultObjects(/*crtc_count=*/1, /*planes_per_crtc=*/1);
   drm->InitializeState(/*use_atomic=*/true);

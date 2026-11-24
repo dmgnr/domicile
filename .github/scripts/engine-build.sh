@@ -23,10 +23,12 @@ if [ -n "${DOMICILE_CC_WRAPPER:-}" ]; then
     "$DOMICILE_CC_WRAPPER would not zero its statistics, so they span builds."
 fi
 
-# The release build, plus the test binaries and probes the checks run.
+# The release build, plus the test binaries, probes and Electron's Node the
+# checks run.
 "$HERE/engine-release-build.sh" "$CHROMIUM" "${OUT_RELEASE:-out/Release}" \
   domicile_unittests ozone_unittests domicile_css_parity domicile_color_probe \
-  domicile_solid_color_submitter domicile_capture_probe domicile_desk_probe
+  domicile_solid_color_submitter domicile_capture_probe domicile_desk_probe \
+  third_party/electron_node:node
 
 # Chromium's shell can lose the exit status, so the caller checks for this file.
 touch "$SENTINEL"

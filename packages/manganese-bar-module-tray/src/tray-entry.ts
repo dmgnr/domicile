@@ -10,6 +10,13 @@ export enum TrayEntryKind {
   StatusNotifier,
 }
 
+/** The key extension `id`'s icon is remembered by, pinned or not. */
+export const extensionKey = (id: string): string => `extension:${id}`;
+
+/** The key application `id`'s icon is remembered by, pinned or not. */
+export const statusNotifierKey = (id: string): string =>
+  `status-notifier:${id}`;
+
 /**
  * One tray icon, with the key its position is remembered by.
  *
@@ -20,12 +27,12 @@ export enum TrayEntryKind {
 export const TrayEntry = {
   Extension: (extension: Extension) => ({
     extension,
-    key: `extension:${extension.id}`,
+    key: extensionKey(extension.id),
     kind: TrayEntryKind.Extension as const,
   }),
   StatusNotifier: (item: TrayItem) => ({
     item,
-    key: `status-notifier:${item.id}`,
+    key: statusNotifierKey(item.id),
     kind: TrayEntryKind.StatusNotifier as const,
   }),
 };

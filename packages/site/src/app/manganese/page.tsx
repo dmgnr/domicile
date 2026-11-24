@@ -61,7 +61,12 @@ const ManganesePage = () => (
         <LinkColumns columns={DOCS} />
       </Section>
     </main>
-    <SiteFooter links={[{ href: repoFile("LICENSE"), label: "MIT license" }]}>
+    <SiteFooter
+      links={[
+        { href: "/docs/manganese/release-notes", label: "Release notes" },
+        { href: repoFile("LICENSE"), label: "MIT license" },
+      ]}
+    >
       <span>
         Manganese is one desktop built on <a href="/">Domicile</a>.
       </span>

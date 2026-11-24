@@ -519,6 +519,8 @@ const statusStyles = css({
   "&[data-open]": { gridTemplateColumns: "1fr" },
   display: "grid",
   gridTemplateColumns: "0fr",
+  // main-thread animation: opens to its words' width once per download, moving
+  // the bar items beside it.
   transition: "grid-template-columns {durations.normal} {easings.in-out}",
 });
 

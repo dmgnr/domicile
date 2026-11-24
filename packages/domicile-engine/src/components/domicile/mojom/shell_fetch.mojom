@@ -48,12 +48,17 @@ interface ShellFetch {
   // An unhashed GET follows redirects on https only, and drops `headers`
   // on one that leaves the first address's origin.
   //
+  // The cookies are browser profile `profile`'s, or for an empty one the
+  // default profile's. A profile the desk does not have, or a private one,
+  // is refused.
+  //
   // Answers with a response, or with no response and why: refused, the
   // network error, or a desk that locked while the request was in flight.
   Fetch(url.mojom.Url url,
         string method,
         array<ShellFetchHeader> headers,
         string? body,
-        string? sapisid_hash_origin)
+        string? sapisid_hash_origin,
+        string profile)
       => (ShellFetchResponse? response, string error);
 };

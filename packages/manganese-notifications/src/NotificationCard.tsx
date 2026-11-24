@@ -1,5 +1,8 @@
 import { Avatar } from "@domicile-desktop/component-library/Avatar";
-import type { Notification } from "@domicile-desktop/sdk/notification";
+import type {
+  Notification,
+  NotificationAction,
+} from "@domicile-desktop/sdk/notification";
 import {
   DEFAULT_NOTIFICATION_ACTION,
   INLINE_REPLY_NOTIFICATION_ACTION,
@@ -152,7 +155,7 @@ export const NotificationCard = ({
           density={density}
           onAction={onAction}
           onReply={onReply}
-          replyLabel={reply?.label}
+          replyLabel={replyLabel(reply)}
         />
       )}
       <button
@@ -319,3 +322,12 @@ const closeStyles = css({
   transition:
     "opacity {durations.fast} {easings.out}, transform {durations.fast} {easings.outBack}, background-color {durations.fast} {easings.default}",
 });
+
+/** A reply's label: its own, or "Reply" when the app leaves it empty. */
+const replyLabel = (reply: NotificationAction | undefined) => {
+  if (reply === undefined) {
+    return undefined;
+  } else {
+    return reply.label === "" ? "Reply" : reply.label;
+  }
+};

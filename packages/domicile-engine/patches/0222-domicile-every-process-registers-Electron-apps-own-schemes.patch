@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: every process registers Electron apps' own schemes
+
+Electron apps register their own schemes as privileged
+(protocol.registerSchemesAsPrivileged) before they start. Chromium
+registers schemes only as each process starts, so the supervisor names
+every scheme it knows of in --domicile-electron-schemes and every
+process registers them:
+
+- `ChromeContentClient::AddAdditionalSchemes` adds them to the standard,
+  secure, CSP-bypassing and CORS-enabled lists, as each asks.
+- `ChromeContentRendererClient::RenderThreadStarted` registers the ones
+  that ask for it with `RegisterURLSchemeAsSupportingFetchAPI`.
+- `ChromeContentBrowserClient::AppendExtraCommandLineSwitches` passes the
+  switch to every child process, the zygote and the network service as
+  much as a renderer, so a URL parses the same in each.
+
+See components/domicile/common/electron_schemes.h.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ chrome/browser/BUILD.gn                       |  1 +
+ .../browser/chrome_content_browser_client.cc  | 11 +++++++++
+ chrome/common/BUILD.gn                        |  1 +
+ chrome/common/chrome_content_client.cc        | 23 +++++++++++++++++++
+ chrome/renderer/BUILD.gn                      |  1 +
+ .../chrome_content_renderer_client.cc         | 12 ++++++++++
+ 6 files changed, 49 insertions(+)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 1a7d630..e649e21 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2731,6 +2731,7 @@ source_set("browser") {
+     "//components/domicile:color_scheme",
+     "//components/domicile:control_channel",
+     "//components/domicile:desktop_prefs",
++    "//components/domicile:electron_schemes",
+     "//components/domicile:force_dark",
+     "//components/domicile:keyboard_layout",
+     "//components/domicile:shell_origin",
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 97b926f..e313249 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -11,6 +11,7 @@
+ #include "components/domicile/browser/shell_source.h"
+ #include "components/domicile/browser/shell_url_loader_factory.h"
+ #include "components/domicile/common/domicile_scheme.h"
++#include "components/domicile/common/electron_schemes.h"
+ 
+ #include <algorithm>
+ #include <iterator>
+@@ -3160,6 +3161,16 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+   command_line->CopySwitchesFrom(browser_command_line,
+                                  kDinosaurEasterEggSwitches);
+ 
++  // Domicile's engine fork. Every process registers Electron apps' own
++  // schemes as it starts, the zygote and the network service as much as a
++  // renderer: a URL must parse the same in each. See
++  // components/domicile/common/electron_schemes.h.
++  static const char* const kDomicileElectronSchemesSwitches[] = {
++      domicile::kDomicileElectronSchemesSwitch,
++  };
++  command_line->CopySwitchesFrom(browser_command_line,
++                                 kDomicileElectronSchemesSwitches);
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   // On Chrome OS need to pass primary user homedir (in multi-profiles session).
+   base::FilePath homedir;
+diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
+index d3eef09..06607e3 100644
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -264,6 +264,7 @@ static_library("common_lib") {
+   deps = [
+     "//components/cdm/common:buildflags",
+     "//components/crash/core/app",
++    "//components/domicile:electron_schemes",
+     "//components/google/core/common",
+     "//components/heap_profiling/in_process",
+     "//components/heap_profiling/in_process:mojom",
+diff --git a/chrome/common/chrome_content_client.cc b/chrome/common/chrome_content_client.cc
+index 93ad2c7..b102cff 100644
+--- a/chrome/common/chrome_content_client.cc
++++ b/chrome/common/chrome_content_client.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/common/chrome_content_client.h"
+ 
+ #include "components/domicile/common/domicile_scheme.h"
++#include "components/domicile/common/electron_schemes.h"
+ 
+ #include <stdint.h>
+ 
+@@ -220,6 +221,28 @@ void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   schemes->standard_schemes.push_back(domicile::kDomicileScheme);
+   schemes->secure_schemes.push_back(domicile::kDomicileScheme);
+ 
++  // Domicile's engine fork. Electron apps' own schemes, with the privileges
++  // each app asked for (protocol.registerSchemesAsPrivileged). A process
++  // registers schemes only as it starts, so the supervisor names every one it
++  // knows of and the browser passes the switch to each child process. See
++  // components/domicile/common/electron_schemes.h. Fetch API support is
++  // Blink's, in ChromeContentRendererClient::RenderThreadStarted.
++  for (const domicile::ElectronScheme& scheme : domicile::ElectronSchemesIn(
++           *base::CommandLine::ForCurrentProcess())) {
++    if (scheme.standard) {
++      schemes->standard_schemes.push_back(scheme.scheme);
++    }
++    if (scheme.secure) {
++      schemes->secure_schemes.push_back(scheme.scheme);
++    }
++    if (scheme.bypass_csp) {
++      schemes->csp_bypassing_schemes.push_back(scheme.scheme);
++    }
++    if (scheme.cors_enabled) {
++      schemes->cors_enabled_schemes.push_back(scheme.scheme);
++    }
++  }
++
+ #if BUILDFLAG(IS_ANDROID)
+   schemes->referrer_schemes.push_back(content::kAndroidAppScheme);
+   schemes->referrer_schemes.push_back(web_distiller::kWebDistillerScheme);
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+index 34907c7..13a30c7 100644
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -155,6 +155,7 @@ static_library("renderer") {
+     "//components/crx_file",
+     "//components/domicile:common",
+     "//components/domicile:electron_preload",
++    "//components/domicile:electron_schemes",
+     "//components/facilitated_payments/content/renderer",
+     "//components/facilitated_payments/core/features",
+     "//components/feed:feature_list",
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index 5a1ce37..aa1ff0f 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/renderer/chrome_content_renderer_client.h"
+ 
+ #include "components/domicile/common/domicile_scheme.h"
++#include "components/domicile/common/electron_schemes.h"
+ #include "components/domicile/renderer/electron_preload.h"
+ 
+ #include <functional>
+@@ -655,6 +656,17 @@ void ChromeContentRendererClient::RenderThreadStarted() {
+   WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
+       WebString::FromAscii(domicile::kDomicileScheme));
+ 
++  // Domicile's engine fork. An Electron app's own scheme that it registered
++  // with supportFetchAPI; ChromeContentClient::AddAdditionalSchemes grants
++  // the rest. See components/domicile/common/electron_schemes.h.
++  for (const domicile::ElectronScheme& scheme : domicile::ElectronSchemesIn(
++           *base::CommandLine::ForCurrentProcess())) {
++    if (scheme.supports_fetch) {
++      WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
++          WebString::FromAscii(scheme.scheme));
++    }
++  }
++
+   // This doesn't work in single-process mode.
+   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kSingleProcess)) {

@@ -54,10 +54,10 @@ index 4200f9a..20d3fd3 100644
                      AllowPaintHolding allow_paint_holding,
                      bool without_waiting = false);
 diff --git a/third_party/blink/renderer/core/frame/remote_frame.cc b/third_party/blink/renderer/core/frame/remote_frame.cc
-index bc0c1c6..bd6da8c 100644
+index cd32b0d..1c0f81a 100644
 --- a/third_party/blink/renderer/core/frame/remote_frame.cc
 +++ b/third_party/blink/renderer/core/frame/remote_frame.cc
-@@ -1034,7 +1034,7 @@ bool RemoteFrame::SynchronizeVisualProperties(
+@@ -1078,7 +1078,7 @@ bool RemoteFrame::SynchronizeVisualProperties(
  
    // Domicile: while the shell resizes a <webview>'s window (`resizing`), its
    // box changes every frame. Waiting for the page each time would hold the

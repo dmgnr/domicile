@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the node program loads V8's startup snapshot
+
+Chromium's V8 reads its startup snapshot from snapshot_blob.bin beside
+the program, not from the binary, so the `node` built against it failed
+to create an isolate: "Failed to deserialize the V8 snapshot blob".
+Electron loads the blob through gin; the node program has to say where
+it is itself.
+---
+ src/node_main.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/node_main.cc b/src/node_main.cc
+index 3295121..ab44822 100644
+--- a/src/node_main.cc
++++ b/src/node_main.cc
+@@ -20,6 +20,7 @@
+ // USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ #include "node.h"
++#include "v8.h"
+ #include <cstdio>
+ 
+ #ifdef _WIN32
+@@ -94,6 +95,9 @@ int wmain(int argc, wchar_t* wargv[]) {
+ // UNIX
+ 
+ int main(int argc, char* argv[]) {
++  // Chromium's V8 keeps its startup snapshot beside the program, in
++  // snapshot_blob.bin, rather than built in.
++  v8::V8::InitializeExternalStartupData(argv[0]);
+   return node::Start(argc, argv);
+ }
+ #endif

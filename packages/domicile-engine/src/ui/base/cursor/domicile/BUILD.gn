@@ -69,6 +69,7 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//skia",
+    "//testing/gmock",
     "//testing/gtest",
     "//ui/base/cursor",
     "//ui/gfx/geometry",

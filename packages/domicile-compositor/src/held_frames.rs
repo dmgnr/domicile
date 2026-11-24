@@ -4,7 +4,7 @@
 //! the page reports it with an empty one (`ChromeMessage::SetAppBounds`). Its
 //! client would otherwise draw at full rate for nobody, so its
 //! `wl_surface.frame` callbacks wait here until the page shows it again. Its
-//! popups' and bubbles' callbacks wait under the window's id.
+//! popups' and subsurfaces' callbacks wait under the window's id.
 //!
 //! Held is not stopped. A client that blocks in `eglSwapBuffers` until its
 //! callback arrives reads nothing else meanwhile: not a close, and not its
@@ -109,7 +109,7 @@ impl<C> HeldFrames<C> {
         self.hidden.drain().collect()
     }
 
-    /// The callbacks a commit by `window`, or by a popup or bubble over it, may
+    /// The callbacks a commit by `window`, or by a popup or subsurface of it, may
     /// send now. While it is hidden only those over [`HELD_AT_MOST`], oldest
     /// first: the rest wait for [`show`](Self::show).
     pub fn pass(&mut self, window: &str, callbacks: Vec<C>) -> Vec<C> {

@@ -13,6 +13,7 @@ const extension: Extension = {
   id: ID,
   name: "Blocker",
   popup: `chrome-extension://${ID}/popup.html`,
+  profile: "default",
   title: "Blocker",
 };
 

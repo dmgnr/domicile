@@ -151,6 +151,8 @@ const slotStyles = cva({
     flexShrink: 0,
     inlineSize: "var(--fluid-width, auto)",
     opacity: 1,
+    // main-thread animation: opens to its content's width once, moving its
+    // neighbors.
     transition:
       "inline-size {durations.normal} {easings.in-out}, opacity {durations.normal} {easings.default}",
   },

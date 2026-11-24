@@ -12,6 +12,7 @@ import { css } from "../styled-system/css";
 import { CROSSING, raised } from "./placement";
 import { recordedSettles } from "./recorded-settles";
 import { SettleHandoffs } from "./SettleHandoffs";
+import { SlidingScreen } from "./sliding-screen";
 import { TitleBar } from "./TitleBar";
 import type { StripPlace } from "./tree/frames";
 import { Layout } from "./tree/node";
@@ -79,6 +80,43 @@ const face = (container: HTMLElement): HTMLElement => {
   }
 };
 
+/** One of the face's color layers. See `Fill` in `TitleBar`. */
+const fill = (
+  container: HTMLElement,
+  layer: "hover" | "leaf" | "raised" | "rail",
+): HTMLElement => {
+  const element = face(container).querySelector<HTMLElement>(
+    `:scope > [data-fill="${layer}"]`,
+  );
+  if (element === null) {
+    throw new Error(`test: the face has no ${layer} layer`);
+  } else {
+    return element;
+  }
+};
+
+/**
+ * A transition of `opacity` alone: no comma outside an easing function's
+ * arguments.
+ */
+const OPACITY_ONLY = /^opacity (?:[^,(]|\([^)]*\))*$/;
+
+/** Whether a layer or copy shows, faded all the way in. */
+const shows = (element: Element): boolean =>
+  globalThis.getComputedStyle(element).opacity === "1";
+
+/** The title's own text, under the copy it fades to. */
+const plainTitle = (container: HTMLElement): HTMLElement => {
+  const element = face(container).querySelector<HTMLElement>(
+    "[data-title] > span",
+  );
+  if (element === null) {
+    throw new Error("test: the face has no title");
+  } else {
+    return element;
+  }
+};
+
 /** A tab's place in a strip, for cases about a tab. */
 const MIDDLE_TAB = {
   area: { height: 830, width: 1000, x: 0, y: 0 },
@@ -115,6 +153,22 @@ describe("TitleBar's icon", () => {
     );
   });
 
+  // A page outside the default browser profile says so on its tab.
+  it("marks the icon in the color it is given", () => {
+    const { container } = render(<TitleBar {...barProps} mark="#d97706" />);
+
+    expect(
+      (icon(container).querySelector("[data-mark]") as HTMLElement | null)
+        ?.style.backgroundColor,
+    ).toBe("#d97706");
+  });
+
+  it("leaves the icon unmarked by default", () => {
+    const { container } = render(<TitleBar {...barProps} />);
+
+    expect(icon(container).querySelector("[data-mark]")).toBeNull();
+  });
+
   // Every bar has an icon, so titles line up.
   it("draws a stand-in for a window with no icon", () => {
     const { container } = render(<TitleBar {...barProps} icon={undefined} />);
@@ -141,6 +195,18 @@ describe("TitleBar's icon", () => {
 });
 
 describe("TitleBar", () => {
+  // A float hanging off its screen would slide into view beside its
+  // workspace.
+  it("clips itself to its workspace while a switch slides it", () => {
+    const { container } = render(
+      <SlidingScreen value={{ height: 1000, width: 1280, x: 0, y: 0 }}>
+        <TitleBar {...barProps} motion="leaving-to-start" />
+      </SlidingScreen>,
+    );
+
+    expect(bar(container).style.clip).toBe("rect(-32px, 1280px, 968px, 0px)");
+  });
+
   it("plays the motion the window it names is playing", () => {
     const { container } = render(<TitleBar {...barProps} motion="opening" />);
 
@@ -374,14 +440,30 @@ describe("TitleBar", () => {
   });
 
   // Focus follows the cursor, so these colors change often and would flicker
-  // without easing.
-  it("eases between the colors that say where the keyboard is", () => {
+  // without easing. They fade by opacity, which the compositor eases without
+  // painting the bar again; easing a color paints it on every frame.
+  it("fades between the colors that say where the keyboard is without painting", () => {
     const { container } = render(<TitleBar {...barProps} />);
 
-    const { transition } = globalThis.getComputedStyle(face(container));
-    expect(transition).toContain("background-color");
-    expect(transition).toContain("border-color");
-    expect(transition).toContain("color");
+    for (const layer of ["hover", "leaf", "raised", "rail"] as const) {
+      expect(
+        globalThis.getComputedStyle(fill(container, layer)).transition,
+      ).toMatch(OPACITY_ONLY);
+    }
+    expect(
+      globalThis.getComputedStyle(plainTitle(container)).transition,
+    ).toMatch(OPACITY_ONLY);
+    expect(
+      globalThis.getComputedStyle(face(container)).transition,
+    ).not.toContain("color");
+  });
+
+  it("brightens the title of the window being worked in", () => {
+    const focused = render(<TitleBar {...barProps} focus="focused" />);
+    expect(shows(plainTitle(focused.container))).toBe(false);
+
+    const resting = render(<TitleBar {...barProps} />);
+    expect(shows(plainTitle(resting.container))).toBe(true);
   });
 
   it("sets the name of the window being worked in in a heavier face", () => {
@@ -416,14 +498,13 @@ describe("TitleBar", () => {
     // The focused bar matches the address bar, so it reads as part of its
     // window.
     const focused = render(<TitleBar {...barProps} focus="focused" />);
-    expect(face(focused.container).className).toContain(
+    expect(fill(focused.container, "raised").className).toContain(
       css({ backgroundColor: RAISED }),
     );
+    expect(shows(fill(focused.container, "raised"))).toBe(true);
 
     const resting = render(<TitleBar {...barProps} />);
-    expect(face(resting.container).className).not.toContain(
-      css({ backgroundColor: RAISED }),
-    );
+    expect(shows(fill(resting.container, "raised"))).toBe(false);
   });
 
   it("draws no bar's edge in the accent, whatever it says about the keyboard", () => {
@@ -437,16 +518,30 @@ describe("TitleBar", () => {
     }
   });
 
+  // The window's surface reaches a row up under its bar, which hides that
+  // row. An edge there would leave it showing, as the bar's layers fill only
+  // inside its edges.
+  it("covers the row of the window tucked under the bar", () => {
+    const { className } = face(render(<TitleBar {...barProps} />).container);
+
+    expect(className).toContain(css({ borderBlockEndWidth: 0 }));
+    expect(className).toContain(css({ paddingBlockEnd: "1px" }));
+  });
+
   it("washes the keyboard's own bar in the accent inside a selected group", () => {
     // The whole group is raised, so that alone would not mark this one.
     const { container } = render(<TitleBar {...barProps} focus="leaf" />);
 
-    expect(face(container).className).toContain(
+    expect(fill(container, "leaf").className).toContain(
       css({
         backgroundColor:
           "color-mix(in oklab, {colors.accent} 45%, {colors.chrome})",
       }),
     );
+    expect(shows(fill(container, "leaf"))).toBe(true);
+    expect(
+      shows(fill(render(<TitleBar {...barProps} />).container, "leaf")),
+    ).toBe(false);
     expect(face(container).className).toContain(FAUX_MEDIUM);
   });
 
@@ -502,6 +597,31 @@ describe("TitleBar", () => {
       expect(holder?.className).toContain(css({ display: "flex" }));
     });
 
+    // The buttons carry their own fill, over the title running under them.
+    // Taller than the tab's inside, it painted over the open tab's top edge,
+    // and at a fractional scale the strip's color showed round the buttons.
+    it("keeps its buttons' fill clear of the open tab's edge", () => {
+      const { container } = tab({ strip: { ...MIDDLE_TAB, open: true } });
+      const buttonsFill = (layer: "hover" | "leaf" | "raised" | "rail") => {
+        const element = face(container).querySelector<HTMLElement>(
+          `:scope > span > [data-fill="${layer}"]`,
+        );
+        if (element === null) {
+          throw new Error(`test: the buttons have no ${layer} layer`);
+        } else {
+          return element;
+        }
+      };
+
+      expect(buttonsFill("rail").parentElement?.className).toContain(
+        css({ alignSelf: "stretch" }),
+      );
+      expect(buttonsFill("hover").className).toContain(css({ inset: "1px" }));
+      expect(buttonsFill("leaf").className).toContain(css({ inset: "1px" }));
+      expect(buttonsFill("raised").className).toContain(css({ inset: "2px" }));
+      expect(buttonsFill("rail").className).toContain(css({ inset: "3px" }));
+    });
+
     it("edges the open tab stronger in a strip inside another group's well", () => {
       const strong = css({
         borderColor:
@@ -509,30 +629,36 @@ describe("TitleBar", () => {
       });
 
       expect(
-        face(
+        fill(
           tab({ strip: { ...MIDDLE_TAB, nested: true, open: true } }).container,
+          "raised",
         ).className,
       ).toContain(strong);
       expect(
-        face(tab({ strip: { ...MIDDLE_TAB, open: true } }).container).className,
+        fill(tab({ strip: { ...MIDDLE_TAB, open: true } }).container, "raised")
+          .className,
       ).not.toContain(strong);
     });
 
     it("draws the open tab on the address bar's surface", () => {
-      const raised = css({ backgroundColor: RAISED });
+      const open = fill(
+        tab({ strip: { ...MIDDLE_TAB, open: true } }).container,
+        "raised",
+      );
 
-      expect(
-        face(tab({ strip: { ...MIDDLE_TAB, open: true } }).container).className,
-      ).toContain(raised);
-      expect(face(tab({}).container).className).not.toContain(raised);
+      expect(open.className).toContain(css({ backgroundColor: RAISED }));
+      expect(open.className).toContain(css({ borderColor: "borderStrong" }));
+      expect(shows(open)).toBe(true);
+      expect(shows(fill(tab({}).container, "raised"))).toBe(false);
     });
 
     // A hidden tab broken out of its group grows into a bar, easing its
     // color as it goes. From a clear tab, the desktop shows through it.
     it("draws a hidden tab on the strip's own color", () => {
-      expect(face(tab({}).container).className).toContain(
-        css({ backgroundColor: "tabRail" }),
-      );
+      const rail = fill(tab({}).container, "rail");
+
+      expect(rail.className).toContain(css({ backgroundColor: "tabRail" }));
+      expect(shows(rail)).toBe(true);
     });
 
     // Swapped tabs slide past each other. The open tab slides over its

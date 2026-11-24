@@ -17,8 +17,8 @@ use smithay::reexports::wayland_server::protocol::wl_buffer;
 use smithay::reexports::wayland_server::Resource as _;
 
 use crate::engine::{
-    BufferId, Capture, Clipboard, Connector, Dmabuf, Engine, EngineError, Event, Pointer, Request,
-    SurfaceId, VirtualDisplay, LIBRARY, NEWEST_BOX,
+    BufferId, Capture, Clipboard, Color, Connector, Dmabuf, Engine, EngineError, Event, Pointer,
+    Request, Subsurface, SurfaceId, VirtualDisplay, LIBRARY, NEWEST_BOX,
 };
 use crate::engine_buffers::{HeldBuffers, Returned};
 use crate::engine_imports::{Imports, Route, Then};
@@ -40,20 +40,39 @@ pub enum Submitted {
     Upload(UploadId),
 }
 
-/// The key an import is recorded under.
+/// Which buffer a frame shows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ImportKey {
+enum BufferKey {
     Client(ObjectId),
     Upload(UploadId),
 }
 
+/// The key an import is recorded under: the buffer, and the color it was
+/// imported in, since viz fixes a buffer's color at import.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ImportKey {
+    buffer: BufferKey,
+    /// The surface's [`Colored::generation`] at import.
+    color: u64,
+}
+
 impl Submitted {
-    fn key(&self) -> ImportKey {
+    fn key(&self) -> BufferKey {
         match self {
-            Submitted::Client(buffer) => ImportKey::Client(buffer.id()),
-            Submitted::Upload(id) => ImportKey::Upload(*id),
+            Submitted::Client(buffer) => BufferKey::Client(buffer.id()),
+            Submitted::Upload(id) => BufferKey::Upload(*id),
         }
     }
+}
+
+/// How an app's pixels encode color, as the engine was last told.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Colored {
+    /// `None` is sRGB.
+    color: Option<Color>,
+    /// Names this color in [`ImportKey`]: 0 for sRGB, a new number for each
+    /// change otherwise.
+    generation: u64,
 }
 
 /// What became of a frame handed to [`EngineSession::submit`].
@@ -196,6 +215,28 @@ pub struct EngineSession {
     /// Imports whose buffer the client destroyed while it was on screen. See
     /// `engine_retired`.
     retired: Retired,
+    /// Each surface's subsurfaces as last set, by app id, so a restarted
+    /// engine gets them again.
+    children: HashMap<String, Vec<Child>>,
+    /// Each app's color, for apps that described one. See
+    /// [`EngineSession::describe`].
+    colors: HashMap<String, Colored>,
+    /// The last [`Colored::generation`] handed out.
+    last_color: u64,
+}
+
+/// One of a surface's subsurfaces, as [`EngineSession::set_children`] takes
+/// it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Child {
+    /// The id the compositor gave the subsurface. The host never sees it.
+    pub app_id: String,
+    /// Logical, from the top left of its parent's crop.
+    pub position: (f64, f64),
+    /// Logical.
+    pub size: (f64, f64),
+    /// Whether it is drawn over its parent rather than under it.
+    pub above: bool,
 }
 
 /// What [`EngineSession::window_gone`] did.
@@ -224,6 +265,9 @@ impl EngineSession {
             waiting: Waiting::default(),
             lingering: Lingering::default(),
             retired: Retired::default(),
+            children: HashMap::new(),
+            colors: HashMap::new(),
+            last_color: 0,
         })
     }
 
@@ -267,6 +311,11 @@ impl EngineSession {
             // it. `surface_for` logs refusals; their frames end up in `blank`.
             for app_id in apps.values() {
                 let _ = self.surface_for(app_id);
+            }
+            // Before the frames that draw them.
+            let parents: Vec<String> = self.children.keys().cloned().collect();
+            for parent in parents {
+                self.send_the_children(&parent);
             }
         }
 
@@ -386,6 +435,13 @@ impl EngineSession {
         self.engine.set_gamma(display, ramp);
     }
 
+    /// Sets the color matrix display `display` draws with in linear light.
+    ///
+    /// See [`crate::engine::Engine::set_color_matrix`].
+    pub fn set_color_matrix(&self, display: i64, matrix: &[f32; 9]) {
+        self.engine.set_color_matrix(display, matrix);
+    }
+
     /// Hands one emulated event to the shell's window.
     ///
     /// See [`crate::engine::Engine::inject_input`].
@@ -399,6 +455,39 @@ impl EngineSession {
     /// is told rather than asked.
     pub fn set_clipboard(&self, clipboard: Clipboard, contents: &Contents) {
         self.engine.set_clipboard(clipboard, contents);
+    }
+
+    /// Sets how `app_id`'s pixels encode color, from its committed image
+    /// description; `None` is sRGB. Call it before each submit: a change makes
+    /// the next frames' buffers import again, in the new color.
+    pub fn describe(&mut self, app_id: &str, color: Option<Color>) {
+        let known = self.colors.get(app_id).map(|colored| colored.color);
+        if known.unwrap_or_default() == color {
+            return;
+        }
+        let generation = match color {
+            Some(_) => {
+                self.last_color += 1;
+                self.last_color
+            }
+            None => 0,
+        };
+        self.colors
+            .insert(app_id.to_owned(), Colored { color, generation });
+        if let Some(surface) = self.surfaces.get(app_id) {
+            self.engine.set_surface_color(surface, color.as_ref());
+        }
+    }
+
+    /// The [`ImportKey`] `buffer` is imported under for `app_id`.
+    fn import_key(&self, app_id: &str, buffer: &Submitted) -> ImportKey {
+        ImportKey {
+            buffer: buffer.key(),
+            color: self
+                .colors
+                .get(app_id)
+                .map_or(0, |colored| colored.generation),
+        }
     }
 
     /// Submits a buffer as `app_id`'s window, at the box `at_box` names, read
@@ -496,7 +585,7 @@ impl EngineSession {
         damage: (i32, i32, i32, i32),
         now: Instant,
     ) -> PutUp {
-        let key = frame.buffer.key();
+        let key = self.import_key(app_id, &frame.buffer);
         let dmabuf = match (&frame.descriptor, self.imports.knows(surface, &key)) {
             (_, true) => None,
             // Mapping memory is quick, so a window in memory is imported while
@@ -684,7 +773,8 @@ impl EngineSession {
                 | Event::Presented { .. }
                 | Event::Disconnected
                 | Event::Compositing { .. }
-                | Event::BrowserWindows(_) => {}
+                | Event::BrowserWindows(_)
+                | Event::InputDevices(_) => {}
             }
         }
         dispatched.events = events;
@@ -754,6 +844,8 @@ impl EngineSession {
     /// released now.
     pub fn window_gone(&mut self, app_id: &str) -> WindowGone {
         self.mapped.remove(app_id);
+        self.children.remove(app_id);
+        self.colors.remove(app_id);
         let Some(surface) = self.surfaces.forget(app_id) else {
             return WindowGone::default();
         };
@@ -796,9 +888,9 @@ impl EngineSession {
     ///
     /// An import still on screen is retired instead (see `engine_retired`).
     pub fn buffer_destroyed(&mut self, buffer: &wl_buffer::WlBuffer) -> Vec<Release> {
-        let key = ImportKey::Client(buffer.id());
+        let key = BufferKey::Client(buffer.id());
         let embeds = self.waiting.take_where(|frame| frame.buffer.key() == key);
-        let forgotten = self.imports.forget(&key);
+        let forgotten = self.imports.forget(|import| import.buffer == key);
         let held: Vec<(SurfaceId, Submitted)> = forgotten
             .ids
             .into_iter()
@@ -837,7 +929,8 @@ impl EngineSession {
     /// fds. [`crate::uploads`] frees only buffers the engine is not holding or
     /// waiting to show.
     pub fn upload_dropped(&mut self, upload: UploadId) {
-        let forgotten = self.imports.forget(&ImportKey::Upload(upload));
+        let key = BufferKey::Upload(upload);
+        let forgotten = self.imports.forget(|import| import.buffer == key);
         assert!(
             forgotten.waited.is_empty(),
             "a freed upload had a frame waiting for its import"
@@ -899,6 +992,61 @@ impl EngineSession {
         true
     }
 
+    /// Sets `app_id`'s subsurfaces, bottom to top, which its frames draw from
+    /// its next one. See [`crate::engine::Engine::set_children`]. Returns
+    /// whether they changed: if so and no frame of its own follows, the
+    /// caller [`EngineSession::redraw`]s it.
+    ///
+    /// Each child's surface is brokered now, so the parent's frame can embed
+    /// it before it has a frame of its own.
+    pub fn set_children(&mut self, app_id: &str, children: Vec<Child>) -> bool {
+        if self
+            .children
+            .get(app_id)
+            .map_or(children.is_empty(), |set| *set == children)
+        {
+            return false;
+        }
+        for child in &children {
+            let _ = self.surface_for(&child.app_id);
+        }
+        self.children.insert(app_id.to_owned(), children);
+        self.send_the_children(app_id);
+        true
+    }
+
+    /// Shows `app_id`'s last frame again with its subsurfaces as last set.
+    /// See [`crate::engine::Engine::redraw`].
+    pub fn redraw(&self, app_id: &str) {
+        if let Some(surface) = self.surfaces.get(app_id) {
+            self.engine.redraw(surface);
+        }
+    }
+
+    /// Tells the engine `app_id`'s subsurfaces as last set.
+    fn send_the_children(&mut self, app_id: &str) {
+        let Some(children) = self.children.get(app_id).cloned() else {
+            return;
+        };
+        let Some(surface) = self.surface_for(app_id) else {
+            return;
+        };
+        let children: Vec<Subsurface> = children
+            .iter()
+            .filter_map(|child| {
+                Some(Subsurface {
+                    surface: self.surfaces.get(&child.app_id)?,
+                    x: child.position.0,
+                    y: child.position.1,
+                    width: child.size.0,
+                    height: child.size.1,
+                    above: u8::from(child.above),
+                })
+            })
+            .collect();
+        self.engine.set_children(surface, &children);
+    }
+
     /// Which app a surface belongs to, for an event that names only the
     /// surface.
     pub fn app_for(&self, surface: SurfaceId) -> Option<&str> {
@@ -915,6 +1063,10 @@ impl EngineSession {
             Ok(surface) => {
                 tracing::debug!(%app_id, surface, "the browser brokered a frame sink");
                 self.surfaces.brokered(app_id, surface);
+                // A surface starts in sRGB, as on a reconnect.
+                if let Some(color) = self.colors.get(app_id).and_then(|colored| colored.color) {
+                    self.engine.set_surface_color(surface, Some(&color));
+                }
                 Some(surface)
             }
             Err(err) => {

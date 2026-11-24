@@ -41,10 +41,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  2 files changed, 40 insertions(+), 6 deletions(-)
 
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-index f90abb8..258b13e 100644
+index c99533f..ba9c573 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-@@ -2133,8 +2133,8 @@ bool HTMLCanvasElement::CreateLayer() {
+@@ -2162,8 +2162,8 @@ bool HTMLCanvasElement::CreateLayer() {
  }
  
  ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
@@ -54,7 +54,7 @@ index f90abb8..258b13e 100644
      ExceptionState& exception_state) {
    LocalFrame* frame = GetDocument().GetFrame();
    if (!frame || !frame->GetPage()) {
-@@ -2148,14 +2148,15 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
+@@ -2177,14 +2177,15 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
    // transferControlToOffscreen() and a desynchronized context both build one.
    // Embedding then would point that layer somewhere else and strand whatever
    // was submitting to it, which is a mistake worth refusing rather than
@@ -73,7 +73,7 @@ index f90abb8..258b13e 100644
      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                        "Could not create a layer.");
      return EmptyPromise();
-@@ -2165,15 +2166,39 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
+@@ -2194,15 +2195,39 @@ ScriptPromise<IDLUndefined> HTMLCanvasElement::embedExternalSurface(
        MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
    auto promise = resolver->Promise();
  
@@ -116,7 +116,7 @@ index f90abb8..258b13e 100644
      ScriptPromiseResolver<IDLUndefined>* resolver,
      const std::optional<viz::SurfaceId>& surface_id) {
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.h b/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
-index 96c3ecb..313c1dc 100644
+index 879f1b0..64c863d 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.h
 @@ -331,6 +331,11 @@ class CORE_EXPORT HTMLCanvasElement final

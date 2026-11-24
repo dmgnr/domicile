@@ -10,6 +10,7 @@ const meta = {
     detail: "WH-1000XM4",
     icon: <BluetoothIcon size={15} weight="bold" />,
     label: "Bluetooth",
+    lit: true,
     onMore: () => undefined,
   },
   component: QuickTileComponent,
@@ -40,7 +41,12 @@ export const Wired: StoryObj<typeof QuickTileComponent> = {
     detail: "Connected, 1 Gb/s",
     icon: <NetworkIcon size={15} weight="bold" />,
     label: "Wired",
+    lit: true,
   },
+};
+
+export const Unlit: StoryObj<typeof QuickTileComponent> = {
+  args: { detail: "Not connected", lit: false },
 };
 
 export const StateOnly: StoryObj<typeof QuickTileComponent> = {

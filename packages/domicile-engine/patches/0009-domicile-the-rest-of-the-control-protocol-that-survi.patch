@@ -82,7 +82,7 @@ added together for that reason.
  2 files changed, 61 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 57c89b6..3bd5312 100644
+index 5c1e4e3..1ae9218 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -274,7 +274,25 @@ generated_dictionary_sources_in_modules = [
@@ -120,7 +120,7 @@ index 57c89b6..3bd5312 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_effective_connection_type.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_effective_connection_type.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_encoded_audio_chunk_type.cc",
-@@ -2323,7 +2343,27 @@ generated_interface_sources_in_modules = [
+@@ -2327,7 +2347,27 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_extendable_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_extendable_message_event.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_extendable_message_event.h",

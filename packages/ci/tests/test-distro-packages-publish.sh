@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests `distro-packages-publish.sh`, which releases the distribution packages
-# of a commit stable.yml promoted.
+# Tests `distro-packages-publish.sh`, which publishes the distribution packages
+# of a commit stable.yml promoted as the builds repository's `packages-latest`.
 #
 # Runs the script in a scratch repository with a `gh` that records its
 # arguments and answers from files in `$WORK/gh`.
@@ -45,10 +45,10 @@ before() { # what, first, second, hay
 }
 
 # A `gh` that logs each call, and each SHA256SUMS it is handed.
-#   $GH/exists/<tag>    `release view <tag>` succeeds
+#   $GH/exists          `release view packages-latest` succeeds
 #   $GH/assets          the asset names of packages-latest
-#   $GH/latest          the commit packages-latest's tag points at
-#   $GH/compare         the status of the promoted commit against that one
+#   $GH/body            its notes
+#   $GH/compare         the status of the promoted commit against the one it names
 GH="$WORK/gh"
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/gh" <<'FAKE'
@@ -61,10 +61,12 @@ for arg in "$@"; do
 done
 case "$1 $2" in
   ("release view")
-    [ -e "$GH/exists/$3" ] || exit 1
-    case "$*" in (*--json*) cat "$GH/assets" ;; esac
+    [ -e "$GH/exists" ] || exit 1
+    case "$*" in
+      (*"--json assets"*) cat "$GH/assets" ;;
+      (*"--json body"*) cat "$GH/body" ;;
+    esac
     ;;
-  ("api repos/cprussin/domicile/commits/packages-latest") cat "$GH/latest" ;;
   ("api repos/cprussin/domicile/compare/"*) cat "$GH/compare" ;;
 esac
 FAKE
@@ -74,7 +76,7 @@ chmod +x "$WORK/bin/gh"
 REPO="$WORK/repo"
 setup() { # checked series, official series
   rm -rf "$REPO" "$GH"
-  mkdir -p "$GH/exists"
+  mkdir -p "$GH"
   git init -q -b main "$REPO"
   git -C "$REPO" config user.email ci@domicile.invalid
   git -C "$REPO" config user.name "domicile CI"
@@ -101,70 +103,61 @@ STABLE="domicile_amd64.deb domicile_amd64.noapparmor.deb domicile-fedora.x86_64.
 publish() {
   : >"$WORK/log"
   (cd "$REPO" && PATH="$WORK/bin:$PATH" GH_LOG="$WORK/log" GH="$GH" \
-    GITHUB_REPOSITORY=cprussin/domicile \
+    GITHUB_REPOSITORY=cprussin/domicile GH_TOKEN=fake \
     bash .github/scripts/distro-packages-publish.sh "$PACKAGES" 2>&1)
 }
 
-echo "a commit with the official engine is released"
+echo "a commit with the official engine is released as packages-latest"
 setup aaaa aaaa
 head="$(git -C "$REPO" rev-parse HEAD)"
 if out="$(publish)"; then ok "the publish succeeds"; else fail "the publish succeeds" "$out"; fi
 log="$(cat "$WORK/log")"
-contains "as packages-<commit>, at the commit" \
-  "gh release create packages-${head:0:12} --target $head" "$log"
+contains "in the builds repository, so this one's watchers hear nothing" \
+  "gh release create packages-latest --repo cprussin/domicile-builds" "$log"
+lacks "and no release per commit" "packages-${head:0:12}" "$log"
+lacks "at no commit of this repository, which the builds repository lacks" "--target" "$log"
 contains "not marked latest" "--latest=false" "$log"
+contains "naming the commit it was built from" "built from \`$head\`" "$log"
 contains "naming the package for Debian 12 and Ubuntu 22.04" \
-  'Debian 12 and Ubuntu 22.04: `domicile_*.noapparmor.deb`' "$log"
-contains "with every package" "$PACKAGES/SHA256SUMS $PACKAGES/domicile-$V-1-x86_64.pkg.tar.zst" "$log"
-latest="$(printf '%s\n' "$log" | sed -n '/release create packages-latest/,$p')"
-contains "and as packages-latest, at the commit" \
-  "gh release create packages-latest --target $head" "$latest"
-contains "naming the release it mirrors" "packages-${head:0:12}" "$latest"
-contains "not marked latest either" "--latest=false" "$latest"
+  'Debian 12 and Ubuntu 22.04: `domicile_amd64.noapparmor.deb`' "$log"
 for name in $STABLE; do
-  contains "with $name" "/$name" "$latest"
-  contains "summed under that name" "  $name" "$latest"
+  contains "with $name" "/$name" "$log"
+  contains "summed under that name" "  $name" "$log"
 done
 
 echo "a newer commit replaces the assets of packages-latest"
-touch "$GH/exists/packages-latest"
-echo 0123456789abcdef0123456789abcdef01234567 >"$GH/latest"
+touch "$GH/exists"
+old=0123456789abcdef0123456789abcdef01234567
+printf 'The newest Domicile packages, built from `%s` with the official engine\n' "$old" >"$GH/body"
 echo ahead >"$GH/compare"
 printf '%s\n' domicile_amd64.deb domicile_old.deb SHA256SUMS >"$GH/assets"
 if out="$(publish)"; then ok "the publish succeeds"; else fail "the publish succeeds" "$out"; fi
 log="$(cat "$WORK/log")"
-contains "compared with the commit packages-latest mirrors" \
-  "gh api repos/cprussin/domicile/compare/0123456789abcdef0123456789abcdef01234567...$head" "$log"
+contains "compared with the commit packages-latest names" \
+  "gh api repos/cprussin/domicile/compare/$old...$head" "$log"
 upload="$(printf '%s\n' "$log" | grep 'release upload packages-latest')"
-contains "uploaded over the same names" "gh release upload packages-latest --clobber" "$upload"
+contains "uploaded over the same names" \
+  "gh release upload packages-latest --repo cprussin/domicile-builds --clobber" "$upload"
 for name in $STABLE; do
   contains "with $name" "/$name" "$upload"
 done
 contains "SHA256SUMS last" "/SHA256SUMS" "${upload##* }"
 contains "an asset it no longer has is deleted" \
-  "gh release delete-asset packages-latest domicile_old.deb --yes" "$log"
+  "gh release delete-asset packages-latest domicile_old.deb --repo cprussin/domicile-builds --yes" "$log"
 lacks "and no other" "delete-asset packages-latest domicile_amd64.deb" "$log"
 before "after the upload" "release upload packages-latest" "delete-asset" "$log"
-contains "the notes name the release it mirrors" \
-  "gh release edit packages-latest --notes" "$log"
-contains "its tag moves to the commit" \
-  "gh api --method PATCH repos/cprussin/domicile/git/refs/tags/packages-latest -f sha=$head -F force=true" "$log"
+edit="$(printf '%s\n' "$log" | sed -n '/release edit packages-latest/,$p')"
+contains "the notes name the new commit" "built from \`$head\`" "$edit"
 
-echo "a release that exists gets its assets again"
-touch "$GH/exists/packages-${head:0:12}"
+echo "the same commit publishes again"
 echo identical >"$GH/compare"
 if out="$(publish)"; then ok "the publish succeeds"; else fail "the publish succeeds" "$out"; fi
-log="$(cat "$WORK/log")"
-contains "by an upload" "gh release upload packages-${head:0:12} --clobber" "$log"
-lacks "and not a second release" "release create" "$log"
-contains "and packages-latest's again" "gh release upload packages-latest --clobber" "$log"
+contains "uploading its assets again" "gh release upload packages-latest" "$(cat "$WORK/log")"
 
 echo "an older commit publishing late leaves packages-latest alone"
-rm "$GH/exists/packages-${head:0:12}"
 echo behind >"$GH/compare"
 if out="$(publish)"; then ok "the publish succeeds"; else fail "the publish succeeds" "$out"; fi
 log="$(cat "$WORK/log")"
-contains "its own release is made" "gh release create packages-${head:0:12}" "$log"
 lacks "packages-latest gets no assets" "release upload packages-latest" "$log"
 lacks "or notes" "release edit" "$log"
 contains "saying why" "older than" "$out"
@@ -177,6 +170,14 @@ else
   contains "the publish fails, saying why" "diverged" "$out"
 fi
 lacks "packages-latest is untouched" "release upload packages-latest" "$(cat "$WORK/log")"
+
+echo "notes that name no commit fail loudly"
+echo "no commit here" >"$GH/body"
+if out="$(publish)"; then
+  fail "the publish fails" "it succeeded: $out"
+else
+  contains "the publish fails, saying why" "does not say which commit" "$out"
+fi
 
 echo "a commit with the checked engine is not released"
 setup bbbb aaaa

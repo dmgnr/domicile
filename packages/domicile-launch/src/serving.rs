@@ -60,10 +60,13 @@ mod tests {
     use std::cell::Cell;
     use std::path::PathBuf;
 
+    use crate::shell_path::ShellFiles;
+
     fn shell(root: &str) -> Shell {
         Shell {
             module: PathBuf::from("shell.js"),
             root: PathBuf::from(root),
+            files: ShellFiles::Directory,
         }
     }
 

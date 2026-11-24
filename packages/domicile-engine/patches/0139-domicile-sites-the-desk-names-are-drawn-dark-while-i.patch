@@ -25,10 +25,10 @@ job builds it on `crux`.
  3 files changed, 27 insertions(+)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 38fef1b..b859d97 100644
+index f5b8c46..1a7d630 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2720,6 +2720,7 @@ source_set("browser") {
+@@ -2731,6 +2731,7 @@ source_set("browser") {
      "//components/domicile:color_scheme",
      "//components/domicile:control_channel",
      "//components/domicile:desktop_prefs",
@@ -37,7 +37,7 @@ index 38fef1b..b859d97 100644
      "//components/domicile:shell_origin",
      "//components/domicile:shell_scheme",
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index ab9fbfe..3bb3985 100644
+index 803836d..0182048 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
 @@ -15,6 +15,7 @@
@@ -48,7 +48,7 @@ index ab9fbfe..3bb3985 100644
  #include "components/domicile/browser/keyboard_layout.h"
  #include "components/domicile/browser/shell_origin.h"
  #include "components/domicile/browser/web_view_guest.h"
-@@ -595,6 +596,12 @@ void PopulateChromeFrameBinders(
+@@ -627,6 +628,12 @@ void PopulateChromeFrameBinders(
                  base::BindPostTask(
                      content::GetUIThreadTaskRunner({}),
                      base::BindRepeating(&ui::SetDeskCursorTheme)),
@@ -62,7 +62,7 @@ index ab9fbfe..3bb3985 100644
                  // of its <webview>s is told to, and no other page.
                  domicile::Page{frame->GetGlobalId().child_id.value(),
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index d3d2cdb..c068b3d 100644
+index 1e4aa96..5165548 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
 @@ -4,6 +4,7 @@
@@ -73,7 +73,7 @@ index d3d2cdb..c068b3d 100644
  #include "components/domicile/browser/shell_source.h"
  #include "components/domicile/browser/shell_url_loader_factory.h"
  #include "components/domicile/common/domicile_scheme.h"
-@@ -5065,6 +5066,13 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
+@@ -5064,6 +5065,13 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
                                main_frame_site.GetSecurityPrincipal(),
                                web_contents, *profile);
  
@@ -87,7 +87,7 @@ index d3d2cdb..c068b3d 100644
    web_prefs->root_scrollbar_theme_color =
        GetRootScrollbarThemeColor(web_contents);
  
-@@ -5209,6 +5217,17 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
+@@ -5212,6 +5220,17 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
        web_prefs->preferred_root_scrollbar_color_scheme !=
            old_preferred_root_scrollbar_color_scheme;
  

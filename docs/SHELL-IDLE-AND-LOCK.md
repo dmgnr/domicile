@@ -187,7 +187,7 @@ domicile.session.lock();        // lock now; the lock screen goes up when `locke
 The compositor enforces the lock. While `locked` is `true`:
 
 - No client receives any key, click, scroll or pointer motion.
-- `windows.close`, `processes.launch` and `clipboard.copy` do nothing and log a warning.
+- `windows.close`, `processes.launch`, `clipboard.copy` and `clipboard.remove` do nothing and log a warning.
 - `files.search` never settles. Retry once `locked` is `false`.
 - `browser.fetch` rejects. The engine refuses it, from the compositor's
   `locked` message.
@@ -203,6 +203,10 @@ the page in devtools does not unlock the desktop.
 ### Drawing the lock screen
 
 - Your page still receives keys, so it can take a passphrase in a field.
+- To keep focus in the field, take it back after a `focusin` elsewhere has
+  finished (`setTimeout`), not inside the handler. Focused from inside it, the
+  field takes keys but does not match `:focus` when a `<webview>` was taking
+  focus.
 - `unlock` sends it to the compositor. On success, `locked` becomes `false` on
   every shell. Clear the lock screen then, not on your own submit.
 - A passphrase that did not unlock fires `lockchange` with `locked` still

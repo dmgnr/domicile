@@ -19,7 +19,7 @@ job builds it on `crux`.
  1 file changed, 5 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 542d51e..9940644 100644
+index bfa2ba6..8c672dc 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -9,6 +9,7 @@
@@ -30,7 +30,7 @@ index 542d51e..9940644 100644
  #include "chrome/browser/domicile/domicile_pointer_hiding.h"
  #include "chrome/browser/domicile/domicile_shell_windows.h"
  #include "components/domicile/browser/desktop_prefs.h"
-@@ -1832,6 +1833,10 @@ void ChromeBrowserMainParts::PostBrowserStart() {
+@@ -1833,6 +1834,10 @@ void ChromeBrowserMainParts::PostBrowserStart() {
    // as the desk's config says. Here for the same reason.
    domicile::StartPointerHiding();
  

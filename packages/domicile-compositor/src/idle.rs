@@ -390,6 +390,8 @@ pub fn somebody_is_here(request: &ClientRequest) -> Option<&'static str> {
         | ClientRequest::AddVirtualMonitor { .. }
         | ClientRequest::RemoveVirtualMonitor { .. }
         | ClientRequest::ResizeVirtualMonitor { .. }
+        // A command, maybe a script's, not a hand.
+        | ClientRequest::ConfigureDisplay { .. }
         // A key or a click, which already counted.
         | ClientRequest::SelectKeymap { .. }
         | ClientRequest::SwitchShortcutsInhibitor { .. }
@@ -408,7 +410,9 @@ pub fn somebody_is_here(request: &ClientRequest) -> Option<&'static str> {
         // not pass through here.
         | ClientRequest::ClipboardCopied { .. }
         | ClientRequest::CopyClipboardEntry { .. }
+        | ClientRequest::RemoveClipboardEntry { .. }
         | ClientRequest::ActivateTrayItem { .. }
+        | ClientRequest::TrayMenuClicked { .. }
         | ClientRequest::DismissNotifications { .. }
         | ClientRequest::InvokeNotificationAction { .. }
         | ClientRequest::ReplyToNotification { .. }
@@ -476,6 +480,8 @@ pub fn darkened(displays: &[Display], scanout: &[Connector]) -> Vec<Connector> {
                 mode: None,
                 refresh_mhz: None,
                 adaptive_sync: false,
+                hdr: false,
+                sdr_white: domicile_config::DEFAULT_SDR_WHITE,
             }
         })
         .collect()
@@ -589,6 +595,7 @@ mod tests {
             refresh_mhz: 60_000,
             modes: Vec::new(),
             adaptive_sync: AdaptiveSync::Unsupported,
+            hdr: Default::default(),
         }
     }
 
@@ -1083,6 +1090,8 @@ mod tests {
                     mode: None,
                     refresh_mhz: None,
                     adaptive_sync: false,
+                    hdr: false,
+                    sdr_white: domicile_config::DEFAULT_SDR_WHITE,
                 },
                 Connector {
                     id: 7,
@@ -1094,6 +1103,8 @@ mod tests {
                     mode: None,
                     refresh_mhz: None,
                     adaptive_sync: false,
+                    hdr: false,
+                    sdr_white: domicile_config::DEFAULT_SDR_WHITE,
                 },
             ]
         );
@@ -1112,6 +1123,8 @@ mod tests {
             mode: None,
             refresh_mhz: None,
             adaptive_sync: false,
+            hdr: false,
+            sdr_white: domicile_config::DEFAULT_SDR_WHITE,
         };
         assert_eq!(
             darkened(&[monitor(7, (1920, 0))], &[lit]),
@@ -1164,6 +1177,8 @@ mod tests {
                     app_id: "app-1".into(),
                     dx: 2.0,
                     dy: 1.0,
+                    dx_unaccel: 1.0,
+                    dy_unaccel: 0.5,
                 },
             ),
             (
@@ -1296,6 +1311,7 @@ mod tests {
                 "a program being started",
                 ClientRequest::Spawn {
                     command: vec!["foot".into()],
+                    answer: None,
                 },
             ),
             (
@@ -1314,11 +1330,19 @@ mod tests {
                 ClientRequest::CopyClipboardEntry { entry: 1 },
             ),
             (
+                "the shell removing a copy from the clipboard history",
+                ClientRequest::RemoveClipboardEntry { entry: 1 },
+            ),
+            (
                 "the shell clicking a tray icon",
                 ClientRequest::ActivateTrayItem {
                     id: ":1.9/StatusNotifierItem".into(),
                     action: TrayAction::Primary,
                 },
+            ),
+            (
+                "the shell clicking a tray menu entry",
+                ClientRequest::TrayMenuClicked { bus: ":1.9".into() },
             ),
             (
                 "the shell clearing notifications",

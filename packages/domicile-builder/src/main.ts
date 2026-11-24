@@ -1,13 +1,17 @@
 #!/usr/bin/env bun
 // `domicile-builder (--entry <file> | --package <spec> | --evaluate <config>)
 // --domicile <install> --cache <dir>`
+// `domicile-builder --serve <file> --socket <path> --domicile <install>
+// --cache <dir>`
 //
-// Builds an entry or package into a shell module, or evaluates a config module
-// into the compositor's JSON. Reports each step on stdout as a JSON line.
+// Builds an entry or package into a shell module, evaluates a config module
+// into the compositor's JSON, or serves an entry with hot module replacement
+// until stopped. Reports each step on stdout as a JSON line.
 //
 // Only a JSON object with a `step` field is a step. Other stdout output, such
 // as a tool's warnings, is the build log, which `domicile` shows as is.
 
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -127,6 +131,41 @@ const build = async (
   }
 };
 
+/**
+ * Serve `entry` on `socket` with hot module replacement until the process is
+ * stopped. Vite's dependency cache is kept per project under `cache`.
+ */
+const serveEntry = async (
+  entry: string,
+  socket: string,
+  domicile: string,
+  cache: string,
+): Promise<void> => {
+  const { config, project } = prepared(entry);
+  installed(project);
+  const { DEV_MODULE, serve } = await import("./serve");
+  const serving = await serve({
+    cache: path.join(
+      cache,
+      "dev",
+      createHash("sha256").update(project).digest("hex").slice(0, 16),
+    ),
+    config,
+    domicile,
+    entry,
+    project,
+    socket,
+  });
+  say(Step.Serving(socket, DEV_MODULE));
+  await new Promise<void>((resolve, reject) => {
+    const stop = () => {
+      serving.close().then(resolve, reject);
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+};
+
 /** Evaluate the config module `config` into the JSON the compositor reads. */
 const evaluateConfig = async (
   config: string,
@@ -183,15 +222,39 @@ const { values } = parseArgs({
     entry: { type: "string" },
     evaluate: { type: "string" },
     package: { type: "string" },
+    serve: { type: "string" },
+    socket: { type: "string" },
   },
 });
-const { cache, domicile, entry, evaluate: config, package: spec } = values;
+const {
+  cache,
+  domicile,
+  entry,
+  evaluate: config,
+  package: spec,
+  serve: served,
+  socket,
+} = values;
 
 /** Start what the arguments ask for, or `undefined` if they are invalid. */
 const asked = (): Promise<void> | undefined => {
-  const asking = [entry, spec, config].filter((one) => one !== undefined);
-  if (domicile === undefined || cache === undefined || asking.length !== 1) {
+  const asking = [entry, spec, config, served].filter(
+    (one) => one !== undefined,
+  );
+  if (
+    domicile === undefined ||
+    cache === undefined ||
+    asking.length !== 1 ||
+    (served === undefined) !== (socket === undefined)
+  ) {
     return undefined;
+  } else if (served !== undefined && socket !== undefined) {
+    return serveEntry(
+      path.resolve(served),
+      path.resolve(socket),
+      path.resolve(domicile),
+      path.resolve(cache),
+    );
   } else if (config !== undefined) {
     return evaluateConfig(
       path.resolve(config),
@@ -215,7 +278,7 @@ const building = asked();
 if (building === undefined) {
   say(
     Step.Failed(
-      "usage: domicile-builder (--entry <file> | --package <spec> | --evaluate <config>) --domicile <install> --cache <dir>",
+      "usage: domicile-builder (--entry <file> | --package <spec> | --evaluate <config> | --serve <file> --socket <path>) --domicile <install> --cache <dir>",
     ),
   );
   process.exit(2);

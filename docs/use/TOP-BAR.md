@@ -24,7 +24,7 @@ From left to right:
 - **Volume**: scroll to step, middle-click to mute, click for the mixer:
   outputs, inputs, each app's sound and each card's profile.
 - **Bluetooth**: switch it, and connect, pair or forget devices.
-- **Network**: Wi-Fi networks to join, and each connection's details.
+- **Network**: Wi-Fi networks to join, each connection's details, and your saved networks to forget or join automatically.
   Joining a network with a sign-in page shows that page.
 - **Battery**: the level, red at 10%.
 - **Bell**: [notifications](NOTIFICATIONS.md).

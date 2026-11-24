@@ -13,7 +13,7 @@
 {"type":"app_closed","app_id":"app-1"}
 {"type":"app_cursor","app_id":"app-2","cursor":"vertical-text"}
 {"type":"app_cursor","app_id":"app-2","cursor":"default","image":{"png":"iVBORw0KGgo=","hotspot":[1,2],"scale":2}}
-{"type":"app_pointer_constraint","app_id":"app-2","constraint":"lock"}
+{"type":"app_pointer_constraint","app_id":"app-2","constraint":"confine","region":[{"x":10,"y":20,"width":300,"height":200}]}
 {"type":"app_presented","app_id":"app-2"}
 {"type":"app_suspended","app_id":"app-2","suspended":true}
 {"type":"app_transient_for","app_id":"app-4","transient_for":"app-2"}
@@ -22,12 +22,27 @@
 {"type":"app_anchored","app_id":"app-4","anchor":null}
 {"type":"app_urgent","app_id":"app-2","urgent":true}
 {"type":"app_inhibits_shortcuts","app_id":"app-2","inhibits":true}
-{"type":"displays","displays":[{"name":"left","position":[0,0],"size":[1920,1080],"scale":1,"mode":[1920,1080],"refresh_mhz":60000,"adaptive_sync":"unsupported","transform":"normal"},{"name":"right","position":[1920,0],"size":[2560,1440],"scale":2,"mode":[5120,2880],"refresh_mhz":59951,"adaptive_sync":"on","transform":"normal"}]}
-{"type":"displays","displays":[{"name":"domicile-0","position":[0,0],"size":[1280,800],"scale":1,"mode":[1280,800],"refresh_mhz":0,"adaptive_sync":"unsupported","transform":"normal"}]}
-{"type":"displays","displays":[{"name":"drm-3","position":[0,0],"size":[1800,3200],"scale":2,"mode":[3840,2160],"refresh_mhz":0,"adaptive_sync":"unsupported","transform":"rotate-270"}]}
+{"type":"displays","displays":[{"name":"left","position":[0,0],"size":[1920,1080],"scale":1,"mode":[1920,1080],"refresh_mhz":60000,"adaptive_sync":"unsupported","hdr":"unsupported","peak_luminance":0,"sdr_white":0,"transform":"normal"},{"name":"right","position":[1920,0],"size":[2560,1440],"scale":2,"mode":[5120,2880],"refresh_mhz":59951,"adaptive_sync":"on","hdr":"on","peak_luminance":1000,"sdr_white":203,"transform":"normal"}]}
+{"type":"displays","displays":[{"name":"domicile-0","position":[0,0],"size":[1280,800],"scale":1,"mode":[1280,800],"refresh_mhz":0,"adaptive_sync":"unsupported","hdr":"unsupported","peak_luminance":0,"sdr_white":0,"transform":"normal"}]}
+{"type":"displays","displays":[{"name":"drm-3","position":[0,0],"size":[1800,3200],"scale":2,"mode":[3840,2160],"refresh_mhz":0,"adaptive_sync":"unsupported","hdr":"unsupported","peak_luminance":0,"sdr_white":0,"transform":"rotate-270"}]}
+{"type":"monitors","monitors":[{"names":["drm-1","DEL DELL U3219Q 2ZLS413","Dell Inc. DELL U3219Q 2ZLS413"],"hdr":"on"},{"names":["drm-2"],"hdr":"unsupported"}]}
+{"type":"display_list","displays":[{"name":"drm-1","position":[0,0],"size":[1128,752],"scale":2,"mode":[2256,1504],"refresh_mhz":59999,"adaptive_sync":"off","hdr":"unsupported","peak_luminance":0,"sdr_white":0,"transform":"normal","names":["drm-1","eDP-1","BOE NE135A1M-NY1"],"lit":true}]}
+{"type":"window_list","windows":[{"id":"kD3mQ7nW1zT5yB8vC2xF6hJ9pL4sR0gA","kind":"native","title":"notes.org","app":"emacs","pid":4242,"size":[640.0,480.0],"focused":true,"urgent":false,"url":null,"private":false,"engine_id":null,"views":[]},{"id":"Xy7pQ2mN8vB4cZ1kL6tR9wF3hD5sJ0gE","kind":"browser","title":"Inbox","app":null,"pid":null,"size":null,"focused":false,"urgent":false,"url":"https://mail.example/","private":true,"engine_id":"w7","views":[{"id":"w9","position":[0,40],"size":[800,560]}]}]}
+{"type":"status","theme":"dark","locked":false,"keymap":"dvorak","screens_off":false,"held_awake_by":["Firefox"],"capturing":[{"id":2,"app_id":"org.example.Remote","kind":"input_capture","body":{"devices":{"keyboard":false,"pointer":false,"touchscreen":false}}}]}
+{"type":"shell_command_list","commands":[{"usage":"focus left|right|up|down","description":"Move focus to the neighboring window."}]}
+{"type":"shell_binding_list","bindings":[{"mode":"default","chord":"Meta+Left","action":"send-shell focus left"}]}
+{"type":"input_list","inputs":[{"id":9,"name":"Logitech MX Master 3","kind":"mouse","connection":"bluetooth","sys_path":"/sys/devices/input9","vendor":1133,"product":16514}]}
+{"type":"idle_time","seconds":42}
+{"type":"window_acted","refused":"the desktop is locked"}
+{"type":"display_configured","refused":"no monitor HDMI-A-9 is plugged in; domicile list-displays lists them"}
+{"type":"log_levels_set","refused":"the levels make no filter: invalid filter directive"}
+{"type":"desk_shot","shot":{"place":{"position":[-1920,0],"size":[3840,1080]},"width":1568,"height":441}}
+{"type":"emulated","refused":"the desktop is locked"}
+{"type":"executed","refused":"kitty is not on the desktop's PATH; give its full path"}
 {"type":"keymap","keymap":"xkb_keymap {\n  xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n};\n"}
-{"type":"extensions","web_store":["ddkjiahejlhfcafbddmgiahcphecmpfh"],"unpacked":["/home/you/src/my-extension"],"settings":{"ddkjiahejlhfcafbddmgiahcphecmpfh":{"private":true,"file_access":false,"site_access":["github.com","*.example.com"]},"eimadpbcbfnmbkopoojfekhnkhdbieeh":{"user_scripts":true,"site_access":"on_click"}}}
+{"type":"extensions","web_store":["ddkjiahejlhfcafbddmgiahcphecmpfh"],"unpacked":["/home/you/src/my-extension"],"settings":{"ddkjiahejlhfcafbddmgiahcphecmpfh":{"file_access":false,"site_access":["github.com","*.example.com"]},"eimadpbcbfnmbkopoojfekhnkhdbieeh":{"user_scripts":true,"site_access":"on_click"}}}
 {"type":"force_dark","sites":["mail.google.com"]}
+{"type":"spellcheck","enabled":true,"languages":["en-US","de-DE"]}
 {"type":"input_method","composing":true}
 {"type":"composition","serial":1794500000000001,"preedit":{"text":"ni","cursor_begin":2,"cursor_end":2},"commit":"x","delete":[1,0]}
 {"type":"key_passed","serial":1794500000000002,"keycode":31,"pressed":true}
@@ -42,7 +57,7 @@
 {"type":"appearance","high_contrast":false,"reduced_motion":false}
 {"type":"appearance","high_contrast":false,"reduced_motion":false,"cursor":{"name":"Bibata-Modern-Amber-Right","size":64}}
 {"type":"appearance","high_contrast":false,"reduced_motion":false,"cursor_hiding":{"after_ms":1000,"when_typing":true}}
-{"type":"clipboard","entries":[{"id":3,"image":false,"preview":"ssh-rsa AAAAB3NzaC1yc2E"},{"id":1,"image":true,"preview":"Image, 1920 × 1080","thumbnail":"data:image/png;base64,iVBORw0KGgo="}]}
+{"type":"clipboard","entries":[{"id":3,"image":false,"preview":"ssh-rsa AAAAB3NzaC1yc2E","current":true},{"id":1,"image":true,"preview":"Image, 1920 × 1080","thumbnail":"data:image/png;base64,iVBORw0KGgo=","current":false}]}
 {"type":"idle","idle":true}
 {"type":"locked","locked":true}
 {"type":"tray","items":[{"id":":1.42/StatusNotifierItem","title":"Network","icon":"data:image/png;base64,iVBORw0KGgo=","bus":":1.42","menu":"/MenuBar","item_is_menu":false},{"id":"org.kde.StatusNotifierItem-4071-1/StatusNotifierItem","title":"Syncthing","bus":"org.kde.StatusNotifierItem-4071-1","item_is_menu":true}]}
@@ -66,7 +81,7 @@
 {"type":"system_reply","id":10,"reply":{"kind":"failed","error":{"kind":"dbus","message":"org.freedesktop.DBus.Error.ServiceUnknown: The name is not activatable"}}}
 {"type":"system_event","id":9,"event":{"kind":"signal","sender":":1.4","path":"/org/mpris/MediaPlayer2","interface":"org.freedesktop.DBus.Properties","member":"PropertiesChanged","signature":"sa{sv}as","body":"[\"org.mpris.MediaPlayer2.Player\",{},[]]"}}
 {"type":"system_reply","id":11,"reply":{"kind":"sent"}}
-{"type":"system_event","id":12,"event":{"kind":"shell_command","command":["focus","right"]}}
+{"type":"system_event","id":12,"event":{"kind":"shell_command","command":["focus","right"],"sent":4}}
 {"type":"system_event","id":13,"event":{"kind":"unlock_refused","refusal":"too_soon","failures":3,"retry_in_ms":5000}}
 {"type":"system_reply","id":13,"reply":{"kind":"set"}}
 {"type":"system_event","id":14,"event":{"kind":"window_request","app_id":"app-1","request":{"kind":"maximize"}}}
@@ -76,3 +91,4 @@
 {"type":"portal_requests","items":[{"id":3,"app_id":"org.example.Chat","kind":"global_shortcuts","body":{"shortcuts":[{"id":"talk","description":"Push to talk","trigger":"CTRL+ALT+t"},{"id":"mute","description":"Mute"}],"taken":[{"chord":"Ctrl+Alt+m","app_id":"org.example.Other"}]}}],"capturing":[],"shortcuts":[{"id":1,"app_id":"org.example.Other","chord":"Ctrl+Alt+m"}]}
 {"type":"portal_requests","items":[{"id":7,"app_id":"org.example.Photos","kind":"wallpaper","body":{"path":"/home/u/Pictures/sky.jpg","set_on":"lockscreen"}}],"capturing":[],"wallpaper":{"background":"/home/u/.local/state/domicile/wallpaper/background-1.jpg","lockscreen":"/home/u/.local/state/domicile/wallpaper/lockscreen-2.png"}}
 {"type":"portal_requests","items":[{"id":4,"app_id":"org.example.Editor","kind":"print","body":{"title":"Report","printers":[{"name":"office","description":"Office laser","media":[{"name":"iso_a4_210x297mm","label":"A4 (210 × 297 mm)"}],"sides":["one_sided","two_sided_long_edge"],"color_modes":["color","monochrome"],"orientations":["portrait","landscape"],"qualities":["normal"],"copies_max":99,"page_ranges":true,"initial":{"media":"iso_a4_210x297mm","copies":1,"sides":"one_sided","color_mode":"color","orientation":"portrait","quality":"normal","pages":[]}}],"printer":"office","home":"/home/me","pdf":{"name":"pdf","description":"Save to PDF","media":[{"name":"na_letter_8.5x11in","label":"Letter (8.5 × 11 in)"}],"sides":[],"color_modes":[],"orientations":["portrait","landscape"],"qualities":[],"copies_max":1,"page_ranges":true,"initial":{"media":"na_letter_8.5x11in","copies":1,"orientation":"portrait","pages":[]}}}}],"capturing":[]}
+{"type":"browser_profiles","profiles":[{"id":"personal","name":"Personal","color":"#0d9488","private":false,"extensions":null},{"id":"work","name":"Work","color":"#d97706","private":false,"extensions":["aeblfdkhhhdcdjpifhhbdiojplfjncoa"]},{"id":"private","name":"Private","color":"#a78bfa","private":true,"extensions":null}],"default_profile":"personal","default_private_profile":"private","sites":{"github.com/acme":"work"}}

@@ -59,11 +59,11 @@ export const ExtensionAction = ({
   onOpen,
   opened,
 }: Props) => {
-  const { id, popup } = extension;
+  const { id, popup, profile } = extension;
   // `null` because React passes it to a callback ref on unmount.
   const [view, setView] = useState<HTMLWebViewElement | null>(null);
   const shown = useShown(view);
-  const shownPopup = opened?.id === id ? opened.popup : undefined;
+  const shownPopup = opened?.id === id ? opened : undefined;
   return (
     <Popover
       align="start"
@@ -73,7 +73,7 @@ export const ExtensionAction = ({
           onActivate();
           domicile.extensions.activate(id);
           if (popup !== undefined) {
-            onOpen({ id, popup });
+            onOpen({ id, popup, profile });
           }
         } else {
           onOpen(undefined);
@@ -90,11 +90,14 @@ export const ExtensionAction = ({
     >
       {shownPopup !== undefined && (
         <PopupView
+          // A popup in another profile is another page.
+          key={shownPopup.profile}
           name={extension.name}
           onClose={() => {
             onOpen(undefined);
           }}
-          popup={shownPopup}
+          popup={shownPopup.popup}
+          profile={shownPopup.profile}
           setView={setView}
           view={view}
         />
@@ -132,6 +135,8 @@ type PopupViewProps = {
   /** The popup called `window.close()`. */
   onClose: () => void;
   popup: string;
+  /** The browser profile the extension is in, which the popup opens in. */
+  profile: string;
   /** Takes the view, as a callback ref. */
   setView: (view: HTMLWebViewElement | null) => void;
   /** The view `setView` took. */
@@ -149,7 +154,14 @@ type PopupViewProps = {
  * the extension's, so it holds in the extension's other pages too. Its
  * dialogs cover it, and take focus, since the page is paused on them.
  */
-const PopupView = ({ name, onClose, popup, setView, view }: PopupViewProps) => {
+const PopupView = ({
+  name,
+  onClose,
+  popup,
+  profile,
+  setView,
+  view,
+}: PopupViewProps) => {
   const size = useContentSize(view);
   const request = usePermissionRequest(view);
   const deviceRequest = useDeviceRequest(view);
@@ -185,6 +197,9 @@ const PopupView = ({ name, onClose, popup, setView, view }: PopupViewProps) => {
           // that lay out differently in a tab match Chrome. Read once, when the
           // view loads its page.
           extensionpopup=""
+          // The extension's own profile, where its storage and sign-ins are.
+          // Read once, when the view makes its page.
+          profile={profile}
           ref={setView}
           src={popup}
           // Inline because Panda can't read runtime values.

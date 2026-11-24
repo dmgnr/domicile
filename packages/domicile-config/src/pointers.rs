@@ -5,12 +5,12 @@
 //! `docs/DISPLAYS.md#tablets-and-touchscreens`.
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{ConfigError, Connected};
 
 /// A tablet or touchscreen, and the display it covers.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PointerConfig {
     /// The device's evdev name or `phys`, matched exactly.

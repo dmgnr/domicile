@@ -15,8 +15,11 @@
 // event and runs as its `SendShell` binding would. See
 // docs/architecture/KEYBINDINGS.md.
 
+import type { Result } from "@cprussin/option-result";
+
 import type { Gestures } from "./desktop/gestures";
 import type { Keyboard } from "./desktop/keyboard";
+import type { Processes } from "./desktop/processes";
 import type { ShellNamespace } from "./desktop/shell";
 import type { FinishedGesture } from "./gesture-binding";
 import {
@@ -30,22 +33,37 @@ import type { KeyAction, OneKeyAction } from "./key-action";
 import { KeyActionKind } from "./key-action";
 import type { KeybindingsByMode, ShellKeybindings } from "./own-keybindings";
 import { inhibitedChords, ownKeybindings } from "./own-keybindings";
+import type {
+  CommandRan,
+  ShellBinding,
+  ShellCommand,
+  ShellCommandHelp,
+} from "./shell-command";
 import type { Listening, SystemError } from "./system";
 
 /** The initial binding mode. */
 const DEFAULT_MODE = "default";
 
-/** Callbacks {@link bindKeys} calls. */
+/** Callbacks {@link bindKeys} calls, and the commands the shell runs. */
 export type KeyHandlers = {
   /**
-   * A `send-shell` binding was pressed, or `domicile send-shell` sent a
-   * command, with its arguments.
+   * The commands `onCommand` runs, which `domicile list-shell-commands`
+   * prints.
    */
-  onCommand: (args: readonly string[]) => void;
+  commands: readonly ShellCommandHelp[];
+  /**
+   * A `send-shell` binding was pressed, or `domicile send-shell` sent a
+   * command, with its arguments. `Ok({ output })` is printed by
+   * `domicile send-shell`, as a query's answer; `Err` says why the shell did
+   * not run it, which `domicile send-shell` fails with.
+   */
+  onCommand: (args: readonly string[]) => Result<CommandRan, string>;
   /** The binding mode changed. */
   onModeChanged: (mode: string) => void;
   /** The page cannot hear `domicile send-shell`. Logs by default. */
   report?: (error: SystemError) => void;
+  /** A pressed binding's command was not run, and why. Logs by default. */
+  reportRefusal?: (why: string) => void;
 };
 
 /** The handle {@link bindKeys} returns. */
@@ -60,7 +78,8 @@ export type KeyBinding = {
 export type KeyDesktop = {
   readonly gestures: Pick<Gestures, "grab" | "on" | "ungrab">;
   readonly keyboard: Pick<Keyboard, "grab" | "on" | "ungrab">;
-  readonly shell: Pick<ShellNamespace, "commands">;
+  readonly processes: Pick<Processes, "launch">;
+  readonly shell: Pick<ShellNamespace, "commands" | "answer">;
 };
 
 /**
@@ -81,7 +100,13 @@ export type KeyDesktop = {
 export const bindKeys = (
   domicile: KeyDesktop,
   own: ShellKeybindings,
-  { onCommand, onModeChanged, report = reportToConsole }: KeyHandlers,
+  {
+    commands: help,
+    onCommand,
+    onModeChanged,
+    report = reportToConsole,
+    reportRefusal = refusalToConsole,
+  }: KeyHandlers,
 ): KeyBinding => {
   const bindings: KeybindingsByMode = ownKeybindings(own);
   const inhibited = inhibitedChords(own);
@@ -97,7 +122,14 @@ export const bindKeys = (
   const run = (action: OneKeyAction | undefined) => {
     switch (action?.kind) {
       case KeyActionKind.SendShell: {
-        onCommand(action.args);
+        onCommand(action.args).match({
+          Err: reportRefusal,
+          Ok: () => undefined,
+        });
+        break;
+      }
+      case KeyActionKind.Exec: {
+        domicile.processes.launch(action.argv);
         break;
       }
       case KeyActionKind.Mode: {
@@ -122,6 +154,7 @@ export const bindKeys = (
         break;
       }
       case KeyActionKind.SendShell:
+      case KeyActionKind.Exec:
       case KeyActionKind.Mode:
       case undefined: {
         run(action);
@@ -178,7 +211,13 @@ export const bindKeys = (
   const stopGestures = domicile.gestures.on("gesture", (gesture) => {
     onGesture(tracker.feed(gesture));
   });
-  const commands = hearCommands(domicile.shell, onCommand, report);
+  const commands = hearCommands(
+    domicile.shell,
+    help,
+    describedBindings(bindings),
+    onCommand,
+    report,
+  );
   return {
     setMode: (name) => {
       if (bindings.has(name)) {
@@ -218,6 +257,7 @@ const gestureAction = (written: string, action: KeyAction): OneKeyAction => {
       );
     }
     case KeyActionKind.SendShell:
+    case KeyActionKind.Exec:
     case KeyActionKind.Mode: {
       return action;
     }
@@ -243,6 +283,48 @@ const grabEach = (
     }
   });
 
+/**
+ * Every binding, mode by mode, as `domicile list-bindings` prints it: the
+ * chord in its one spelling and the action as words.
+ */
+export const describedBindings = (
+  bindings: KeybindingsByMode,
+): ShellBinding[] =>
+  [...bindings].flatMap(([mode, chords]) =>
+    [...chords].map(([chord, action]) => ({
+      action: actionWords(action),
+      chord,
+      mode,
+    })),
+  );
+
+/**
+ * `action` as words: `send-shell focus left`, `exec foot`, `mode resize`, or
+ * a hold.
+ */
+const actionWords = (action: KeyAction): string => {
+  switch (action.kind) {
+    case KeyActionKind.SendShell: {
+      return ["send-shell", ...action.args].join(" ");
+    }
+    case KeyActionKind.Exec: {
+      return ["exec", ...action.argv].join(" ");
+    }
+    case KeyActionKind.Mode: {
+      return `mode ${action.name}`;
+    }
+    case KeyActionKind.Hold: {
+      return `hold ${actionWords(action.press)} / ${actionWords(action.release)}`;
+    }
+  }
+};
+
+/** Log that a pressed binding's command was not run. */
+const refusalToConsole = (why: string): void => {
+  // biome-ignore lint/suspicious/noConsole: the user fixes a binding whose command the shell does not run, so the shell reports it
+  console.error(why);
+};
+
 /** Log that `domicile send-shell` cannot reach this page. */
 const reportToConsole = (error: SystemError): void => {
   // biome-ignore lint/suspicious/noConsole: the keys still work, and the console is where the shell says `domicile send-shell` cannot reach it
@@ -250,20 +332,30 @@ const reportToConsole = (error: SystemError): void => {
 };
 
 /**
- * Run each command `domicile send-shell` sends through `onCommand`, until
- * `stop`. A stop before listening starts ends it once it does.
+ * Run each command `domicile send-shell` sends through `onCommand` and answer
+ * it, until `stop`. A stop before listening starts ends it once it does.
  */
 const hearCommands = (
-  shell: Pick<ShellNamespace, "commands">,
-  onCommand: (args: readonly string[]) => void,
+  shell: Pick<ShellNamespace, "commands" | "answer">,
+  help: readonly ShellCommandHelp[],
+  bound: readonly ShellBinding[],
+  onCommand: (args: readonly string[]) => Result<CommandRan, string>,
   report: (error: SystemError) => void,
 ): { stop: () => void } => {
   const state: {
     stopped: boolean;
-    listening: Listening<readonly string[]> | undefined;
+    listening: Listening<ShellCommand> | undefined;
   } = { listening: undefined, stopped: false };
+  const runAndAnswer = ({ sent, words }: ShellCommand) => {
+    shell
+      .answer(sent, onCommand(words))
+      .then((answered) => {
+        answered.match({ Err: report, Ok: () => undefined });
+      })
+      .catch(reportToConsole);
+  };
   shell
-    .commands()
+    .commands(help, bound)
     .then((result) => {
       result.match({
         Err: report,
@@ -273,7 +365,7 @@ const hearCommands = (
           } else {
             state.listening = listening;
           }
-          eachOf(listening.items, onCommand).catch(reportToConsole);
+          eachOf(listening.items, runAndAnswer).catch(reportToConsole);
         },
       });
     })

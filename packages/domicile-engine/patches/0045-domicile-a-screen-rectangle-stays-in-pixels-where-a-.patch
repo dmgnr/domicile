@@ -23,7 +23,7 @@ the turn, as before.
  2 files changed, 34 insertions(+), 6 deletions(-)
 
 diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
-index dbb8671..9261365 100644
+index 6954fee..83aae7b 100644
 --- a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
 +++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
 @@ -36,6 +36,7 @@
@@ -34,7 +34,7 @@ index dbb8671..9261365 100644
  #include "ui/ozone/public/ozone_platform.h"
  #include "ui/platform_window/extensions/begin_frame_source_extension.h"
  #include "ui/platform_window/extensions/workspace_extension.h"
-@@ -974,7 +975,7 @@ bool DesktopWindowTreeHostPlatform::AreScreenshotsAllowed() {
+@@ -988,7 +989,7 @@ bool DesktopWindowTreeHostPlatform::AreScreenshotsAllowed() {
  }
  
  gfx::Transform DesktopWindowTreeHostPlatform::GetRootTransform() const {
@@ -43,7 +43,7 @@ index dbb8671..9261365 100644
    // DOMICILE: A MONITOR ON ITS SIDE, TURNED HERE AND NOWHERE ELSE. The root
    // window is laid out upright -- as tall as the panel is wide -- and this is
    // what takes its DIPs onto the panel's pixels, so an event arriving in the
-@@ -994,6 +995,20 @@ gfx::Transform DesktopWindowTreeHostPlatform::GetRootTransform() const {
+@@ -1008,6 +1009,20 @@ gfx::Transform DesktopWindowTreeHostPlatform::GetRootTransform() const {
  }
  
  gfx::Transform DesktopWindowTreeHostPlatform::GetScaleTransform() const {
@@ -64,7 +64,7 @@ index dbb8671..9261365 100644
    // TODO(crbug.com/40218466): This can use wrong scale during initialization.
    // Revisit this as a part of 'use dip' work.
  
-@@ -1030,7 +1045,14 @@ void DesktopWindowTreeHostPlatform::HideImpl() {
+@@ -1044,7 +1059,14 @@ void DesktopWindowTreeHostPlatform::HideImpl() {
  }
  
  gfx::Rect DesktopWindowTreeHostPlatform::CalculateRootWindowBounds() const {
@@ -81,7 +81,7 @@ index dbb8671..9261365 100644
    const display::Display::Rotation turn = GetDisplayTurn();
    if (turn == display::Display::ROTATE_90 ||
 diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
-index 54afd9e..8fc3058 100644
+index bd3a9ed..675393f 100644
 --- a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
 +++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h
 @@ -247,12 +247,18 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform

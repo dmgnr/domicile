@@ -27,11 +27,30 @@ Each package has its own version, set by changesets
 `domicile` is the distribution packages' version. A change to the Rust
 crates, the engine or `packages/distro/` names it in its changeset.
 
+## Release notes
+
+Each release has an entry in two pages:
+
+- [docs/RELEASE-NOTES.md](../RELEASE-NOTES.md): Domicile, for shell and app
+  authors, under `domicile`'s version.
+- [docs/use/RELEASE-NOTES.md](../use/RELEASE-NOTES.md): manganese, for its
+  users, under `@domicile-desktop/manganese`'s version.
+
+Every pull request adds to the next release's entry, or says it needs none
+with a `Release-notes: none` trailer on one of its commits
+(`.github/scripts/release-notes-required.sh`). Leave out what nobody would
+miss: refactors, tests, CI, docs fixes.
+
+The next release's entry says `_Unreleased_` under its heading while it
+collects changes. Before cutting, date it on main. The site deploys `site`, so
+the notes go live with the release; never pick them onto `site` early.
+
 ## Cutting a release
 
 Run **Publish packages** (`publish-packages.yml`) with `release` checked:
 
-1. Checks `stable`: ahead of `release`, `domicile` past 0.0.0
+1. Checks `stable`: ahead of `release`, `domicile` past 0.0.0, and dated
+   [release notes](#release-notes) for its versions
    (`.github/scripts/release-check.sh`). Changesets not yet versioned wait
    for the next release, though a version published for the first time
    ships the code `stable` has, theirs included.
@@ -77,7 +96,7 @@ released versions. To ship a site fix without a release, merge it to main,
 then run **Site** (`site.yml`) with its main commit(s):
 
 - Picks each onto `site` with `cherry-pick -x` (`.github/scripts/site-sync.sh`).
-- Each release resets `site` to `release` and picks again only the fixes the
+- Each release merges `release` onto `site`, picking again only the fixes the
   release lacks.
 - Refuses a commit not on main, and a commit on `site` that is no pick.
 

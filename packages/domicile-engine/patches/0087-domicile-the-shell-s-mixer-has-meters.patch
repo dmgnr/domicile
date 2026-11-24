@@ -21,7 +21,7 @@ job builds it on `crux`, and `guard-control-arrival.sh` fires the
  2 files changed, 9 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 7d8d167..6209d1f 100644
+index 84826cf..7c40a55 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
 @@ -299,6 +299,8 @@ generated_dictionary_sources_in_modules = [
@@ -33,7 +33,7 @@ index 7d8d167..6209d1f 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_shortcut_event_init.cc",
-@@ -2410,6 +2412,10 @@ generated_interface_sources_in_modules = [
+@@ -2414,6 +2416,10 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_audio_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_audio_stream.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_audio_stream.h",

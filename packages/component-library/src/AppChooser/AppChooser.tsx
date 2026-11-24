@@ -32,6 +32,10 @@ type Props = {
   onCancel: () => void;
   /** Called with the ID of the application to open with. */
   onChoose: (id: string) => void;
+  /** Called once it has animated in or out; see `open`. */
+  onOpenChangeComplete?: ((open: boolean) => void) | undefined;
+  /** Whether it is up. Turned off, it animates out. */
+  open?: boolean | undefined;
   /** What is opened, as a phrase: "this link", "report.pdf". */
   opened: string;
   screen: string | undefined;
@@ -53,6 +57,8 @@ export const AppChooser = ({
   lastChoice,
   onCancel,
   onChoose,
+  onOpenChangeComplete,
+  open = true,
   opened,
   screen,
   domicile,
@@ -105,12 +111,13 @@ export const AppChooser = ({
           )}
         </>
       }
-      onOpenChange={(open) => {
-        if (!open) {
+      onOpenChange={(opening) => {
+        if (!opening) {
           onCancel();
         }
       }}
-      open
+      onOpenChangeComplete={onOpenChangeComplete}
+      open={open}
       screen={screen}
       title={
         offer.kind === "one" ? (

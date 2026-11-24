@@ -19,10 +19,10 @@ job builds it on `crux`.
  1 file changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/media/router/mojo/media_router_desktop.cc b/chrome/browser/media/router/mojo/media_router_desktop.cc
-index af928ec..6bdbe03 100644
+index c8825f6..64aa839 100644
 --- a/chrome/browser/media/router/mojo/media_router_desktop.cc
 +++ b/chrome/browser/media/router/mojo/media_router_desktop.cc
-@@ -226,7 +226,17 @@ void MediaRouterDesktop::CreateRoute(const MediaSource::Id& source_id,
+@@ -239,7 +239,17 @@ void MediaRouterDesktop::CreateRoute(const MediaSource::Id& source_id,
                                      weak_factory_.GetWeakPtr(), presentation_id,
                                      provider_id, std::move(callback), false);
  

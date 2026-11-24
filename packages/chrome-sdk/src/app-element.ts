@@ -46,6 +46,17 @@ export type AppFocusRequest = {
 export const APP_FOCUS_RELEASE_REQUESTED_EVENT =
   "domicile-focus-release-requested";
 
+/**
+ * Fired on an `<app>` when a key press reaches its client: not a modifier, a
+ * repeat or a chord the shell grabbed. Typing in a window, as opposed to a key
+ * the desktop handled.
+ *
+ * A plain `Event` naming no key, so typed text stays the client's. It bubbles
+ * and is not cancelable. A `<webview>` fires the same for its page (see
+ * `WEBVIEW_KEY_DELIVERED_EVENT`).
+ */
+export const APP_KEY_DELIVERED_EVENT = "domicile-key-delivered";
+
 /** The detail of an {@link APP_FOCUS_RELEASE_REQUESTED_EVENT}. */
 export type AppFocusReleaseRequest = {
   /** The host's id for the client about to lose keyboard focus. */

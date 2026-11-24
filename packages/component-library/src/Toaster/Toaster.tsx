@@ -223,6 +223,8 @@ const rootStyles = css({
   transform:
     "translateX(var(--toast-swipe-movement-x)) translateY(calc(var(--toast-swipe-movement-y) + var(--toast-index) * var(--peek) + var(--shrink) * var(--height))) scale(var(--scale))",
   transformOrigin: "top center",
+  // main-thread animation: the stack takes the front toast's height, from base-
+  // ui's `--height`, once per toast.
   transition:
     "transform {durations.slow} {easings.outQuart}, opacity {durations.slow} {easings.outQuart}, height {durations.fast} {easings.out}",
   userSelect: "none",

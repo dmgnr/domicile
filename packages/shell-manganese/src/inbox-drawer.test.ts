@@ -122,7 +122,7 @@ describe("useInboxDrawer", () => {
     });
 
     expect(appsOpened(fake)).toEqual([
-      ["openAppWindow", CHAT_URL, "chat", "focus"],
+      ["openAppWindow", CHAT_URL, "chat", "focus", ""],
     ]);
   });
 
@@ -164,7 +164,7 @@ describe("useInboxDrawer", () => {
     });
 
     expect(appsOpened(fake)).toEqual([
-      ["openAppWindow", CHAT_URL, "chat", "focus"],
+      ["openAppWindow", CHAT_URL, "chat", "focus", ""],
     ]);
     expect(opened).toEqual([["close"]]);
   });
@@ -177,7 +177,7 @@ describe("useInboxDrawer", () => {
     });
 
     expect(appsOpened(fake)).toEqual([
-      ["openAppWindow", CHAT_URL, "chat", "focus"],
+      ["openAppWindow", CHAT_URL, "chat", "focus", ""],
     ]);
     expect(opened).toEqual([]);
   });

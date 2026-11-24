@@ -6,10 +6,12 @@ import type { On } from "./subscribe";
 import { hostEvent, on } from "./subscribe";
 
 /**
- * One copy: an id, whether it is an image, enough of it to recognize, and for
- * an image, a small picture of it as a `data:` URL.
+ * One copy: an id, whether it is an image, enough of it to recognize, for an
+ * image a small picture of it as a `data:` URL, and whether it is what the
+ * clipboard holds.
  */
 export type ClipboardEntry = {
+  readonly current: boolean;
   readonly id: number;
   readonly image: boolean;
   readonly preview: string;
@@ -26,6 +28,11 @@ export type Clipboard = {
   /** Put entry `id` back on the clipboard. An id since dropped sets nothing. */
   copy: (id: number) => void;
   on: On<ClipboardListeners>;
+  /**
+   * Drop entry `id` and its copy. Removing the current entry also empties the
+   * clipboard. An id since dropped removes nothing.
+   */
+  remove: (id: number) => void;
 };
 
 export type ClipboardHost = Pick<
@@ -33,6 +40,7 @@ export type ClipboardHost = Pick<
   | "addEventListener"
   | "clipboard"
   | "copyClipboardEntry"
+  | "removeClipboardEntry"
   | "removeEventListener"
 >;
 
@@ -51,11 +59,15 @@ export const clipboard = (host: ClipboardHost): Clipboard => {
       change: (listener) =>
         hostEvent(host, "clipboardchanged", () => listener()),
     }),
+    remove: (id) => {
+      host.removeClipboardEntry(id);
+    },
   };
 };
 
 /** The engine sends `""` for a row with no thumbnail. */
 const entryOf = (entry: DomicileClipboardEntry): ClipboardEntry => ({
+  current: entry.current,
   id: entry.id,
   image: entry.image,
   preview: entry.preview,

@@ -132,6 +132,30 @@ describe("choicesFor", () => {
     ]);
   });
 
+  describe("with !g", () => {
+    const google = (query: string, isPrivate: boolean) =>
+      Choice.TaggedSearch(
+        {
+          engine: Engine.Google,
+          query,
+          url: `https://google.com/search?q=${encodeURIComponent(query)}`,
+        },
+        isPrivate,
+      );
+
+    it("offers only the Google search, skipping the matches", () => {
+      expect(
+        choicesFor("!g notes.org", ["notes.org"], [EDITOR], [MAIL]),
+      ).toStrictEqual([google("notes.org", false)]);
+    });
+
+    it("offers only the private Google search with !p", () => {
+      expect(choicesFor("!p !g notes.org", [], [], [])).toStrictEqual([
+        google("notes.org", true),
+      ]);
+    });
+  });
+
   it("offers the page a !gh name goes to above the search for it", () => {
     expect(choicesFor("!gh cprussin", [], [], [])).toStrictEqual([
       Choice.TaggedSite(
@@ -157,6 +181,7 @@ describe("choicesFor", () => {
   describe("a tag being typed", () => {
     it("offers every tag for a bare !, above the rows the line gets", () => {
       expect(choicesFor("!", [], [], [])).toStrictEqual([
+        Choice.Tag("!g", Engine.Google, "!g "),
         Choice.Tag("!gh", Engine.GitHub, "!gh "),
         Choice.Tag("!im", Engine.GoogleImages, "!im "),
         Choice.Tag("!maps", Engine.GoogleMaps, "!maps "),
@@ -174,15 +199,42 @@ describe("choicesFor", () => {
     });
 
     it("leaves out a tag the line already has", () => {
-      expect(choicesFor("!p !", [], [], [])[3]).toStrictEqual(
+      expect(choicesFor("!p !", [], [], [])[4]).toStrictEqual(
         Choice.Tag("!wiki", Engine.Wikipedia, "!p !wiki "),
       );
-      expect(choicesFor("!yt cats !", [], [], []).slice(0, 5)).toStrictEqual([
+      expect(choicesFor("!yt cats !", [], [], []).slice(0, 6)).toStrictEqual([
+        Choice.Tag("!g", Engine.Google, "!yt cats !g "),
         Choice.Tag("!gh", Engine.GitHub, "!yt cats !gh "),
         Choice.Tag("!im", Engine.GoogleImages, "!yt cats !im "),
         Choice.Tag("!maps", Engine.GoogleMaps, "!yt cats !maps "),
         Choice.Tag("!p", undefined, "!yt cats !p "),
         Choice.Tag("!wiki", Engine.Wikipedia, "!yt cats !wiki "),
+      ]);
+    });
+
+    it("offers no tags for a whole tag after words, so Enter searches", () => {
+      expect(choicesFor("kate bush !g", [], [], [])).toStrictEqual([
+        Choice.TaggedSearch(
+          {
+            engine: Engine.Google,
+            query: "kate bush",
+            url: "https://google.com/search?q=kate%20bush",
+          },
+          false,
+        ),
+      ]);
+      expect(choicesFor("kate bush !yt", [], [], [])[0]?.kind).toBe(
+        ChoiceKind.TaggedSearch,
+      );
+      expect(choicesFor("kate bush !p", [], [], [])[0]?.kind).toBe(
+        ChoiceKind.Search,
+      );
+    });
+
+    it("still offers tags for a whole tag with nothing to search", () => {
+      expect(choicesFor("!g", [], [], []).slice(0, 2)).toStrictEqual([
+        Choice.Tag("!g", Engine.Google, "!g "),
+        Choice.Tag("!gh", Engine.GitHub, "!gh "),
       ]);
     });
 
@@ -294,6 +346,12 @@ describe("launchOf", () => {
     expect(launchOf(Choice.Bookmark(MAIL))).toStrictEqual(
       Launch.Browsed("https://mail.example.com", false),
     );
+  });
+
+  it("browses a bookmark in the browser profile it names", () => {
+    expect(
+      launchOf(Choice.Bookmark({ ...MAIL, profile: "work" })),
+    ).toStrictEqual(Launch.Browsed("https://mail.example.com", false, "work"));
   });
 
   it("browses a site, a tagged one, or any kind of search", () => {

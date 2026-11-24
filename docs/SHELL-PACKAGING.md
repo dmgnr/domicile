@@ -191,10 +191,11 @@ Other rules:
 - **Dependencies:** the bundle must contain everything. Nothing resolves at
   run time and there is no `node_modules`. Vite's browser build does this by
   default.
-- **Theme flash:** nothing paints before `Shell` returns, and `domicile.theme`
-  can be `null` for a few milliseconds. Either paint in a default theme and
-  switch on the first `themechanged`, or paint in the last theme you saw
-  (manganese does this) and correct on the first `themechanged`.
+- **Theme flash:** the screen stays black until `Shell` returns, and
+  `domicile.theme` can be `null` for a few milliseconds. Either paint in a
+  default theme and switch on the first `themechanged`, or paint in the last
+  theme you saw (manganese does this) and correct on the first
+  `themechanged`.
 
 ## Scripts
 
@@ -205,6 +206,11 @@ Markup from outside (a notification body, window title or file name put in
 
 Those files may compile WebAssembly, so a shell can be written in Rust or any
 language that targets wasm. See [`examples/dioxus-shell`](/examples/dioxus-shell).
+
+The shell is cross-origin isolated without COOP or COEP headers:
+`crossOriginIsolated` is true and `SharedArrayBuffer` works, so threaded wasm
+runs. Nothing it loads is checked for CORP. See
+[DOMICILE-SCHEME.md](/docs/architecture/DOMICILE-SCHEME.md#cross-origin-isolation).
 
 Refused:
 
@@ -234,7 +240,14 @@ path:
 domicile ./my-desktop/dist/shell.js
 ```
 
-- Pass the module, not the directory. A directory is refused.
+- Or pass the directory, with the module named in its `package.json`, as a
+  package does:
+
+  ```json
+  { "domicile": { "shell": "dist/shell.js" } }
+  ```
+
+  A directory with no `domicile.shell` is refused.
 - Files next to the module are served. Nothing above its directory is.
 
 `domicile` can also build a shell from source:
@@ -248,8 +261,9 @@ domicile @domicile-desktop/manganese     # Domicile's own, prebuilt
 
 - `domicile load-shell` and a JSON config's `shell` take the same forms.
   Relative paths resolve from the working directory, or from the config file.
-- A `.js` with no bare imports is a bundle and is served as is. Any other
-  `.js`, `.ts` or `.tsx` is an entry and is built.
+- A `.js` with no bare imports is a bundle and is served as is. So is one the
+  nearest `package.json` names in `domicile.shell`. Any other `.js`, `.ts` or
+  `.tsx` is an entry and is built.
 - An entry's packages go in the nearest `package.json` and `bun.lock` above
   it, created next to it if there are none.
 - `@domicile-desktop/*` and React always come from the running Domicile.

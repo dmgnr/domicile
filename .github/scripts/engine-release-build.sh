@@ -111,6 +111,7 @@ gn gen "$OUT" --args="
   use_libinput = true
   import(\"//build/args/domicile_codecs.gn\")
   import(\"//build/args/domicile_trim.gn\")
+  import(\"//build/args/domicile_node.gn\")
 $CACHE_ARG" || exit 1
 
 # Nothing in `chrome` depends on `domicile_engine`, which the compositor

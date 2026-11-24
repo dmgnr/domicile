@@ -30,6 +30,11 @@ ExtensionChanges ReconcileExtensions(
       changes.uninstall.push_back(id);
     }
   }
+  for (const std::string& id : kept) {
+    if (installed.contains(id) && !added.contains(id)) {
+      changes.claim.push_back(id);
+    }
+  }
   return changes;
 }
 

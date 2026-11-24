@@ -138,6 +138,8 @@ const indicatorStyles = css({
   transform: "translateX(var(--active-tab-left))",
   // No animation on first paint (`none` direction), so the bar doesn't fly
   // in.
+  // main-thread animation: the bar takes the next tab's width once per switch;
+  // base-ui gives it in px, which no scale can divide by.
   transition:
     "transform {durations.normal} {easings.outBack}, inline-size {durations.normal} {easings.outBack}",
 });

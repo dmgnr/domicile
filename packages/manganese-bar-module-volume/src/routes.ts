@@ -28,11 +28,16 @@ type Way = Pick<Route, "device" | "label" | "port">;
  * "Headphones", rather than the card that has them.
  *
  * A port whose jack is empty is left out, unless it is in use. Monitors are
- * left out; they record an output, which is not a choice of input.
+ * left out; they record an output, which is not a choice of input. So is the
+ * hardware behind a filter, such as speaker correction, unless it is in use:
+ * picking it would skip the filter.
  */
 export const routesOf = (devices: readonly AudioDevice[]): readonly Route[] => {
-  const shown = devices.filter((device) => !device.monitor);
-  const current = primary(shown);
+  const unmonitored = devices.filter((device) => !device.monitor);
+  const current = primary(unmonitored);
+  const shown = unmonitored.filter(
+    (device) => !device.filtered || device === current,
+  );
   const routes = shown.flatMap((device): Way[] =>
     device.ports.length === 0
       ? [{ device, label: device.description, port: undefined }]

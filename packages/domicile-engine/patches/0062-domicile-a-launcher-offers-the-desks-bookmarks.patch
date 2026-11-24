@@ -15,10 +15,10 @@ in a generated-bindings list.
  2 files changed, 3 insertions(+)
 
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 2e02558..97d9097 100644
+index 9e65f46..58a884c 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
-@@ -2380,6 +2380,8 @@ generated_interface_sources_in_modules = [
+@@ -2384,6 +2384,8 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_apps_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_desktop_entry.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_domicile_desktop_entry.h",

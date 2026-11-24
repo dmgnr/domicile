@@ -36,10 +36,10 @@ Claude-Session: https://claude.ai/code/session_01LWjcAKveDAi7vjVsXpKjcN
  3 files changed, 27 insertions(+)
 
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index e8ce410..01827be 100644
+index 221d0bc..ba429a9 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -288,6 +288,7 @@ source_set("gbm_unittests") {
+@@ -290,6 +290,7 @@ source_set("gbm_unittests") {
      "domicile/drm_pointer_crossing_unittest.cc",
      "domicile/drm_pointer_targets_unittest.cc",
      "domicile/drm_clipboard_unittest.cc",
@@ -48,7 +48,7 @@ index e8ce410..01827be 100644
      "domicile/drm_sleep_unittest.cc",
      "domicile/drm_vt_switcher_unittest.cc",
 diff --git a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
-index fd451f5..ec19fc0 100644
+index 6acb954..0947fd2 100644
 --- a/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
 +++ b/ui/ozone/platform/drm/gpu/hardware_display_plane_manager_atomic.cc
 @@ -354,6 +354,14 @@ void HardwareDisplayPlaneManagerAtomic::SetAtomicPropsForCommit(

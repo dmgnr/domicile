@@ -61,8 +61,8 @@ export default defineConfig({
         },
         // The dot grid creeps by one cell, then loops without a seam.
         gridCreep: {
-          "0%": { backgroundPosition: "0 0" },
-          "100%": { backgroundPosition: "{spacing.8} {spacing.8}" },
+          "0%": { transform: "translate(0, 0)" },
+          "100%": { transform: "translate({spacing.8}, {spacing.8})" },
         },
         // A ring leaving the mark, like a ripple.
         halo: {
@@ -93,11 +93,15 @@ export default defineConfig({
           },
         },
         // The house drawn as one stroke (`pathLength` 1).
+        // main-thread animation: draws the mark's outline once; an SVG stroke's
+        // dash has no compositor path.
         markDrawn: {
           "0%": { strokeDashoffset: "1" },
           "100%": { strokeDashoffset: "0" },
         },
         // The fill that settles in once the outline is drawn.
+        // main-thread animation: fills the mark once; its outline and fill are
+        // one path, so opacity would fade both.
         markFilled: {
           "0%": { fillOpacity: "0" },
           "100%": { fillOpacity: "1" },

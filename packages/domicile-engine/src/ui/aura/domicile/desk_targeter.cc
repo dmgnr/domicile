@@ -13,6 +13,7 @@
 #include "ui/aura/window_targeter.h"
 #include "ui/base/class_property.h"
 #include "ui/events/event.h"
+#include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace aura {
@@ -30,6 +31,8 @@ class DeskTargeter : public WindowTargeter, public WindowObserver {
   DeskTargeter& operator=(const DeskTargeter&) = delete;
 
   ~DeskTargeter() override = default;
+
+  Window* page() const { return page_; }
 
   void SetPage(Window* page) {
     observation_.Reset();
@@ -97,6 +100,21 @@ void TargetDeskPage(Window* root, Window* page) {
   }
   root->SetEventTargeter(std::make_unique<DeskTargeter>(page));
   root->SetProperty(kHasDeskTargeterKey, true);
+}
+
+Window* DeskWindowAt(Window* root, const gfx::PointF& at) {
+  CHECK(!root->parent());
+  if (root->GetProperty(kHasDeskTargeterKey)) {
+    Window* page = static_cast<DeskTargeter*>(root->targeter())->page();
+    if (page != nullptr) {
+      const std::optional<gfx::PointF> in_page = DeskPagePoint(
+          root->bounds().size(), page->GetBoundsInRootWindow(), at);
+      if (in_page.has_value()) {
+        return page->GetEventHandlerForPoint(gfx::ToFlooredPoint(*in_page));
+      }
+    }
+  }
+  return root->GetEventHandlerForPoint(gfx::ToFlooredPoint(at));
 }
 
 }  // namespace aura

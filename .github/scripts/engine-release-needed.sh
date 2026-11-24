@@ -38,14 +38,15 @@ say "write=true"
 
 # Skip the build if this series is already published. Chromium builds are not
 # reproducible, and the publisher never replaces an existing release, so a
-# rebuild would produce a tarball nothing uses.
-: "${GITHUB_REPOSITORY:?}"
+# rebuild would produce a tarball nothing uses. Published in the builds
+# repository; see engine-release-publish.sh.
+BUILDS_REPO="${DOMICILE_BUILDS_REPO:-cprussin/domicile-builds}"
 : "${GITHUB_TOKEN:?a token is needed to ask whether this series is published}"
 if curl -sS -f -o /dev/null \
      -H "Authorization: Bearer $GITHUB_TOKEN" \
      -H "Accept: application/vnd.github+json" \
      -H "X-GitHub-Api-Version: 2022-11-28" \
-     "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG"; then
+     "https://api.github.com/repos/$BUILDS_REPO/releases/tags/$TAG"; then
   echo "$TAG is already published; this run only has to write engine-release.nix onto it"
   say "build=false"
   exit 0

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Publish the distribution packages `packages/distro/build.sh` made as GitHub releases.
+# Publish the distribution packages `packages/distro/build.sh` made as the
+# `packages-latest` release of the builds repository.
 #
 #   GH_TOKEN=... .github/scripts/distro-packages-publish.sh <packages>
 #
-# Runs on the commit stable.yml just promoted. Two releases, neither marked
-# latest, which the engine's series releases take:
+# Runs on the commit stable.yml just promoted. `packages-latest` holds the
+# newest commit's packages under names without the version, so
+# docs/use/INSTALL.md links each one. Older commits' packages are not kept:
+# nobody installs a stable that is not the newest.
 #
-#   packages-<commit>   the packages as built; a rerun uploads them again
-#   packages-latest     the newest commit's packages under names without the
-#                       version, so docs/RUNNING-A-DESKTOP.md#other-distributions
-#                       links each one
+# The builds repository is `DOMICILE_BUILDS_REPO` (default
+# `cprussin/domicile-builds`), not this one, so people watching this one hear
+# only of real releases. `GH_TOKEN` needs Contents: write there.
 set -euo pipefail
 
 [ "$#" -eq 1 ] || {
@@ -17,6 +19,9 @@ set -euo pipefail
   exit 2
 }
 PACKAGES="$1"
+: "${GH_TOKEN:?a token with Contents: write on the builds repository is required}"
+: "${GITHUB_REPOSITORY:?}"
+BUILDS_REPO="${DOMICILE_BUILDS_REPO:-cprussin/domicile-builds}"
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -31,28 +36,8 @@ official="$(identity_of packages/domicile-engine/engine-official.nix)"
 }
 
 head="$(git rev-parse HEAD)"
-TAG="packages-${head:0:12}"
 LATEST=packages-latest
-INSTALL="https://github.com/$GITHUB_REPOSITORY/blob/$head/docs/RUNNING-A-DESKTOP.md#other-distributions"
-
-if gh release view "$TAG" >/dev/null 2>&1; then
-  echo "release $TAG exists; uploading its assets again"
-  gh release upload "$TAG" --clobber "$PACKAGES"/*
-else
-  NOTES="$(cat <<NOTES
-Domicile for Debian, Ubuntu, Fedora, openSUSE and Arch, built from \`$head\`
-with the official engine (series \`${official:0:12}\`).
-
-Debian 12 and Ubuntu 22.04: \`domicile_*.noapparmor.deb\`. Debian 13+ and
-Ubuntu 24.04+: \`domicile_*_amd64.deb\`.
-
-Install and set up: [Other distributions]($INSTALL).
-NOTES
-  )"
-  gh release create "$TAG" --target "$head" --title "Domicile packages ${head:0:12}" \
-    --notes "$NOTES" --latest=false "$PACKAGES"/*
-  echo "published $TAG"
-fi
+INSTALL="https://github.com/$GITHUB_REPOSITORY/blob/$head/docs/use/INSTALL.md"
 
 # The one package in <packages> matching a glob.
 one() { # glob
@@ -77,24 +62,33 @@ NAMES=(domicile_amd64.deb domicile_amd64.noapparmor.deb domicile-fedora.x86_64.r
 # SHA256SUMS last, so it never lists a package that is not uploaded yet.
 ASSETS=("${NAMES[@]/#/$STABLE/}" "$STABLE/SHA256SUMS")
 
-LATEST_NOTES="$(cat <<NOTES
-The newest Domicile packages, under names that stay the same from release to
-release. These are the packages of [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG),
-built from \`$head\`.
+# The commit is in the notes, since the tag is on the builds repository's
+# branch: this repository's commits are not there. The next run reads it back.
+NOTES="$(cat <<NOTES
+The newest Domicile packages, built from \`$head\` with the official engine
+(series \`${official:0:12}\`).
 
-Install and set up: [Other distributions]($INSTALL).
+Debian 12 and Ubuntu 22.04: \`domicile_amd64.noapparmor.deb\`. Debian 13+ and
+Ubuntu 24.04+: \`domicile_amd64.deb\`.
+
+Install and set up: [Install]($INSTALL).
 NOTES
 )"
 
-if ! gh release view "$LATEST" >/dev/null 2>&1; then
-  gh release create "$LATEST" --target "$head" --title "Domicile packages (latest)" \
-    --notes "$LATEST_NOTES" --latest=false "${ASSETS[@]}"
+if ! gh release view "$LATEST" --repo "$BUILDS_REPO" >/dev/null 2>&1; then
+  gh release create "$LATEST" --repo "$BUILDS_REPO" --title "Domicile packages (latest)" \
+    --notes "$NOTES" --latest=false "${ASSETS[@]}"
   echo "published $LATEST"
   exit 0
 fi
 
 # Only forward: a rerun for an older promotion must not replace a newer one.
-mirrored="$(gh api "repos/$GITHUB_REPOSITORY/commits/$LATEST" --jq .sha)"
+mirrored="$(gh release view "$LATEST" --repo "$BUILDS_REPO" --json body --jq .body |
+  sed -n 's/.*built from `\([0-9a-f]\{40\}\)`.*/\1/p' | head -1)"
+[ -n "$mirrored" ] || {
+  echo "$LATEST does not say which commit it was built from" >&2
+  exit 1
+}
 status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$mirrored...$head" --jq .status)"
 case "$status" in
   (ahead | identical) ;;
@@ -109,14 +103,13 @@ case "$status" in
 esac
 
 # Same names, so each is replaced in place and the set stays whole.
-gh release upload "$LATEST" --clobber "${ASSETS[@]}"
-gh release view "$LATEST" --json assets --jq '.assets[].name' | while read -r asset; do
-  case " ${NAMES[*]} SHA256SUMS " in
-    (*" $asset "*) ;;
-    (*) gh release delete-asset "$LATEST" "$asset" --yes ;;
-  esac
-done
-gh release edit "$LATEST" --notes "$LATEST_NOTES"
-gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$LATEST" \
-  -f sha="$head" -F force=true >/dev/null
-echo "moved $LATEST to $TAG"
+gh release upload "$LATEST" --repo "$BUILDS_REPO" --clobber "${ASSETS[@]}"
+gh release view "$LATEST" --repo "$BUILDS_REPO" --json assets --jq '.assets[].name' |
+  while read -r asset; do
+    case " ${NAMES[*]} SHA256SUMS " in
+      (*" $asset "*) ;;
+      (*) gh release delete-asset "$LATEST" "$asset" --repo "$BUILDS_REPO" --yes ;;
+    esac
+  done
+gh release edit "$LATEST" --repo "$BUILDS_REPO" --notes "$NOTES"
+echo "moved $LATEST to ${head:0:12}"

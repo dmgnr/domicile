@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
@@ -41,6 +42,8 @@ class CORE_EXPORT DomicileContextMenuEvent final : public Event {
   String srcUrl() const;
   String mediaType() const;
   bool hasImageContents() const { return menu_->has_image_contents; }
+  bool canPictureInPicture() const { return menu_->can_picture_in_picture; }
+  bool inPictureInPicture() const { return menu_->in_picture_in_picture; }
   const String& selectionText() const { return menu_->selection_text; }
   bool isEditable() const { return menu_->is_editable; }
   bool canUndo() const { return menu_->can_undo; }
@@ -50,8 +53,13 @@ class CORE_EXPORT DomicileContextMenuEvent final : public Event {
   bool canPaste() const { return menu_->can_paste; }
   bool canDelete() const { return menu_->can_delete; }
   bool canSelectAll() const { return menu_->can_select_all; }
+  const String& misspelledWord() const { return menu_->misspelled_word; }
+  const Vector<String>& spellingSuggestions() const {
+    return menu_->spelling_suggestions;
+  }
 
   void run(const String& action, ExceptionState&);
+  void replaceMisspelling(const String& word, ExceptionState&);
 
   const AtomicString& InterfaceName() const override;
 

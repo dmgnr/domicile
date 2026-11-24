@@ -160,7 +160,7 @@ export const Lock = memo(
           data-lock-content=""
           style={useScreenRegion(screen)}
         >
-          <LockClock />
+          <LockClock locked={locked} />
           <div className={entryStyles}>
             <form
               className={formStyles({ shaken: shaken(refusals), wrong })}
@@ -468,27 +468,33 @@ const refusalStyles = css({
  * Puts focus back in `field` whenever it lands anywhere else on the page, and
  * before each key pressed with focus on nothing, so the key types into it.
  * Returns a function that stops.
+ *
+ * Focus that lands elsewhere is taken back once that focus change has
+ * finished, not from inside it. Focusing the field from `focusin` re-enters
+ * the change: when it was a `<webview>` taking focus, the engine then hands
+ * its page the focus after the field took it, and the field holds the keys
+ * without being drawn focused.
  */
 const holdKeyboard = (
   field: RefObject<HTMLInputElement | null>,
   panels: HTMLDivElement | null,
 ): (() => void) => {
-  const reclaim = (target: EventTarget | null) => {
-    if (!keepsFocus(target, field.current, panels)) {
+  const reclaim = () => {
+    if (!keepsFocus(document.activeElement, field.current, panels)) {
       field.current?.focus();
     }
   };
-  const onFocusIn = (event: FocusEvent) => {
-    reclaim(event.target);
-  };
-  const onKeyDown = () => {
-    reclaim(document.activeElement);
+  let pending: ReturnType<typeof setTimeout> | undefined;
+  const onFocusIn = () => {
+    clearTimeout(pending);
+    pending = setTimeout(reclaim);
   };
   document.addEventListener("focusin", onFocusIn, true);
-  window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("keydown", reclaim, true);
   return () => {
+    clearTimeout(pending);
     document.removeEventListener("focusin", onFocusIn, true);
-    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("keydown", reclaim, true);
   };
 };
 

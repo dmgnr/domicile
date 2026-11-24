@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/containers/flat_set.h"
 #include "components/viz/common/resources/shared_image_format.h"
@@ -26,6 +27,8 @@
 #include "ui/gfx/display_color_spaces.h"
 #include "ui/ozone/platform/drm/domicile/drm_pointer_crossing.h"
 #include "ui/ozone/platform/drm/domicile/edid_name.h"
+#include "ui/ozone/platform/drm/domicile/hdr_output.h"
+#include "ui/ozone/platform/drm/domicile/ten_bit_scanout.h"
 #include "ui/ozone/platform/drm/host/drm_cursor.h"
 #include "ui/ozone/platform/drm/host/drm_window_host.h"
 #include "ui/ozone/platform/drm/host/drm_window_host_manager.h"
@@ -93,6 +96,36 @@ void DrawInAFormatThePlanesTake(display::Display& screen,
   color_spaces.SetOutputFormats(viz::SinglePlaneFormat::kBGRA_8888,
                                 viz::SinglePlaneFormat::kBGRA_8888);
   screen.SetColorSpaces(color_spaces);
+}
+
+// Draws `screen`'s frames in 10 bits a channel where its panel and planes
+// take them; see `TenBitScanoutFourcc`. Viz names channels in memory order, so
+// XBGR2101010 is RGBA_1010102.
+void DrawInTenBitsWhereThePanelTakesThem(
+    display::Display& screen,
+    const display::DisplaySnapshot& snapshot) {
+  const std::optional<uint32_t> fourcc = TenBitScanoutFourcc(snapshot);
+  if (!fourcc) {
+    return;
+  }
+  const viz::SharedImageFormat format =
+      *fourcc == DRM_FORMAT_XBGR2101010
+          ? viz::SinglePlaneFormat::kRGBA_1010102
+          : viz::SinglePlaneFormat::kBGRA_1010102;
+  gfx::DisplayColorSpaces color_spaces = screen.GetColorSpaces();
+  color_spaces.SetOutputFormats(format, format);
+  screen.SetColorSpaces(color_spaces);
+}
+
+// Draws `screen`'s frames in HDR10, in the 10-bit format
+// `DrawInTenBitsWhereThePanelTakesThem` picked.
+void DrawInHdr(display::Display& screen,
+               const display::DisplaySnapshot& snapshot,
+               float sdr_white_nits) {
+  const gfx::DisplayColorSpaces drawn = screen.GetColorSpaces();
+  screen.SetColorSpaces(HdrColorSpaces(
+      snapshot, sdr_white_nits,
+      drawn.GetOutputFormat(gfx::ContentColorUsage::kHDR, false)));
 }
 
 // Returns `mode`'s size, or the displayless bounds if there is none.
@@ -172,13 +205,25 @@ DomicilePanel PanelFromSnapshot(
   panel.refresh_mhz = lit ? MillihertzOf(*lit) : 0;
   panel.physical_size_mm = DisplayPhysicalSizeMm(snapshot);
   panel.adaptive_sync = AdaptiveSyncOf(snapshot);
+  const DomicileDisplayLayout* wanted = WantedFor(layout, snapshot.display_id());
+  panel.hdr = HdrOf(snapshot, wanted);
+  if (const std::optional<gfx::HDRStaticMetadata>& metadata =
+          snapshot.hdr_static_metadata()) {
+    panel.max_luminance = static_cast<float>(metadata->max);
+    panel.max_average_luminance = static_cast<float>(metadata->max_avg);
+    panel.min_luminance = static_cast<float>(metadata->min);
+  }
+  if (panel.hdr == DomicileHdr::kOn) {
+    panel.sdr_white_nits = wanted->sdr_white_nits;
+  }
   return panel;
 }
 
 bool PanelChangedUnseen(const DomicilePanel& before,
                         const DomicilePanel& after) {
   return before.refresh_mhz != after.refresh_mhz ||
-         before.adaptive_sync != after.adaptive_sync;
+         before.adaptive_sync != after.adaptive_sync ||
+         before.hdr != after.hdr || before.sdr_white_nits != after.sdr_white_nits;
 }
 
 DomicileAdaptiveSync AdaptiveSyncOf(const display::DisplaySnapshot& snapshot) {
@@ -234,6 +279,7 @@ display::Display DisplayFromSnapshot(const display::DisplaySnapshot& snapshot,
     screen.set_label(name);
   }
   DrawInAFormatThePlanesTake(screen, snapshot);
+  DrawInTenBitsWhereThePanelTakesThem(screen, snapshot);
   return screen;
 }
 
@@ -257,7 +303,7 @@ gfx::Size DisplayPhysicalSizeMm(const display::DisplaySnapshot& snapshot) {
 }
 
 std::vector<display::Display> DisplaysFromSnapshots(
-    const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
     const std::vector<DomicileDisplayLayout>& layout) {
   if (snapshots.empty()) {
@@ -277,13 +323,16 @@ std::vector<display::Display> DisplaysFromSnapshots(
     if (wanted) {
       TurnAndScale(screen, *wanted);
     }
+    if (DrivesHdr(*snapshot, wanted)) {
+      DrawInHdr(screen, *snapshot, wanted->sdr_white_nits);
+    }
     displays.push_back(screen);
   }
   return displays;
 }
 
 std::vector<gfx::Point> OriginsForLayout(
-    const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
     const std::vector<DomicileDisplayLayout>& layout) {
   // Unplaced connectors start at the right edge of everything the layout
@@ -314,7 +363,7 @@ std::vector<gfx::Point> OriginsForLayout(
 }
 
 size_t PrimaryIndexForLayout(
-    const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
     const std::vector<DomicileDisplayLayout>& layout) {
   if (layout.empty()) {
@@ -340,7 +389,7 @@ DrmScreen::DrmScreen(DrmWindowHostManager* window_manager, DrmCursor* cursor)
 DrmScreen::~DrmScreen() = default;
 
 void DrmScreen::OnDisplaysChanged(
-    const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
+    const std::vector<raw_ptr<display::DisplaySnapshot, DanglingUntriaged>>&
         snapshots,
     const std::vector<DomicileDisplayLayout>& layout) {
   // A hotplug sends the whole list, so a display missing from it was
@@ -361,6 +410,15 @@ void DrmScreen::OnDisplaysChanged(
 
   // Not always the first snapshot: a profile may turn the laptop panel off.
   const size_t primary = PrimaryIndexForLayout(snapshots, layout);
+  VLOG(1) << "domicile: " << snapshots.size() << " monitors, "
+          << layout.size() << " laid out by the compositor, primary "
+          << displays[primary].id();
+  for (const display::Display& display : displays) {
+    const auto connector = connectors_.find(display.id());
+    VLOG(1) << "domicile: monitor " << display.id() << " ("
+            << (connector != connectors_.end() ? connector->second : "")
+            << "): " << display.ToString();
+  }
 
   // Add the primary first: DisplayList::AddDisplay DCHECKs it, and this
   // build has `dcheck_always_on`. The display event's mojom also promises
@@ -387,6 +445,7 @@ void DrmScreen::OnDisplaysChanged(
     }
   }
   for (const int64_t id : unplugged) {
+    VLOG(1) << "domicile: monitor " << id << " unplugged";
     display_list_.RemoveDisplay(id);
   }
 
@@ -398,6 +457,8 @@ void DrmScreen::OnDisplaysChanged(
     const auto is = panels_.find(display.id());
     if (was != before.end() && is != panels_.end() &&
         PanelChangedUnseen(was->second, is->second)) {
+      VLOG(1) << "domicile: monitor " << display.id()
+              << " changed only its refresh rate or adaptive sync";
       for (display::DisplayObserver& observer :
            *display_list_.observers()) {
         observer.OnDisplayMetricsChanged(display, /*changed_metrics=*/0);

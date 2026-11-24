@@ -1,15 +1,25 @@
-// The action a keybinding runs: a shell command, a binding mode change, or a
-// pair of them held between a press and its release.
+// The action a keybinding runs: a shell command, a program, a binding mode
+// change, or a pair of them held between a press and its release.
 
 /** The kind of action a binding runs. */
 export enum KeyActionKind {
   SendShell,
+  Exec,
   Mode,
   Hold,
 }
 
 /** The actions one key event runs. */
 const OneKeyAction = {
+  /**
+   * Start a program, as `domicile exec` does: `argv[0]` found on the
+   * desktop's `PATH`, without a shell. The SDK starts it; the shell hears
+   * nothing. The desktop tells the person when it does not start.
+   */
+  Exec: (argv: readonly string[]) => ({
+    argv,
+    kind: KeyActionKind.Exec as const,
+  }),
   /**
    * Switch to another binding mode. The SDK handles this itself and tells the
    * shell the mode changed.

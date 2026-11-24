@@ -9,6 +9,12 @@
 #   it, so a release never takes back a site fix it doesn't carry.
 # - A commit on `site` that is no pick is refused, since someone put it there.
 #
+# Only moves `site` forward, since its ruleset refuses force pushes:
+#
+# - New picks go on top of `site`.
+# - After a release, `release` plus the picks it lacks is merged onto `site`,
+#   with that tree.
+#
 # Picks with `cherry-pick -x`, whose line names the main commit. Pushes with a
 # lease, and only when `site` changes.
 set -euo pipefail
@@ -32,9 +38,11 @@ esac
 
 picked_from() { git log -1 --format=%B "$1" | sed -n 's/^(cherry picked from commit \([0-9a-f]\{40\}\))$/\1/p' | tail -1; }
 released() { git merge-base --is-ancestor "$1" "$release"; }
+has() { [[ " $1 " == *" $2 "* ]]; }
 
+# The main commits `site` carries and `release` doesn't, oldest first. A
+# commit picked again after a release shows up once per pick.
 picks=()
-changed=""
 if [ -n "$site" ]; then
   while read -r commit; do
     from="$(picked_from "$commit")"
@@ -42,18 +50,13 @@ if [ -n "$site" ]; then
       echo "site has ${commit:0:12}, which was not picked from main; not overwriting it" >&2
       exit 1
     fi
-    if released "$from"; then
-      echo "release has ${from:0:12} now"
-      changed=1
-    else
+    if ! released "$from" && ! has "${picks[*]}" "$from"; then
       picks+=("$from")
     fi
-  done < <(git rev-list --reverse "$(git merge-base "$site" "$release")..$site")
-  git merge-base --is-ancestor "$release" "$site" || changed=1
-else
-  changed=1
+  done < <(git rev-list --reverse --no-merges "$(git merge-base "$site" "$release")..$site")
 fi
 
+new=()
 for arg in "$@"; do
   commit="$(git rev-parse --verify "$arg^{commit}")"
   if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
@@ -62,23 +65,36 @@ for arg in "$@"; do
   fi
   if released "$commit"; then
     echo "release has ${commit:0:12} already"
-  elif [[ " ${picks[*]} " == *" $commit "* ]]; then
+  elif has "${picks[*]} ${new[*]}" "$commit"; then
     echo "site has ${commit:0:12} already"
   else
-    picks+=("$commit")
-    changed=1
+    new+=("$commit")
   fi
 done
 
-if [ -z "$changed" ]; then
-  echo "site (${site:0:12}) is up to date"
-  exit 0
-fi
+pick() { # commit...
+  for commit in "$@"; do
+    git cherry-pick -x "$commit" >/dev/null
+    echo "picked ${commit:0:12}: $(git log -1 --format=%s "$commit")"
+  done
+}
 
-git checkout -q --detach "$release"
-for commit in "${picks[@]}"; do
-  git cherry-pick -x "$commit" >/dev/null
-  echo "picked ${commit:0:12}: $(git log -1 --format=%s "$commit")"
-done
-git push -q --force-with-lease="refs/heads/site:$site" origin HEAD:refs/heads/site
-echo "site is now $(git rev-parse --short=12 HEAD): release ${release:0:12} and ${#picks[@]} pick(s)"
+if [ -n "$site" ] && git merge-base --is-ancestor "$release" "$site"; then
+  if [ "${#new[@]}" -eq 0 ]; then
+    echo "site (${site:0:12}) is up to date"
+    exit 0
+  fi
+  git checkout -q --detach "$site"
+  pick "${new[@]}"
+  head="$(git rev-parse HEAD)"
+else
+  git checkout -q --detach "$release"
+  pick "${picks[@]}" "${new[@]}"
+  head="$(git rev-parse HEAD)"
+  if [ -n "$site" ]; then
+    head="$(git commit-tree "$head^{tree}" -p "$site" -p "$head" \
+      -m "Sync site to release ${release:0:12} and ${#picks[@]} + ${#new[@]} pick(s)")"
+  fi
+fi
+git push -q --force-with-lease="refs/heads/site:$site" origin "$head:refs/heads/site"
+echo "site is now ${head:0:12}: release ${release:0:12} and $((${#picks[@]} + ${#new[@]})) pick(s)"

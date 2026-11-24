@@ -33,10 +33,6 @@ export const seenStyles = cva({
     position: "absolute",
     transform: "var(--overview-to, none)",
     transformOrigin: "0 0",
-    transition: `
-      transform {durations.slower} {easings.emphasized},
-      opacity {durations.slow} {easings.out}
-    `,
   },
   variants: {
     // Coming into view from where it sat beside the shown workspace,
@@ -52,6 +48,20 @@ export const seenStyles = cva({
     placed: {
       false: { display: "none" },
       true: {},
+    },
+    // In the overview, open or closing. Only then does it ease: once the
+    // overview has closed, a box still easing to no transform would be a
+    // stacking context of its own, and with its wrapper's depth gone (see
+    // {@link seenClip}) a float would sink under the tiled windows until the
+    // ease ended.
+    seen: {
+      false: {},
+      true: {
+        transition: `
+          transform {durations.slower} {easings.emphasized},
+          opacity {durations.slow} {easings.out}
+        `,
+      },
     },
     // A hidden workspace's window, which never takes the pointer: it is
     // under the picker, then leaving once the picker is gone. The tab strips

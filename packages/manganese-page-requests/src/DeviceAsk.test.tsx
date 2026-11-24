@@ -41,7 +41,7 @@ describe("DeviceAsk", () => {
   it("says when no device fits", () => {
     render(<DeviceAsk request={requestFor([], [])} />);
 
-    expect(screen.getByText("No compatible devices found")).toBeInTheDocument();
+    expect(screen.getByText("No devices found")).toBeInTheDocument();
   });
 
   it("connects the device the user picks", async () => {

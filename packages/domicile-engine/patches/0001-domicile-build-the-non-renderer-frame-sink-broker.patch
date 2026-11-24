@@ -16,7 +16,7 @@ edit in files Chromium already owns.
  2 files changed, 4 insertions(+)
 
 diff --git a/components/BUILD.gn b/components/BUILD.gn
-index 65bc2d6..6f1bb6e 100644
+index 3bec032..97a87fd 100644
 --- a/components/BUILD.gn
 +++ b/components/BUILD.gn
 @@ -229,6 +229,7 @@ test("components_unittests") {
@@ -28,7 +28,7 @@ index 65bc2d6..6f1bb6e 100644
      "//components/encrypted_messages:unit_tests",
      "//components/enterprise/device_trust/core/attestation:unit_tests",
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index 0666c02..f0acbd4 100644
+index e6491bc..6686394 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
 @@ -163,6 +163,7 @@ source_set("browser") {
@@ -39,7 +39,7 @@ index 0666c02..f0acbd4 100644
      "//components/download/public/common:public",
      "//components/embedder_support",
      "//components/embedder_support:user_agent",
-@@ -967,6 +968,8 @@ source_set("browser") {
+@@ -964,6 +965,8 @@ source_set("browser") {
      "dom_storage/dom_storage_context_wrapper.h",
      "dom_storage/session_storage_namespace_handle_impl.cc",
      "dom_storage/session_storage_namespace_handle_impl.h",

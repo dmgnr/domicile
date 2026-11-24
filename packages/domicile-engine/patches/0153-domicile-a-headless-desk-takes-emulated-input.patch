@@ -281,7 +281,7 @@ index 6ac568e..1effbd4 100644
  
  }  // namespace
 diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
-index 6fda68e..f975437 100644
+index bc8edc3..c11d172 100644
 --- a/ui/ozone/public/ozone_platform.h
 +++ b/ui/ozone/public/ozone_platform.h
 @@ -132,6 +132,27 @@ struct DomicileWhitePoint {
@@ -312,7 +312,7 @@ index 6fda68e..f975437 100644
  // Base class for Ozone platform implementations.
  //
  // Ozone platforms must override this class and implement the virtual
-@@ -447,6 +468,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+@@ -434,6 +455,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
    // CRTC. DRM only, like the layout above: a nested desktop's monitors are
    // the host session's.
    virtual void SetDomicileWhitePoint(const DomicileWhitePoint& white_point) {}

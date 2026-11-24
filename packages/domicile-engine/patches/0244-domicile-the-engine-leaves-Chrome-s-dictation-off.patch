@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the engine leaves Chrome's dictation off
+
+The field trial testing config turns on Chrome's `Dictation` feature. Its
+per-tab `DictationIphController` asks for the microphone list as each tab
+opens, "so the cached list is populated by the time the user focuses a
+field". That starts Chrome listing devices, which launches the audio
+service, and the service stays up for the whole session: about 35 MiB on a
+desk that never records. Dictation is Chrome's own UI (a hotkey and a
+promo bubble), which Domicile does not show.
+
+The study is dropped from the config, as 0196 dropped another.
+
+Guarded by `guard-media-services-at-rest.sh`.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ .../variations/fieldtrial_testing_config.json | 22 -------------------
+ 1 file changed, 22 deletions(-)
+
+diff --git a/testing/variations/fieldtrial_testing_config.json b/testing/variations/fieldtrial_testing_config.json
+index 61f4047..f5c4526 100644
+--- a/testing/variations/fieldtrial_testing_config.json
++++ b/testing/variations/fieldtrial_testing_config.json
+@@ -7478,28 +7478,6 @@
+             ]
+         }
+     ],
+-    "Dictation": [
+-        {
+-            "platforms": [
+-                "chromeos",
+-                "linux",
+-                "mac",
+-                "windows"
+-            ],
+-            "experiments": [
+-                {
+-                    "name": "Enabled",
+-                    "params": {
+-                        "auto_session_end_delay": "300ms"
+-                    },
+-                    "enable_features": [
+-                        "Dictation",
+-                        "IPH_Dictation"
+-                    ]
+-                }
+-            ]
+-        }
+-    ],
+     "DipsForWebView": [
+         {
+             "platforms": [

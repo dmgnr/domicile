@@ -13,6 +13,7 @@ import { ChooserMode } from "../FilePicker/file-request";
 import type { Folders } from "../FilePicker/folders";
 import { Select } from "../Select/Select";
 import { ModalFilePicker } from "./ModalFilePicker";
+import type { Presence } from "./presence";
 
 /** A boolean choice's answers, as the portal spells them. */
 const YES_NO = [
@@ -24,6 +25,8 @@ type Props = {
   answer: (answer: PortalAnswer) => void;
   body: FileChooserBody;
   folders: Folders;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -32,12 +35,19 @@ type Props = {
  * whole page, with the application's choices beside its buttons. Its box
  * takes the keyboard on open.
  */
-export const FileChooserDialog = ({ answer, body, folders, screen }: Props) => {
+export const FileChooserDialog = ({
+  answer,
+  body,
+  folders,
+  presence,
+  screen,
+}: Props) => {
   const [choices, setChoices] = useState<ReadonlyMap<string, string>>(
     () => new Map(body.choices.map((choice) => [choice.id, choice.initial])),
   );
   return (
     <ModalFilePicker
+      presence={presence}
       request={{
         accept: [],
         acceptLabel: body.acceptLabel ?? acceptOf(body.mode),

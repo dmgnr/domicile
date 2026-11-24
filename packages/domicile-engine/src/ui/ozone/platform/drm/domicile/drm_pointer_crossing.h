@@ -82,6 +82,18 @@ std::optional<PointerHeard> PointerHeardAt(
     gfx::AcceleratedWidget desk_host,
     const gfx::PointF& location);
 
+// Returns where a pointer at `location` on the engine's desktop stays when the
+// window it is on moves or goes away: on whichever of `screens` holds that
+// spot now, in its panel pixels. Nothing when none holds it yet.
+//
+// Upstream keeps the pointer at its spot in the window, which carries it to
+// the monitor the window moved to, or puts it in the middle of the primary
+// window. On a desk the host's window moves when its monitor sleeps or wakes,
+// and the pointer on another monitor must not move with it.
+std::optional<PointerCrossing> PointerStaysAt(
+    const std::vector<PointerScreen>& screens,
+    const gfx::PointF& location);
+
 // Returns whether a window at `bounds_in_screen` receives keys, with the
 // pointer at `pointer` on the engine's desktop.
 //

@@ -734,6 +734,149 @@ fn an_empty_startup_command_is_refused() {
     assert!(matches!(err, ConfigError::Validation(_)), "got {err:?}");
 }
 
+// ---- browser profiles -----------------------------------------------------
+
+#[test]
+fn a_desk_that_says_nothing_about_profiles_has_a_default_and_a_private_one() {
+    let browser = Config::parse("{}").unwrap().browser;
+    assert_eq!(browser.default_profile, "default");
+    assert_eq!(browser.default_private_profile, "private");
+    assert!(!browser.profiles["default"].private);
+    assert!(browser.profiles["private"].private);
+    assert!(browser.sites.is_empty());
+}
+
+const PROFILES: &str = r##""profiles": {
+    "personal": { "name": "Personal", "color": "#0d9488" },
+    "work": { "name": "Work", "color": "#d97706", "extensions": ["aeblfdkhhhdcdjpifhhbdiojplfjncoa"] },
+    "incognito": { "name": "Private", "color": "#a78bfa", "private": true }
+  },
+  "default_profile": "personal",
+  "default_private_profile": "incognito""##;
+
+fn browser_config(rest: &str) -> String {
+    format!(r#"{{ "browser": {{ {PROFILES}{rest} }} }}"#)
+}
+
+#[test]
+fn profiles_map_sites_to_profiles() {
+    let browser = Config::parse(&browser_config(
+        r#", "sites": { "*.acme.com": "work", "github.com/acme": "work", "chase.com": "incognito" }"#,
+    ))
+    .unwrap()
+    .browser;
+    assert_eq!(browser.sites["github.com/acme"], "work");
+    assert_eq!(browser.sites["chase.com"], "incognito");
+    assert_eq!(
+        browser.profiles["work"].extensions,
+        Some(vec!["aeblfdkhhhdcdjpifhhbdiojplfjncoa".to_string()])
+    );
+    assert_eq!(browser.profiles["personal"].extensions, None);
+}
+
+#[test]
+fn profiles_list_in_their_order_then_by_id() {
+    let browser = Config::parse(&browser_config(r#", "order": ["work"]"#))
+        .unwrap()
+        .browser;
+    let ids: Vec<&str> = browser
+        .ordered_profiles()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert_eq!(ids, ["work", "incognito", "personal"]);
+}
+
+#[test]
+fn a_profile_config_that_contradicts_itself_is_refused() {
+    let refused = [
+        // A site in a profile that doesn't exist.
+        browser_config(r#", "sites": { "acme.com": "office" }"#),
+        // A site in the default profile, which every unlisted site opens in.
+        browser_config(r#", "sites": { "acme.com": "personal" }"#),
+        // A site that is no host.
+        browser_config(r#", "sites": { "https://acme.com": "work" }"#),
+        browser_config(r#", "sites": { "acme.com/": "work" }"#),
+        // An order naming a profile that doesn't exist, or one twice.
+        browser_config(r#", "order": ["office"]"#),
+        browser_config(r#", "order": ["work", "work"]"#),
+    ];
+    for text in refused {
+        let err = Config::parse(&text).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(_)),
+            "{text}: got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn default_profiles_must_exist_and_be_the_right_kind() {
+    let refused = [
+        // The default profile is missing.
+        r##"{ "browser": { "profiles": { "work": { "name": "Work", "color": "#d97706" } } } }"##,
+        // The default profile is private.
+        r##"{ "browser": { "default_profile": "private" } }"##,
+        // The default private profile is not private.
+        r##"{ "browser": { "default_private_profile": "default" } }"##,
+    ];
+    for text in refused {
+        let err = Config::parse(text).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(_)),
+            "{text}: got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn a_profile_id_is_a_directory_name() {
+    let err = Config::parse(
+        r##"{ "browser": { "profiles": {
+            "default": { "name": "Default", "color": "#0d9488" },
+            "private": { "name": "Private", "color": "#a78bfa", "private": true },
+            "../work": { "name": "Work", "color": "#d97706" }
+        } } }"##,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ConfigError::Validation(_)), "got {err:?}");
+}
+
+#[test]
+fn a_profile_names_extensions_by_id() {
+    let err = Config::parse(
+        r##"{ "browser": { "profiles": {
+            "default": { "name": "Default", "color": "#0d9488", "extensions": ["bitwarden"] },
+            "private": { "name": "Private", "color": "#a78bfa", "private": true }
+        } } }"##,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ConfigError::Validation(_)), "got {err:?}");
+}
+
+// ---- electron -------------------------------------------------------------
+
+#[test]
+fn a_desk_that_says_nothing_about_electron_runs_no_app_on_the_engine() {
+    assert!(Config::parse("{}").unwrap().electron.apps.is_empty());
+}
+
+#[test]
+fn electron_apps_are_desktop_file_ids() {
+    let apps = Config::parse(r#"{ "electron": { "apps": ["slack.desktop", "element-desktop"] } }"#)
+        .unwrap()
+        .electron
+        .apps;
+    assert_eq!(apps, ["slack.desktop", "element-desktop"]);
+}
+
+#[test]
+fn an_electron_app_given_as_a_path_is_refused() {
+    let err =
+        Config::parse(r#"{ "electron": { "apps": ["/usr/share/applications/slack.desktop"] } }"#)
+            .unwrap_err();
+    assert!(matches!(err, ConfigError::Validation(_)), "got {err:?}");
+}
+
 // ---- terminal -------------------------------------------------------------
 
 #[test]
@@ -874,7 +1017,6 @@ fn a_desk_sets_its_extensions_settings() {
   "extensions": {
     "settings": {
       "ddkjiahejlhfcafbddmgiahcphecmpfh": {
-        "private": true,
         "file_access": false,
         "site_access": ["github.com", "*.example.com"]
       },
@@ -889,7 +1031,6 @@ fn a_desk_sets_its_extensions_settings() {
     assert_eq!(
         extensions.settings["ddkjiahejlhfcafbddmgiahcphecmpfh"],
         ExtensionSettings {
-            in_private: Some(true),
             file_access: Some(false),
             user_scripts: None,
             site_access: Some(SiteAccess::Sites(vec![
@@ -910,7 +1051,8 @@ fn a_desk_sets_its_extensions_settings() {
 
 #[test]
 fn rejects_settings_for_an_id_that_is_not_one() {
-    let message = refusal(r#"{ "extensions": { "settings": { "ublock": { "private": true } } } }"#);
+    let message =
+        refusal(r#"{ "extensions": { "settings": { "ublock": { "file_access": true } } } }"#);
     assert!(message.contains("ublock"), "{message}");
 }
 
@@ -1929,4 +2071,49 @@ fn a_config_may_name_its_json_schema() {
     )
     .unwrap();
     assert_eq!(config.input.keyboard.xkb_layout, "us");
+}
+
+#[test]
+fn an_extension_s_private_setting_is_refused_as_private_profiles_switch_it() {
+    // A private browser profile's `extensions` says what runs in private
+    // windows (docs/architecture/BROWSER-PROFILES.md).
+    let text = r#"{ "extensions": { "settings": { "ddkjiahejlhfcafbddmgiahcphecmpfh": { "private": true } } } }"#;
+    assert!(Config::parse(text).is_err());
+}
+
+#[test]
+fn spelling_is_checked_in_american_english_unless_configured() {
+    let unset = Config::parse("{}").unwrap().spellcheck;
+    assert_eq!(
+        (unset.enabled, unset.languages),
+        (true, vec!["en-US".to_string()])
+    );
+    let configured =
+        Config::parse(r#"{ "spellcheck": { "enabled": false, "languages": ["en-GB", "de-DE"] } }"#)
+            .unwrap()
+            .spellcheck;
+    assert_eq!(
+        (configured.enabled, configured.languages),
+        (false, vec!["en-GB".to_string(), "de-DE".to_string()])
+    );
+}
+
+#[test]
+fn rejects_checking_spelling_in_no_language() {
+    let err = Config::parse(r#"{ "spellcheck": { "languages": [] } }"#).unwrap_err();
+    assert!(matches!(err, ConfigError::Validation(_)), "got {err:?}");
+}
+
+#[test]
+fn rejects_a_spelling_language_that_is_not_a_language_tag() {
+    for language in ["", "en US", "../en-US", "en_US"] {
+        let err = Config::parse(&format!(
+            r#"{{ "spellcheck": {{ "languages": ["{language}"] }} }}"#
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Validation(_)),
+            "{language:?}: got {err:?}"
+        );
+    }
 }

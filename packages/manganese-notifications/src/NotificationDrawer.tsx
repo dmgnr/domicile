@@ -330,6 +330,8 @@ const listStyles = flex({
   overflowX: "clip",
   overflowY: "clip",
   paddingInline: 0,
+  // main-thread animation: holds the drawer's height once, as its last row
+  // leaves.
   transition: "min-block-size {durations.normal} {easings.in-out}",
 });
 
@@ -347,8 +349,7 @@ const cardBoxStyles = css({
   backgroundColor: "fill",
   borderRadius: "lg",
   minBlockSize: 0,
-  transition:
-    "background-color {durations.fast} {easings.default}, box-shadow {durations.fast} {easings.default}",
+  transition: "background-color {durations.fast} {easings.default}",
 });
 
 // Fades in as the last cleared row leaves.

@@ -1,0 +1,23 @@
+{
+  "description": "Fails on CSS animations and transitions of properties that run on the main thread.",
+  "devDependencies": {
+    "@cprussin/tsconfig": "catalog:",
+    "@domicile-desktop/check-runner": "workspace:*",
+    "@types/bun": "catalog:",
+    "oxc-parser": "catalog:",
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "license": "MIT",
+  "name": "@domicile-desktop/animated-properties",
+  "private": true,
+  "scripts": {
+    "test:shell": "check-runner tests/*.sh",
+    "test:types": "tsc --noEmit",
+    "test:unit": "bun test"
+  },
+  "type": "module",
+  "version": "0.0.1"
+}

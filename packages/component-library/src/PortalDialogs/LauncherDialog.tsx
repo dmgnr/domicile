@@ -6,12 +6,15 @@ import { hstack } from "../../styled-system/patterns";
 import { Button } from "../Button/Button";
 import { Input } from "../Input/Input";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
+import type { Presence } from "./presence";
 
 type Props = {
   answer: (answer: PortalAnswer) => void;
   /** Who asks, as the dialog names them. */
   asker: string;
   body: LauncherBody;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -20,7 +23,13 @@ type Props = {
  * a name the user may change and a web app's address. Dismissing it adds
  * nothing.
  */
-export const LauncherDialog = ({ answer, asker, body, screen }: Props) => {
+export const LauncherDialog = ({
+  answer,
+  asker,
+  body,
+  presence,
+  screen,
+}: Props) => {
   const [name, setName] = useState(body.name);
   const trimmed = name.trim();
   return (
@@ -51,7 +60,7 @@ export const LauncherDialog = ({ answer, asker, body, screen }: Props) => {
           answer(Answer.Canceled());
         }
       }}
-      open
+      {...presence}
       screen={screen}
       title={`${asker} wants to add an app`}
     >

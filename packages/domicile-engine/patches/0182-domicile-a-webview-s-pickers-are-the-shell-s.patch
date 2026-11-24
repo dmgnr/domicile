@@ -23,10 +23,10 @@ through domicile::mojom::PagePicker, and the shell draws the picker.
  5 files changed, 45 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 1f3e82d..9ea049d 100644
+index 094efe1..1c75e2e 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
-@@ -745,6 +745,23 @@ void PopulateChromeFrameBinders(
+@@ -777,6 +777,23 @@ void PopulateChromeFrameBinders(
              base::BindOnce(&domicile::BindAppChannel, std::move(receiver)));
        }));
  
@@ -51,7 +51,7 @@ index 1f3e82d..9ea049d 100644
  
    map->Add<blink::mojom::ScriptToolHost>(
 diff --git a/third_party/blink/renderer/bindings/generated_in_core.gni b/third_party/blink/renderer/bindings/generated_in_core.gni
-index b6bbfd9..d2b0111 100644
+index 9a7798b..14fb922 100644
 --- a/third_party/blink/renderer/bindings/generated_in_core.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_core.gni
 @@ -1230,6 +1230,8 @@ generated_interface_sources_in_core = [
@@ -64,7 +64,7 @@ index b6bbfd9..d2b0111 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_domicile_prompt_event.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/core/v8/v8_html_geolocation_element.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_core.gni b/third_party/blink/renderer/bindings/idl_in_core.gni
-index 4d26138..b884524 100644
+index 41f7cd7..2098426 100644
 --- a/third_party/blink/renderer/bindings/idl_in_core.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_core.gni
 @@ -473,6 +473,7 @@ static_idl_files_in_core = [
@@ -76,7 +76,7 @@ index 4d26138..b884524 100644
    "//third_party/blink/renderer/core/html/html_geolocation_element.idl",
    "//third_party/blink/renderer/core/html/html_head_element.idl",
 diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
-index 83ff3b6..6d60d43 100644
+index 4d29868..60b37ba 100644
 --- a/third_party/blink/renderer/core/html/build.gni
 +++ b/third_party/blink/renderer/core/html/build.gni
 @@ -114,6 +114,10 @@ blink_core_sources_html = [
@@ -91,7 +91,7 @@ index 83ff3b6..6d60d43 100644
    "domicile/domicile_prompt_event.h",
    "domicile/html_app_element.cc",
 diff --git a/third_party/blink/renderer/core/page/chrome_client_impl.cc b/third_party/blink/renderer/core/page/chrome_client_impl.cc
-index 99de6ae..57b5242 100644
+index ca3ab90..bc99254 100644
 --- a/third_party/blink/renderer/core/page/chrome_client_impl.cc
 +++ b/third_party/blink/renderer/core/page/chrome_client_impl.cc
 @@ -83,6 +83,7 @@
@@ -102,7 +102,7 @@ index 99de6ae..57b5242 100644
  #include "third_party/blink/renderer/core/html/forms/color_chooser.h"
  #include "third_party/blink/renderer/core/html/forms/color_chooser_client.h"
  #include "third_party/blink/renderer/core/html/forms/color_chooser_popup_ui_controller.h"
-@@ -805,6 +806,13 @@ ColorChooser* ChromeClientImpl::OpenColorChooser(
+@@ -796,6 +797,13 @@ ColorChooser* ChromeClientImpl::OpenColorChooser(
      ColorChooserClient* chooser_client,
      const Color&) {
    NotifyPopupOpeningObservers();
@@ -116,7 +116,7 @@ index 99de6ae..57b5242 100644
    ColorChooserUIController* controller = nullptr;
  
    if (RuntimeEnabledFeatures::PagePopupEnabled()) {
-@@ -827,6 +835,13 @@ DateTimeChooser* ChromeClientImpl::OpenDateTimeChooser(
+@@ -825,6 +833,13 @@ DateTimeChooser* ChromeClientImpl::OpenDateTimeChooser(
      DateTimeChooserClient* picker_client,
      const DateTimeChooserParameters& parameters) {
    NotifyPopupOpeningObservers();
@@ -130,7 +130,7 @@ index 99de6ae..57b5242 100644
    // Android does not support PagePopup, so we must always use the native
    // picker.
  #if !BUILDFLAG(IS_ANDROID)
-@@ -1401,6 +1416,12 @@ void ChromeClientImpl::DidEndEditingOnTextField(
+@@ -1406,6 +1421,12 @@ void ChromeClientImpl::DidEndEditingOnTextField(
  
  void ChromeClientImpl::OpenTextDataListChooser(HTMLInputElement& input) {
    NotifyPopupOpeningObservers();

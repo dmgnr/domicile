@@ -168,6 +168,9 @@ wait_for_line "$TRIES" "GUARD shell-loaded" "$ENGINE_LOG"
 FIRST_ANSWER="$(open_mail "$SITE/mail?n=1" "$FOCUS")"
 echo "the engine answered mail 1 (reuse=$FOCUS): $FIRST_ANSWER"
 wait_for_line "$TRIES" "loaded mail n=1" "$HTTP_LOG"
+# The shell lists the window after the page loads, not before: read its id
+# only once it is listed.
+wait_for_line "$TRIES" "GUARD list mail=1 " "$ENGINE_LOG"
 MAIL_ID="$(sed -n 's/.*GUARD list mail=[0-9]* chat=[0-9]* mail-id=\([0-9][0-9]*\) .*/\1/p' "$ENGINE_LOG" | head -1)"
 wait_for_line "$TRIES" "attached browser window ${MAIL_ID:-none} to a <webview>" "$ENGINE_LOG"
 SECOND_ANSWER="$(open_mail "$SITE/mail?n=2" "$FOCUS")"

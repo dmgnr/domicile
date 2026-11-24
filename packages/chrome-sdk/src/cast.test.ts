@@ -28,12 +28,15 @@ const TV: CastTarget = {
 
 const display = (name: string): DomicileDisplay => ({
   adaptiveSync: "unsupported",
+  hdr: "unsupported",
   height: 1080,
   modeHeight: 1080,
   modeWidth: 1920,
   name,
+  peakLuminance: 0,
   refreshMhz: 60_000,
   scale: 1,
+  sdrWhite: 0,
   transform: "normal",
   width: 1920,
   x: 0,

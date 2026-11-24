@@ -15,9 +15,19 @@ class CommandLine;
 
 namespace domicile {
 
+// Where a shell's files come from.
+enum class ShellFiles {
+  // Files under the root, a directory.
+  kDirectory,
+  // A dev server listening on the root, a unix socket: `domicile dev` serves
+  // the shell with hot module replacement. See shell_dev_server.h.
+  kDevServer,
+};
+
 // The shell this browser serves: its root directory and module.
 //
-// Seeded from `--domicile-shell-root` and `--domicile-shell-module`, and
+// Seeded from `--domicile-shell-root`, `--domicile-shell-module` and
+// `--domicile-shell-dev-server`, and
 // mutable so `domicile load-shell` can switch shells without restarting the
 // engine, which would close every window. See
 // docs/architecture/THE-DOMICILE-BINARY.md#the-engine-command-socket.
@@ -35,17 +45,24 @@ class ShellSource {
 
   ~ShellSource();
 
-  // The directory the shell's files are read from. Empty if never set, which
-  // makes ShellURLLoaderFactory refuse every request.
+  // The directory the shell's files are read from, or the dev server's
+  // socket (see `Files()`). Empty if never set, which makes
+  // ShellURLLoaderFactory refuse every request.
   base::FilePath Root() const;
+
+  // Whether `Root()` is a directory or a dev server's socket.
+  ShellFiles Files() const;
 
   // The shell's module, relative to `Root()`. Empty if never set, which makes
   // the shell document fail with an error.
   std::string Module() const;
 
-  // Replaces the shell. Set both together: a module only makes sense with its
-  // root. Takes effect on the next navigation or reload of the shell's window.
-  void Set(const base::FilePath& root, const std::string& module);
+  // Replaces the shell. Set all three together: a module only makes sense
+  // with its root. Takes effect on the next navigation or reload of the
+  // shell's window.
+  void Set(const base::FilePath& root,
+           const std::string& module,
+           ShellFiles files);
 
   // Counts each Set, so a shell document can be told apart from one served
   // before the last Set. The document names it, and its page reports it back
@@ -55,6 +72,7 @@ class ShellSource {
  private:
   base::FilePath root_;
   std::string module_;
+  ShellFiles files_;
   uint64_t serial_ = 0;
 };
 

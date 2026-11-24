@@ -49,6 +49,14 @@ pub struct Arguments {
     /// Electron, so a press can be traced back to the window.
     pub notify: Option<String>,
 
+    /// Whether to show a tray icon (`org.kde.StatusNotifierItem`) on the
+    /// session bus, as a chat app does, tracing its clicks and the tokens
+    /// handed to it.
+    ///
+    /// The bus and the Wayland socket share the client's process, as in
+    /// Electron, so a click can be traced back to the window.
+    pub tray: bool,
+
     /// Text to offer on the primary (middle-click) selection.
     ///
     /// Separate from [`copy`](Self::copy) so checks can catch a compositor that
@@ -117,8 +125,12 @@ pub struct Arguments {
 
     /// Whether the client asks, when the pointer first enters its window, to
     /// lock the pointer there or confine it to the window, as a game does. A
-    /// persistent ask over the whole window.
+    /// persistent ask over the whole window, unless `constrain_region` names
+    /// part of it.
     pub constrain_pointer: Option<ConstrainPointer>,
+    /// The part of the window `constrain_pointer` asks for, as
+    /// `(x, y, width, height)` in surface-local units.
+    pub constrain_region: Option<(i32, i32, i32, i32)>,
 
     /// Whether to open a bubble over the window once it is up: a desync
     /// `wl_subsurface`, as Chromium draws an extension popup.
@@ -136,6 +148,11 @@ pub struct Arguments {
     ///
     /// See [`crate::window::SCROLLING_BUBBLE`] for its geometry.
     pub scrolling_bubble: bool,
+
+    /// Whether a `--scrolling-bubble` is moved a frame late: each commit puts
+    /// it where the stripe was the frame before, off its content. The control
+    /// of `guard-scrolling-bubble.sh`.
+    pub late_bubble: bool,
 
     /// Whether to open a second toplevel once the window is up, and make it
     /// the window's dialog (`xdg_toplevel.set_parent`) after it first draws.
@@ -189,6 +206,21 @@ pub struct Arguments {
     /// each enter, traces what an input method sends it, and moves its text
     /// cursor ([`crate::CARET`]) as text is committed.
     pub text_input: bool,
+
+    /// The 10-bit or half-float `wl_shm` format to draw in, if any.
+    ///
+    /// The window is [`crate::window::DEEP_COLOR`] in that format, so a check
+    /// can read back that the format reached the page in the right colors.
+    pub format: Option<DeepFormat>,
+}
+
+/// A `wl_shm` format with more than 8 bits a channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepFormat {
+    Abgr2101010,
+    Xbgr2101010,
+    Abgr16161616f,
+    Xbgr16161616f,
 }
 
 /// An `xdg_toplevel` request about the window's state.
@@ -281,6 +313,14 @@ pub enum ArgumentError {
     #[error("--constrain-pointer wants lock or confine, not {value}")]
     NotAConstraint { value: String },
 
+    #[error("--constrain-region wants WIDTHxHEIGHT+X+Y, not {value}")]
+    NotARegion { value: String },
+
+    #[error(
+        "--format wants abgr2101010, xbgr2101010, abgr16161616f or xbgr16161616f, not {value}"
+    )]
+    NotADeepFormat { value: String },
+
     #[error("unknown argument {argument}")]
     Unknown { argument: String },
 }
@@ -299,6 +339,7 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
     let mut copy = None;
     let mut copy_primary = None;
     let mut notify = None;
+    let mut tray = None;
     let mut paste = None;
     let mut popup = None;
     let mut popup_grab = None;
@@ -308,9 +349,11 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
     let mut cursor_surface = None;
     let mut ask_to_drag = None;
     let mut constrain_pointer = None;
+    let mut constrain_region = None;
     let mut bubble = None;
     let mut bubble_without_input = None;
     let mut scrolling_bubble = None;
+    let mut late_bubble = None;
     let mut dialog = None;
     let mut min_size = None;
     let mut max_size = None;
@@ -323,6 +366,7 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
     let mut wl_seat_v7 = None;
     let mut no_touch = None;
     let mut text_input = None;
+    let mut format = None;
 
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -388,6 +432,9 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
             "--notify" => {
                 take(&mut notify, &flag, value(&mut args, &flag)?)?;
             }
+            "--tray" => {
+                take(&mut tray, &flag, true)?;
+            }
             "--paste" => {
                 take(&mut paste, &flag, true)?;
             }
@@ -421,6 +468,9 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
                 };
                 take(&mut constrain_pointer, &flag, constraint)?;
             }
+            "--constrain-region" => {
+                take(&mut constrain_region, &flag, region(&mut args, &flag)?)?;
+            }
             "--bubble" => {
                 take(&mut bubble, &flag, true)?;
             }
@@ -429,6 +479,9 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
             }
             "--scrolling-bubble" => {
                 take(&mut scrolling_bubble, &flag, true)?;
+            }
+            "--late-bubble" => {
+                take(&mut late_bubble, &flag, true)?;
             }
             "--dialog" => {
                 take(&mut dialog, &flag, true)?;
@@ -447,6 +500,9 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
             }
             "--viewport-to" => {
                 take(&mut viewport_to, &flag, size(&mut args, &flag)?)?;
+            }
+            "--format" => {
+                take(&mut format, &flag, deep_format(&mut args, &flag)?)?;
             }
             "--buffer-transform" => {
                 take(&mut buffer_transform, &flag, turn(&mut args, &flag)?)?;
@@ -483,6 +539,7 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
         copy,
         copy_primary,
         notify,
+        tray: tray.unwrap_or(false),
         paste: paste.unwrap_or(false),
         popup: popup.unwrap_or(false)
             || popup_grab.unwrap_or(false)
@@ -494,9 +551,11 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
         cursor_surface: cursor_surface.unwrap_or(false),
         ask_to_drag,
         constrain_pointer,
+        constrain_region,
         bubble: bubble.unwrap_or(false),
         bubble_without_input: bubble_without_input.unwrap_or(false),
         scrolling_bubble: scrolling_bubble.unwrap_or(false),
+        late_bubble: late_bubble.unwrap_or(false),
         dialog: dialog.unwrap_or(false),
         min_size,
         max_size,
@@ -509,6 +568,7 @@ pub fn arguments(args: impl IntoIterator<Item = OsString>) -> Result<Arguments, 
         wl_seat_v7: wl_seat_v7.unwrap_or(false),
         no_touch: no_touch.unwrap_or(false),
         text_input: text_input.unwrap_or(false),
+        format,
     })
 }
 
@@ -547,6 +607,32 @@ fn size<T: std::str::FromStr>(
         })
 }
 
+/// A rectangle written `WIDTHxHEIGHT+X+Y`, as X11 geometry is, returned as
+/// `(x, y, width, height)`.
+fn region(
+    args: &mut impl Iterator<Item = OsString>,
+    flag: &str,
+) -> Result<(i32, i32, i32, i32), ArgumentError> {
+    let stated = value(args, flag)?;
+    let parsed = (|| {
+        let (width, rest) = stated.split_once('x')?;
+        let mut rest = rest.split('+');
+        let height = rest.next()?;
+        let x = rest.next()?;
+        let y = rest.next()?;
+        if rest.next().is_some() {
+            return None;
+        }
+        Some((
+            x.parse().ok()?,
+            y.parse().ok()?,
+            width.parse().ok()?,
+            height.parse().ok()?,
+        ))
+    })();
+    parsed.ok_or(ArgumentError::NotARegion { value: stated })
+}
+
 /// The `wl_output.transform` named after a flag: `normal`, `90`, `180`, `270`,
 /// or `flipped` and `flipped-` before any of the turns.
 fn turn(args: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<Transform, ArgumentError> {
@@ -561,6 +647,21 @@ fn turn(args: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<Transfo
         "flipped-180" => Ok(Transform::Flipped180),
         "flipped-270" => Ok(Transform::Flipped270),
         _ => Err(ArgumentError::NotATransform { value: stated }),
+    }
+}
+
+/// The format named after a flag.
+fn deep_format(
+    args: &mut impl Iterator<Item = OsString>,
+    flag: &str,
+) -> Result<DeepFormat, ArgumentError> {
+    let stated = value(args, flag)?;
+    match stated.as_str() {
+        "abgr2101010" => Ok(DeepFormat::Abgr2101010),
+        "xbgr2101010" => Ok(DeepFormat::Xbgr2101010),
+        "abgr16161616f" => Ok(DeepFormat::Abgr16161616f),
+        "xbgr16161616f" => Ok(DeepFormat::Xbgr16161616f),
+        _ => Err(ArgumentError::NotADeepFormat { value: stated }),
     }
 }
 

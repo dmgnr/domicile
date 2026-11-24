@@ -1,8 +1,22 @@
 import { describe, expect, it } from "bun:test";
 import { Err, Ok } from "@cprussin/option-result";
 
-import { inboxCounts, mailHeaders, unreadMail } from "./gmail-api";
-import { answering, HEADERS, INBOX, json, UNREAD } from "./held-google";
+import {
+  createDraft,
+  inboxCounts,
+  mailHeaders,
+  sendAsAddresses,
+  unreadMail,
+} from "./gmail-api";
+import {
+  answering,
+  DRAFTS,
+  HEADERS,
+  INBOX,
+  json,
+  SEND_AS,
+  UNREAD,
+} from "./held-google";
 
 describe("inboxCounts", () => {
   it("counts the inbox's conversations, with the access token", async () => {
@@ -56,8 +70,8 @@ describe("unreadMail", () => {
       [UNREAD]: [
         json(200, {
           messages: [
-            { id: "m2", threadId: "t1" },
-            { id: "m1", threadId: "t1" },
+            { id: "m2", threadId: "1a" },
+            { id: "m1", threadId: "1a" },
           ],
           resultSizeEstimate: 2,
         }),
@@ -66,8 +80,8 @@ describe("unreadMail", () => {
 
     expect(await unreadMail(domicile, "acc3ss")).toStrictEqual(
       Ok([
-        { id: "m2", threadId: "t1" },
-        { id: "m1", threadId: "t1" },
+        { id: "m2", threadId: "1a" },
+        { id: "m1", threadId: "1a" },
       ]),
     );
   });
@@ -94,7 +108,7 @@ describe("mailHeaders", () => {
               { name: "From", value: '"Alex Chen" <alex@example.com>' },
             ],
           },
-          threadId: "t1",
+          threadId: "1a",
         }),
       ],
     });
@@ -105,7 +119,7 @@ describe("mailHeaders", () => {
         id: "m1",
         receivedAt: 1_761_955_200_000,
         subject: "Dinner Friday?",
-        threadId: "t1",
+        threadId: "1a",
       }),
     );
     expect(fetched[0]?.headers).toStrictEqual([
@@ -125,7 +139,7 @@ describe("mailHeaders", () => {
             id: "m1",
             internalDate: "1",
             payload: { headers: [{ name: "From", value: from }] },
-            threadId: "t1",
+            threadId: "1a",
           }),
         ],
       });
@@ -136,11 +150,26 @@ describe("mailHeaders", () => {
           id: "m1",
           receivedAt: 1,
           subject: "(no subject)",
-          threadId: "t1",
+          threadId: "1a",
         }),
       );
     },
   );
+
+  it("fails on a thread id that is not Gmail's hex", async () => {
+    const { domicile } = answering({
+      [HEADERS("m1")]: [
+        json(200, {
+          id: "m1",
+          internalDate: "1",
+          payload: { headers: [] },
+          threadId: '"] *',
+        }),
+      ],
+    });
+
+    expect((await mailHeaders(domicile, "acc3ss", "m1")).isErr()).toBe(true);
+  });
 
   it("names a message with no sender as unknown", async () => {
     const { domicile } = answering({
@@ -149,7 +178,7 @@ describe("mailHeaders", () => {
           id: "m1",
           internalDate: "1",
           payload: { headers: [{ name: "Subject", value: "Hi" }] },
-          threadId: "t1",
+          threadId: "1a",
         }),
       ],
     });
@@ -160,8 +189,67 @@ describe("mailHeaders", () => {
         id: "m1",
         receivedAt: 1,
         subject: "Hi",
-        threadId: "t1",
+        threadId: "1a",
       }),
+    );
+  });
+});
+
+describe("sendAsAddresses", () => {
+  it("lists the account's own address, then its verified aliases", async () => {
+    const { domicile } = answering({
+      [SEND_AS]: [
+        json(200, {
+          sendAs: [
+            { sendAsEmail: "me@work.example", verificationStatus: "accepted" },
+            { isPrimary: true, sendAsEmail: "me@example.com" },
+            { sendAsEmail: "me@old.example", verificationStatus: "pending" },
+          ],
+        }),
+      ],
+    });
+
+    expect(await sendAsAddresses(domicile, "acc3ss")).toStrictEqual(
+      Ok(["me@example.com", "me@work.example"]),
+    );
+  });
+
+  it("fails with Gmail's answer when it refuses", async () => {
+    const { domicile } = answering({ [SEND_AS]: [json(403, {})] });
+
+    expect(await sendAsAddresses(domicile, "acc3ss")).toStrictEqual(
+      Err("Gmail answered 403: {}"),
+    );
+  });
+});
+
+describe("createDraft", () => {
+  it("saves the message as a draft, in base64url, and names its message", async () => {
+    const { domicile, fetched } = answering({
+      [DRAFTS]: [json(200, { id: "r-1", message: { id: "18c2f0a" } })],
+    });
+
+    expect(await createDraft(domicile, "acc3ss", "Subject: é?>")).toStrictEqual(
+      Ok("18c2f0a"),
+    );
+    expect(fetched).toStrictEqual([
+      {
+        body: JSON.stringify({ message: { raw: "U3ViamVjdDogw6k_Pg==" } }),
+        headers: [
+          { name: "Authorization", value: "Bearer acc3ss" },
+          { name: "Content-Type", value: "application/json" },
+        ],
+        method: "POST",
+        url: DRAFTS,
+      },
+    ]);
+  });
+
+  it("fails with Gmail's answer when it refuses", async () => {
+    const { domicile } = answering({ [DRAFTS]: [json(403, {})] });
+
+    expect(await createDraft(domicile, "acc3ss", "")).toStrictEqual(
+      Err("Gmail answered 403: {}"),
     );
   });
 });

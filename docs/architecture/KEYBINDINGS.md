@@ -7,7 +7,7 @@ each chord by name. The SDK grabs the shell's chords and runs the actions.
 ```ts
 bindKeys(domicile, {
   keybindings: {
-    "Meta+Return": KeyAction.SendShell(["exec", "kitty"]),
+    "Meta+Return": KeyAction.Exec(["kitty"]),
     "Meta+r": KeyAction.Mode("resize"),
   },
   modes: {
@@ -16,7 +16,7 @@ bindKeys(domicile, {
       "Meta+Escape": KeyAction.Mode("default"),
     },
   },
-}, { onCommand, onModeChanged });
+}, { commands, onCommand, onModeChanged });
 ```
 
 Manganese takes the same shape as `runManganese({ keybindings })`, built with
@@ -24,7 +24,9 @@ its typed commands (`focus("right")`, `mode("resize")`). With no keybindings it
 binds sway's defaults on Meta.
 
 `domicile send-shell focus right` in a terminal on the desktop runs the same
-command as a `SendShell(["focus", "right"])` binding.
+command as a `SendShell(["focus", "right"])` binding. `Exec` is Domicile's, not
+the shell's: the SDK starts the program as `domicile exec` does, and the desktop
+tells the person when it does not start.
 
 ## Design
 
@@ -51,8 +53,10 @@ compositor: keymap.rs ─▶ shell_config { keys } ─▶ engine ─────
 - A modifier alone, `Meta`, is a tap of it: either side's key pressed and let
   go with nothing in between. Another key, a click, a scroll, a pinch, a touch
   or a touchpad gesture the shell takes while it is held makes it no tap, so
-  `Meta+Return` and Super-dragging a window still work. Manganese binds `Meta`
-  to the overview, as GNOME and KDE do.
+  `Meta+Return` and Super-dragging a window still work. So does holding it
+  longer than 300 ms, as on GNOME: Super held and let go does nothing.
+  `keyboard.grab("Meta", { longestTap })` sets another limit. Manganese binds
+  `Meta` to the overview, as GNOME and KDE do.
 
 **Gestures** bind in the same tables, in sway's `bindgesture` grammar:
 `swipe:3:left`, `pinch:4:inward`, `hold`, and touchscreen swipes in from an
@@ -65,14 +69,18 @@ edge, `edge:left`. See
 domicile send-shell ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor ─────────────────▶ every page
                        (control socket)               (system_request send_shell)    (system_event shell_command
                                                                                        ─▶ bindKeys onCommand)
+                    ◀─ sent (+ output), or why not ◀─ first page that ran it ◀─────── answer_shell_command
+
+domicile list-shell-commands ─▶ ... ─▶ compositor (which_shell_commands): what every listening page described
+domicile list-bindings       ─▶ ... ─▶ compositor (which_shell_bindings): every listening page's bindings
 ```
 
 | Piece | Where | Does |
 |---|---|---|
 | Verb | `domicile-launch` (`cli.rs`, `control.rs`) | `send-shell <word>…`; every word after it is the command |
 | Supervisor | `domicile-launch` (`compositor_socket::send_shell`) | Sends `send_shell` on the compositor's chrome socket without `hello`, as `domicile screenshot` does |
-| Fan-out | `domicile_host::shell_commands`, `domicile_host::system` | Tells every page listening with `shell_commands`; answers `sent`, or fails when none listens |
-| Listener | `domicile.shell.commands()`, `bindKeys` | `bindKeys` listens while bound and passes each command to `onCommand` |
+| Fan-out | `domicile_host::shell_commands`, `domicile_host::system` | Tells every page listening with `shell_commands`, numbered; answers `sent` once a page ran it, or fails with the pages' reasons, after one second unanswered, or when none listens |
+| Listener | `domicile.shell.commands(help, bindings)`, `domicile.shell.answer`, `bindKeys` | `bindKeys` listens while bound, describes `commands` and its bindings, passes each command to `onCommand` and answers with its `Result`, carrying any `output` |
 
 ## Key decisions
 
@@ -96,6 +104,11 @@ domicile send-shell ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor �
   `HostMessage` would need a fork change and an engine release.
 - **Every page listening hears a terminal command.** The compositor does not
   know which page the user is looking at.
+- **A command nobody runs fails loudly.** One page running it is enough; a
+  typo in a script or binding is an error with the shell's reason, not a
+  silent no-op.
+- **The shell describes its commands while it listens.** Commands are the
+  shell's, so only it can list them; one listening request carries both.
 - **A locked desktop refuses `send_shell` but allows `shell_commands`.** A
   page reloaded while locked still hears commands after unlock. See
   [LOCK.md](../LOCK.md).
@@ -105,7 +118,8 @@ domicile send-shell ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor �
   back its chords on `unbind`.
 - **Each page claims for itself.** `ShortcutRegistry` keeps a chord while any
   page claims it. A reloading page's claims stay until its successor lets go
-  of that chord, so a reload leaves no gap.
+  of that chord, so a reload leaves no gap. `domicile load-shell` to another
+  shell drops the old shell's claims once its page closes.
 - **A layout change moves the grab.** The old key is given back once no chord
   is on it.
 - **A window's shortcuts inhibitor wins.** A client holding
@@ -130,7 +144,9 @@ domicile send-shell ─▶ $DOMICILE_SOCK ─▶ supervisor ─▶ compositor �
   sends `GrabModifierTap`; `DeskModifierTaps` (fed by an aura event observer,
   `StartModifierTaps`, which sees every key whoever has the keyboard) hands
   the tap to the first page that grabbed it, as `shortcut` then
-  `shortcutrelease` with `keyCode` 0. The key itself still reaches the focused
+  `shortcutrelease` with `keyCode` 0. It is held to the longest `longestTap`
+  of the page's names for it and reports how long it was held, and the page
+  fires only the names whose own `longestTap` that fits. The key itself still reaches the focused
   client. Under a shortcuts inhibitor the tap is the window's unless grabbed
   `--inhibited`, as a chord is. Nested in another compositor, the host may
   keep Super for itself, and then no tap arrives.

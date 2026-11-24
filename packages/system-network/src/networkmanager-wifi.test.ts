@@ -16,12 +16,19 @@ import {
 import {
   connectNetworkManagerWifi,
   disconnectNetworkManagerWifi,
+  forgetNetworkManagerWifi,
   scanNetworkManagerWifi,
+  setNetworkManagerWifiAutoJoin,
   setNetworkManagerWifiEnabled,
   watchNetworkManagerWifi,
 } from "./networkmanager-wifi";
-import type { Wifi, WifiConnection, WifiNetwork } from "./wifi-state";
-import { WifiBackend } from "./wifi-state";
+import type {
+  SavedWifi,
+  Wifi,
+  WifiConnection,
+  WifiNetwork,
+} from "./wifi-state";
+import { WifiBackend, WifiSecurity } from "./wifi-state";
 
 const NM = "org.freedesktop.NetworkManager";
 const ROOT = "/org/freedesktop/NetworkManager";
@@ -31,7 +38,14 @@ const HOME = `${ROOT}/AccessPoint/12`;
 const HOME_FAR = `${ROOT}/AccessPoint/13`;
 const CAFE = `${ROOT}/AccessPoint/14`;
 const HIDDEN = `${ROOT}/AccessPoint/15`;
-const PROFILE = "/org/freedesktop/NetworkManager/Settings/4";
+const SETTINGS = `${ROOT}/Settings`;
+const PROFILE = `${SETTINGS}/4`;
+const OFFICE_PROFILE = `${SETTINGS}/5`;
+const LIBRARY_PROFILE = `${SETTINGS}/6`;
+const WIRED_PROFILE = `${SETTINGS}/7`;
+const HOTSPOT_PROFILE = `${SETTINGS}/8`;
+/** When Home was last joined, in seconds. */
+const HOME_JOINED = 1_763_500_000;
 const IP4 = `${ROOT}/IP4Config/7`;
 
 const bytes = (text: string) => [...new TextEncoder().encode(text)];
@@ -50,6 +64,27 @@ const accessPoint = (ssid: string, strength: number, rsn: number): DbusBody =>
     Strength: { signature: "y", value: strength },
     WpaFlags: { signature: "u", value: 0 },
   });
+
+const settings = (sections: Record<string, unknown>): DbusBody => ({
+  body: [sections],
+  signature: "a{sa{sv}}",
+});
+
+const HOME_SECTIONS = {
+  "802-11-wireless": {
+    mode: { signature: "s", value: "infrastructure" },
+    ssid: { signature: "ay", value: bytes("Home") },
+  },
+  "802-11-wireless-security": {
+    "key-mgmt": { signature: "s", value: "sae" },
+  },
+  connection: {
+    id: { signature: "s", value: "Home" },
+    timestamp: { signature: "t", value: HOME_JOINED },
+  },
+};
+
+const HOME_SETTINGS = settings(HOME_SECTIONS);
 
 /** NetworkManager's replies, trimmed, for a laptop on its home Wi-Fi. */
 const recorded = (enabled: boolean, active: string): Replies =>
@@ -107,19 +142,72 @@ const recorded = (enabled: boolean, active: string): Replies =>
     [`${CAFE} GetAll ${NM}.AccessPoint`, Ok(accessPoint("Cafe", 55, 0))],
     [`${HIDDEN} GetAll ${NM}.AccessPoint`, Ok(accessPoint("", 90, 0x1_88))],
     [
-      `${PROFILE} GetSettings`,
+      `${SETTINGS} ListConnections`,
       Ok({
         body: [
-          {
-            "802-11-wireless": {
-              mode: { signature: "s", value: "infrastructure" },
-              ssid: { signature: "ay", value: bytes("Home") },
-            },
-            connection: { id: { signature: "s", value: "Home" } },
-          },
+          [
+            PROFILE,
+            WIRED_PROFILE,
+            OFFICE_PROFILE,
+            HOTSPOT_PROFILE,
+            LIBRARY_PROFILE,
+          ],
         ],
-        signature: "a{sa{sv}}",
+        signature: "ao",
       }),
+    ],
+    [`${PROFILE} GetSettings`, Ok(HOME_SETTINGS)],
+    [
+      `${OFFICE_PROFILE} GetSettings`,
+      Ok(
+        settings({
+          "802-11-wireless": {
+            ssid: { signature: "ay", value: bytes("Office") },
+          },
+          "802-11-wireless-security": {
+            "key-mgmt": { signature: "s", value: "wpa-eap" },
+          },
+          connection: {
+            autoconnect: { signature: "b", value: false },
+            id: { signature: "s", value: "Office" },
+          },
+        }),
+      ),
+    ],
+    [
+      `${LIBRARY_PROFILE} GetSettings`,
+      Ok(
+        settings({
+          "802-11-wireless": {
+            ssid: { signature: "ay", value: bytes("Library") },
+          },
+          connection: {
+            id: { signature: "s", value: "Library" },
+            timestamp: { signature: "t", value: 0 },
+          },
+        }),
+      ),
+    ],
+    [
+      `${WIRED_PROFILE} GetSettings`,
+      Ok(
+        settings({
+          "802-3-ethernet": {},
+          connection: { id: { signature: "s", value: "Wired connection 1" } },
+        }),
+      ),
+    ],
+    [
+      `${HOTSPOT_PROFILE} GetSettings`,
+      Ok(
+        settings({
+          "802-11-wireless": {
+            mode: { signature: "s", value: "ap" },
+            ssid: { signature: "ay", value: bytes("Hotspot") },
+          },
+          connection: { id: { signature: "s", value: "Hotspot" } },
+        }),
+      ),
     ],
     [
       `${IP4} GetAll ${NM}.IP4Config`,
@@ -174,6 +262,32 @@ const CONNECTION: WifiConnection = {
   strength: 0.72,
 };
 
+const SAVED: SavedWifi[] = [
+  {
+    autoJoin: true,
+    lastUsed: new Date(HOME_JOINED * 1000),
+    profile: PROFILE,
+    security: WifiSecurity.Password,
+    ssid: "Home",
+  },
+  {
+    autoJoin: false,
+    lastUsed: undefined,
+    profile: OFFICE_PROFILE,
+    security: WifiSecurity.Enterprise,
+    ssid: "Office",
+  },
+  {
+    autoJoin: true,
+    lastUsed: undefined,
+    profile: LIBRARY_PROFILE,
+    security: WifiSecurity.Open,
+    ssid: "Library",
+  },
+];
+
+const [savedHome] = SAVED as [SavedWifi];
+
 const CONNECTED: Wifi = {
   backend: WifiBackend.NetworkManager,
   connection: CONNECTION,
@@ -182,6 +296,7 @@ const CONNECTED: Wifi = {
   hardwareAddress: "A4:C3:F0:85:AC:2D",
   interface: "wlan0",
   networks: [home, cafe],
+  saved: SAVED,
   scanning: false,
 };
 
@@ -294,6 +409,30 @@ describe("watchNetworkManagerWifi", () => {
       expect(seen.pending).toBe(0);
     });
 
+    it("reads again when a saved profile comes, goes or changes", async () => {
+      const bus = fakeBus(byKey(recorded(true, HOME)));
+      const seen = reports<Option<Wifi>>();
+      watchNetworkManagerWifi(bus.domicile, seen.on);
+      await seen.next();
+
+      for (const [path, iface, member] of [
+        [SETTINGS, `${NM}.Settings`, "NewConnection"],
+        [SETTINGS, `${NM}.Settings`, "ConnectionRemoved"],
+        [OFFICE_PROFILE, `${NM}.Settings.Connection`, "Updated"],
+      ] as const) {
+        await bus.send({
+          body: member === "Updated" ? [] : [`${SETTINGS}/9`],
+          interface: iface,
+          member,
+          path,
+          sender: ":1.7",
+          signature: member === "Updated" ? "" : "o",
+        });
+
+        expect(await seen.next()).toStrictEqual(Ok(Some(CONNECTED)));
+      }
+    });
+
     it("reads again when an access point comes", async () => {
       const bus = fakeBus(byKey(recorded(true, HOME)));
       const seen = reports<Option<Wifi>>();
@@ -372,6 +511,70 @@ describe("NetworkManager Wi-Fi requests", () => {
         path: WIRELESS,
       },
     ]);
+  });
+
+  it("forgets a saved network by deleting its profile", async () => {
+    const bus = fakeBus(() => Ok(DONE));
+
+    expect(
+      await forgetNetworkManagerWifi(bus.domicile, CONNECTED, savedHome),
+    ).toStrictEqual(Ok("done"));
+    expect(bus.calls).toStrictEqual([
+      {
+        bus: Bus.System,
+        destination: NM,
+        interface: `${NM}.Settings.Connection`,
+        member: "Delete",
+        path: PROFILE,
+      },
+    ]);
+  });
+
+  describe("joining automatically", () => {
+    it("writes the profile back with autoconnect changed and the rest as read", async () => {
+      const replies = recorded(true, HOME);
+      replies.set(`${PROFILE} Update`, Ok(DONE));
+      const bus = fakeBus(byKey(replies));
+
+      expect(
+        await setNetworkManagerWifiAutoJoin(
+          bus.domicile,
+          CONNECTED,
+          savedHome,
+          false,
+        ),
+      ).toStrictEqual(Ok("done"));
+      expect(bus.calls.at(-1)).toStrictEqual(
+        request(PROFILE, `${NM}.Settings.Connection`, "Update", "a{sa{sv}}", [
+          {
+            ...HOME_SECTIONS,
+            connection: {
+              autoconnect: { signature: "b", value: false },
+              id: { signature: "s", value: "Home" },
+              timestamp: { signature: "t", value: HOME_JOINED },
+            },
+          },
+        ]),
+      );
+    });
+
+    it("reports a failure to read the profile, and writes nothing", async () => {
+      const replies = recorded(true, HOME);
+      replies.set(`${PROFILE} GetSettings`, Err(SERVICE_UNKNOWN));
+      const bus = fakeBus(byKey(replies));
+
+      expect(
+        await setNetworkManagerWifiAutoJoin(
+          bus.domicile,
+          CONNECTED,
+          savedHome,
+          true,
+        ),
+      ).toStrictEqual(Err(SERVICE_UNKNOWN));
+      expect(bus.calls.map(({ member }) => member)).toStrictEqual([
+        "GetSettings",
+      ]);
+    });
   });
 
   describe("connecting", () => {

@@ -34,6 +34,12 @@ std::optional<gfx::PointF> DeskPagePoint(const gfx::Size& root,
 // capture keep every move, so a drag can leave the host monitor and return.
 void TargetDeskPage(Window* root, Window* page);
 
+// Returns the window that handles a point `at` in `root`'s coordinates, as an
+// event there would be targeted: on another monitor, inside the page
+// `TargetDeskPage` gave `root`. A drop finds its target with this, since a
+// drag carries no event to target.
+Window* DeskWindowAt(Window* root, const gfx::PointF& at);
+
 }  // namespace aura
 
 #endif  // UI_AURA_DOMICILE_DESK_TARGETER_H_

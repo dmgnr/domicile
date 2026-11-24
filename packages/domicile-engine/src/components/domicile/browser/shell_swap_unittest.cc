@@ -38,8 +38,10 @@ base::CommandLine Serving(const std::string& root, const std::string& module) {
 class ShellSwapTest : public testing::Test {
  protected:
   // Swaps to `module` under `root`, keeping the answer in `answers_`.
-  void Swap(const std::string& root, const std::string& module) {
-    swap_.Swap(base::FilePath(root), module,
+  void Swap(const std::string& root,
+            const std::string& module,
+            ShellFiles files = ShellFiles::kDirectory) {
+    swap_.Swap(base::FilePath(root), module, files,
                base::BindOnce(
                    [](std::vector<ShellOutcome>* answers, const ShellOutcome& ran) {
                      answers->push_back(ran);
@@ -55,13 +57,19 @@ class ShellSwapTest : public testing::Test {
   // The module under its root that each load served.
   void Load() { loads_.push_back(source_.Root().Append(source_.Module())); }
 
+  void Changed() { changed_at_.push_back(loads_.size()); }
+
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   ShellSource source_{Serving("/run/splash", "splash.js")};
   std::vector<base::FilePath> loads_;
   std::vector<ShellOutcome> answers_;
+  // How many loads had run each time the swap said the shell changed.
+  std::vector<size_t> changed_at_;
   ShellSwap swap_{source_,
                   base::BindRepeating(&ShellSwapTest::Load,
+                                      base::Unretained(this)),
+                  base::BindRepeating(&ShellSwapTest::Changed,
                                       base::Unretained(this)),
                   kPatience};
 };
@@ -90,6 +98,18 @@ TEST_F(ShellSwapTest, GoesBackToTheOldShellWhenTheNewOneDidNotRun) {
   EXPECT_THAT(*answers_[0], HasSubstr("/run/splash/splash.js"));
 }
 
+TEST_F(ShellSwapTest, GoesBackFromADevServerToTheFilesItReplaced) {
+  // `domicile dev` on a shell that throws: the shell before comes back from
+  // its directory, not from a socket path read as one.
+  Swap("/run/user/1000/domicile-dev.sock", "@domicile/shell.js",
+       ShellFiles::kDevServer);
+  EXPECT_EQ(source_.Files(), ShellFiles::kDevServer);
+  Heard(kWhy);
+
+  EXPECT_EQ(source_.Root(), base::FilePath("/run/splash"));
+  EXPECT_EQ(source_.Files(), ShellFiles::kDirectory);
+}
+
 TEST_F(ShellSwapTest, StaysOnTheSameShellReloadedWhenItDidNotRun) {
   // A rebuild in place: the old files are gone, so there is nothing to go
   // back to.
@@ -98,6 +118,24 @@ TEST_F(ShellSwapTest, StaysOnTheSameShellReloadedWhenItDidNotRun) {
 
   EXPECT_THAT(loads_, ElementsAre(base::FilePath("/run/splash/splash.js")));
   EXPECT_THAT(answers_, ElementsAre(std::make_optional<std::string>(kWhy)));
+}
+
+TEST_F(ShellSwapTest, SaysTheShellChangedBeforeLoadingAnother) {
+  Swap("/x/dist", "shell.js");
+  EXPECT_THAT(changed_at_, ElementsAre(0u));
+}
+
+// Going back is another change: the shell that did not run may have claimed.
+TEST_F(ShellSwapTest, SaysTheShellChangedWhenGoingBack) {
+  Swap("/x/dist", "shell.js");
+  Heard(kWhy);
+  EXPECT_THAT(changed_at_, ElementsAre(0u, 1u));
+}
+
+// A reload keeps its claims, so no chord reaches the focused window meanwhile.
+TEST_F(ShellSwapTest, TheSameShellAgainIsNoChange) {
+  Swap("/run/splash", "splash.js");
+  EXPECT_TRUE(changed_at_.empty());
 }
 
 TEST_F(ShellSwapTest, TakesASilentShellAsLoadedAfterItsPatience) {

@@ -47,7 +47,7 @@ toggle afterwards keeps it from drawing a frame on the wrong monitor first.
  1 file changed, 8 insertions(+)
 
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index c50c456..c45365a 100644
+index 0798370..83cd341 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -5,6 +5,7 @@
@@ -58,7 +58,7 @@ index c50c456..c45365a 100644
  
  #include <memory>
  #include <string>
-@@ -1771,6 +1772,13 @@ void ChromeBrowserMainParts::PostBrowserStart() {
+@@ -1772,6 +1773,13 @@ void ChromeBrowserMainParts::PostBrowserStart() {
    // would be missing in the one case it exists for.
    domicile::StartCommandSocket();
  

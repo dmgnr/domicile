@@ -21,7 +21,10 @@ ShellSource& ShellSource::Get() {
 
 ShellSource::ShellSource(const base::CommandLine& command_line)
     : root_(command_line.GetSwitchValuePath(kDomicileShellRootSwitch)),
-      module_(command_line.GetSwitchValueASCII(kDomicileShellModuleSwitch)) {}
+      module_(command_line.GetSwitchValueASCII(kDomicileShellModuleSwitch)),
+      files_(command_line.HasSwitch(kDomicileShellDevServerSwitch)
+                 ? ShellFiles::kDevServer
+                 : ShellFiles::kDirectory) {}
 
 ShellSource::~ShellSource() = default;
 
@@ -33,9 +36,16 @@ std::string ShellSource::Module() const {
   return module_;
 }
 
-void ShellSource::Set(const base::FilePath& root, const std::string& module) {
+ShellFiles ShellSource::Files() const {
+  return files_;
+}
+
+void ShellSource::Set(const base::FilePath& root,
+                      const std::string& module,
+                      ShellFiles files) {
   root_ = root;
   module_ = module;
+  files_ = files;
   ++serial_;
 }
 

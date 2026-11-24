@@ -58,6 +58,8 @@ pub fn apply_chrome_message(
                 .chain(host.describe_keymap())
                 .chain(host.describe_shell_config())
                 .chain(host.describe_extensions())
+                .chain(host.describe_browser_profiles())
+                .chain(host.describe_spellcheck())
                 .chain(host.describe_tray())
                 .chain(host.describe_notifications())
                 .chain(host.describe_portal_requests())

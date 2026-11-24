@@ -1,4 +1,6 @@
-# Starts the Miracast service on the shell's first call to it.
+# Starts the Miracast service on the shell's first call to it, as
+# `domicile-miracast.service`, so it ends with the desk.
 [D-BUS Service]
 Name=net.domicile.Miracast
 Exec=@bin@/domicile-miracast
+SystemdService=domicile-miracast.service

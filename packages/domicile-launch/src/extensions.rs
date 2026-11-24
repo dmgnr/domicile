@@ -24,4 +24,9 @@ pub struct InstalledExtension {
     pub options_url: Option<String>,
     /// Its settings, each one it can use.
     pub settings: ExtensionSettings,
+    /// The file of its manifest icon closest to 128px, or none when its
+    /// manifest names no icon. `domicile-app-host` sends the Settings app the
+    /// image itself.
+    #[serde(default)]
+    pub icon_path: Option<String>,
 }

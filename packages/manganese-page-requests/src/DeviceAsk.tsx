@@ -1,4 +1,7 @@
 import { Button } from "@domicile-desktop/component-library/Button";
+import { EmptyState } from "@domicile-desktop/component-library/EmptyState";
+import { Loading } from "@domicile-desktop/component-library/Loading";
+import { DevicesIcon } from "@phosphor-icons/react/dist/ssr/Devices";
 import { useId, useState } from "react";
 
 import { css } from "../styled-system/css";
@@ -25,10 +28,14 @@ export const DeviceAsk = ({ request }: Props) => {
         {request.title}
       </span>
       {request.devices === undefined && (
-        <span className={noteStyles}>Looking for devices…</span>
+        <Loading icon={DevicesIcon}>Looking for devices…</Loading>
       )}
       {request.devices?.length === 0 && (
-        <span className={noteStyles}>No compatible devices found</span>
+        <EmptyState
+          hint="Plug in or turn on the device, and it shows up here."
+          icon={DevicesIcon}
+          title="No devices found"
+        />
       )}
       {request.devices !== undefined && request.devices.length > 0 && (
         <ul aria-label="Devices" className={devicesStyles}>
@@ -86,8 +93,6 @@ const askingTextStyles = css({
   fontWeight: "semibold",
   overflowWrap: "anywhere",
 });
-
-const noteStyles = css({ color: "muted", fontSize: "sm" });
 
 const devicesStyles = vstack({
   alignItems: "stretch",

@@ -259,7 +259,7 @@ fn remembered(kept_at: Option<&Path>) -> Vec<String> {
             Vec::new()
         }
         Err(err) => {
-            warn!(
+            error!(
                 %err, index = %path.display(),
                 "the file index on disk was not usable, so the home is walked from nothing"
             );
@@ -275,7 +275,7 @@ fn write_it_down(kept_at: Option<&Path>, index: &FileIndex) {
     };
     if let Err(err) = write(path, &index.files()) {
         // Only the next session's first few seconds are affected.
-        warn!(
+        error!(
             %err, index = %path.display(),
             "the file index could not be written down for the next run"
         );

@@ -55,6 +55,16 @@ package_of() {
     (arch) echo '*.pkg.tar.zst' ;;
   esac
 }
+# Refreshes openSUSE's repositories, retrying for up to 20 minutes.
+# download.opensuse.org redirects to mirrors that lag a Tumbleweed snapshot, so
+# a refresh can fail on metadata a mirror lacks. A refresh that never succeeds
+# fails the install.
+ZYPPER_REFRESH='for try in $(seq 20); do
+    zypper --non-interactive refresh && break
+    [ "$try" -lt 20 ] || exit 1
+    echo "zypper refresh failed (try $try of 20); retrying in 60s"
+    sleep 60
+  done'
 # How each installs `domicile` from the signed repositories at `/repo`. These
 # are the steps a user takes, with `/repo` as the address.
 install_from_repo_of() {
@@ -68,7 +78,8 @@ install_from_repo_of() {
     (opensuse)
       echo 'rpm --import /repo/domicile.asc &&
         zypper --non-interactive addrepo --gpgcheck file:///repo/rpm/opensuse domicile &&
-        zypper --non-interactive install --no-recommends domicile' ;;
+        '"$ZYPPER_REFRESH"' &&
+        zypper --non-interactive --no-refresh install --no-recommends domicile' ;;
     (arch)
       echo 'pacman-key --init && pacman-key --add /repo/domicile.asc &&
         pacman-key --lsign-key "$(gpg --show-keys --with-colons /repo/domicile.asc | awk -F: "/^fpr/ {print \$10; exit}")" &&
@@ -85,7 +96,7 @@ install_of() {
     (debian | debian-12 | ubuntu | ubuntu-22.04)
       echo 'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$1"' ;;
     (fedora) echo 'dnf install -y --nogpgcheck --setopt=install_weak_deps=False "$1"' ;;
-    (opensuse) echo 'zypper --non-interactive install --no-recommends --allow-unsigned-rpm "$1"' ;;
+    (opensuse) echo "$ZYPPER_REFRESH"' && zypper --non-interactive --no-refresh install --no-recommends --allow-unsigned-rpm "$1"' ;;
     (arch) echo 'pacman -Syu --noconfirm && pacman -U --noconfirm "$1"' ;;
   esac
 }

@@ -8,8 +8,9 @@
 # Headless and software-composited: nothing is measured in pixels.
 #
 # A `<webview private>` and a window from `openPrivateBrowserWindow` get their
-# page from the profile's off-the-record profile (WebViewGuest::CreateAndAttach,
-# DeskWindows::Make). A cookie set there must not reach the user's pages.
+# page from the default private profile, off the record (WebViewGuest's
+# ContextFor, BrowserProfileRegistry::ContextOf). A cookie set there must not
+# reach the user's pages.
 #
 # Asserts, in order (each only meaningful if the previous holds):
 #
@@ -208,7 +209,7 @@ elif [ "$OTHER_HAS" = "1" ]; then
   FAILURE="THE COOKIE CROSSED: a reader on the other side of the private \
 line has it. A private page and an ordinary one share storage, so private \
 browsing keeps nothing apart. Check WebViewGuest::CreateAndAttach uses \
-BrowserWindowHost::PrivateContext for a <webview private>"
+BrowserWindowHost::ContextFor for a <webview private>"
 elif [ "$SAW_WINDOW" != "1" ]; then
   FAILURE="the opened browser window never reached the shell's list. That is \
 DeskWindows::Make, BrowserWindowsClient, or DomicileHost's \
@@ -222,8 +223,8 @@ elif [ "$SAW_WINDOW_READ" != "1" ]; then
 is the window's attach to the shell's <webview window>"
 elif [ "$WINDOW_HAS" != "1" ]; then
   FAILURE="the window's page does not have the setter's cookie, so the window \
-is not on the side it was opened on. Check DeskWindows::Make picks the \
-off-the-record profile for a private window"
+is not on the side it was opened on. Check the host's ContextFor picks the \
+private profile for a private window"
 elif [ "$SAW_CLOSED" != "1" ] || [ "$SAW_AFTER" != "1" ]; then
   FAILURE="the reader opened after every private page closed never loaded, \
 so whether private data outlives its pages was not measured. The shell closes \
@@ -231,12 +232,12 @@ them once each page goes to #reported; see guard-webview-private.js"
 elif [ "$AFTER_HAS" = "1" ] && [ "$SAW_ENDED" != "1" ]; then
   FAILURE="private browsing never ended after the last private page closed, \
 so a new private page still has the old cookie. Check WebViewGuest's \
-destructor reports PrivatePageClosed and DeskWindows' PrivatePages reaches \
-zero"
+destructor reports PrivatePageClosed and BrowserProfileRegistry's \
+PrivatePages reaches zero"
 elif [ "$AFTER_HAS" = "1" ]; then
   FAILURE="private browsing ended, but a new private page still has the old \
 cookie, so it was made in the ending off-the-record profile. Check \
-DeskWindows::PrivateProfile finishes ending_private_profile_ first"
+BrowserProfileRegistry::ContextOf finishes the ending profile first"
 elif [ "$NEGATIVE" = "1" ]; then
   PASSED="the control is sharp: a cookie set in an ordinary <webview> reaches \
 an ordinary reader and window and not a private reader, and the window is not \

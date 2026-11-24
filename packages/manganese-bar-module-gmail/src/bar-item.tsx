@@ -12,15 +12,20 @@ type Props = {
   nickname: string;
   /** The Google Cloud OAuth client (Desktop app) it signs in with. */
   client: GoogleClient;
+  /**
+   * The id of the browser profile its Gmail window and sign-in open in, such
+   * as `work`. By default, the one Gmail's site opens in.
+   */
+  profile?: string;
 };
 
 /**
  * One Gmail account's inbox count, read with the Gmail API. A press opens
  * the account's Gmail window, or brings it up. Not in the default bar.
  */
-export const Gmail = ({ client, email, nickname }: Props) => {
+export const Gmail = ({ client, email, nickname, profile }: Props) => {
   const domicile = useDomicile();
-  const account = deskInbox(domicile)(email, client, nickname);
+  const account = deskInbox(domicile)(email, client, nickname, profile);
   return (
     <Account
       email={email}
@@ -30,6 +35,7 @@ export const Gmail = ({ client, email, nickname }: Props) => {
         domicile.browser.openApp(url, {
           id: gmailAppId(email),
           reuse: AppReuse.Focus,
+          ...(profile === undefined ? {} : { profile }),
         });
       }}
       onSignIn={account.signIn}

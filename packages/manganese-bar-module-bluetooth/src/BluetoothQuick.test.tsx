@@ -67,6 +67,9 @@ describe(BluetoothTile, () => {
     bluetooth.report(reading(true, ["WH-1000XM4"]));
 
     expect(screen.getByText("WH-1000XM4")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Bluetooth details" }),
+    ).toHaveAttribute("data-lit");
     expect(screen.queryByRole("button", { pressed: true })).toBeNull();
     expect(screen.queryByRole("button", { pressed: false })).toBeNull();
   });
@@ -83,6 +86,9 @@ describe(BluetoothTile, () => {
     bluetooth.report(reading(true, []));
 
     expect(screen.getByText("Not connected")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Bluetooth details" }),
+    ).not.toHaveAttribute("data-lit");
   });
 
   it("opens its details", async () => {

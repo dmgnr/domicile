@@ -53,11 +53,12 @@ BRITISH='\b('\
 'foetus|oesophagus|oestrogen|orthopaedic|paediatric|haemoglobin|leukaemia'\
 ')\b'
 
-# Other projects' APIs: Nix's `--realise` flag, GitHub's `cancelled()` and
-# Chromium's `DownloadItem::CANCELLED`, and a foreign cancellation field mapped
-# to an American local binding (Smithay and wayland-client). Only these exact
-# forms are exempt.
-EXEMPT='--realise\b|\bcancelled\(\)|\bDownloadItem::CANCELLED\b|\bcancelled:[[:space:]]+canceled\b'
+# Other projects' APIs: Nix's `--realise` flag, GitHub's `cancelled()`,
+# Chromium's `DownloadItem::CANCELLED`, Electron's DownloadItem state as a
+# string, `"cancelled"`, and a foreign cancellation field mapped to an
+# American local binding (Smithay and wayland-client). Only these exact forms
+# are exempt.
+EXEMPT='--realise\b|\bcancelled\(\)|\bDownloadItem::CANCELLED\b|"cancelled"|\bcancelled:[[:space:]]+canceled\b'
 
 # Skip binaries, lockfiles, this file (it contains the list) and the vendored
 # IANA TLD list (`.theatre` is a real TLD).

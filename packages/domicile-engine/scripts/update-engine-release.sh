@@ -20,7 +20,9 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-REPO="${DOMICILE_ENGINE_REPO:-cprussin/domicile}"
+# Engines are published in the builds repository; see
+# .github/scripts/engine-release-publish.sh.
+REPO="${DOMICILE_BUILDS_REPO:-cprussin/domicile-builds}"
 TAG="${DOMICILE_ENGINE_TAG:-engine-nightly}"
 # Set to `engine-official.nix` for the production build, which
 # engine-release.yml pins. engine-pin.nix picks which pin is used.

@@ -6,6 +6,8 @@
 //!
 //! ```text
 //! {"type":"load_shell","version":1,"root":"/x/dist","module":"shell.js"}
+//! {"type":"load_shell","version":1,"root":"/run/user/1000/dev.sock",
+//!  "module":"domicile-dev-shell.js","dev_server":true}
 //! {"type":"loaded"}   |   {"type":"refused","why":"…"}
 //!
 //! {"type":"open_url","version":1,"url":"https://example.com/"}
@@ -61,6 +63,9 @@
 //! {"type":"clear_site_data","version":1,"host":"mail.example"}
 //! {"type":"cleared"}   |   {"type":"refused","why":"…"}
 //!
+//! {"type":"set_log_levels","version":1,"min_level":0,"vmodule":"*/domicile/*=1"}
+//! {"type":"set"}   |   {"type":"refused","why":"…"}
+//!
 //! {"type":"disable_while_typing","version":1,"enabled":false}
 //! {"type":"disable_while_typing","enabled":false}   |   {"type":"refused","why":"…"}
 //! ```
@@ -80,10 +85,12 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::browser_profiles::BrowserProfileList;
 use crate::control::AppReuse;
 use crate::extensions::{ExtensionSettings, InstalledExtension};
 use crate::history::{BrowsingData, HistoryItem, HistoryQuery};
 use crate::media_devices::{MediaDevices, MediaKind};
+use crate::shell_path::{Shell, ShellFiles};
 use crate::site_data::SiteData;
 use crate::site_permissions::{Permission, Setting, SitePermission, SiteSettings};
 
@@ -125,6 +132,9 @@ pub enum Reply {
     MediaDevices(MediaDevices),
     /// Every extension installed in the engine's profile.
     Extensions { extensions: Vec<InstalledExtension> },
+    /// The desk's browser profiles and the sites that open outside the
+    /// default one.
+    BrowserProfiles(BrowserProfileList),
     /// The history rows a search found, newest first.
     History { items: Vec<HistoryItem> },
     /// When a page was visited, in milliseconds since the epoch.
@@ -137,18 +147,22 @@ pub enum Reply {
     SiteData { sites: Vec<SiteData> },
     /// Whether the touchpads rest while a keyboard types.
     DisableWhileTyping { enabled: bool },
+    /// A DevTools Protocol method's result.
+    #[serde(rename = "devtools")]
+    DevTools { result: serde_json::Value },
     /// The engine refused, with its reason.
     Refused { why: String },
 }
 
-/// The request to serve the shell `module` from `root`.
+/// The request to serve `shell`.
 ///
-/// `root` must be absolute; the engine refuses relative paths. Resolve user
+/// Its root must be absolute; the engine refuses relative paths. Resolve user
 /// input with [`crate::shell_path`] first.
-pub fn load_shell_line(root: &Path, module: &Path) -> String {
+pub fn load_shell_line(shell: &Shell) -> String {
     line(&Command::LoadShell {
-        module,
-        root,
+        module: &shell.module,
+        root: &shell.root,
+        dev_server: shell.files == ShellFiles::DevServer,
         version: VERSION,
     })
 }
@@ -163,11 +177,13 @@ pub fn run_app_line(root: &Path, module: &Path) -> String {
     })
 }
 
-/// The request to open `url` in the shell. The engine validates `url`.
-pub fn open_url_line(url: &str) -> String {
+/// The request to open `url` in the shell, in browser profile `profile` or
+/// with none in the one its site opens in. The engine validates both.
+pub fn open_url_line(url: &str, profile: Option<&str>) -> String {
     line(&Command::OpenUrl {
         url,
         version: VERSION,
+        profile,
         app: false,
         app_id: None,
         reuse: AppReuse::New,
@@ -180,10 +196,16 @@ pub fn open_url_line(url: &str) -> String {
 ///
 /// With `id`, the window is that app's, and `reuse` says what to do when one
 /// of its windows is open.
-pub fn open_app_line(url: &str, id: Option<&str>, reuse: AppReuse) -> String {
+pub fn open_app_line(
+    url: &str,
+    id: Option<&str>,
+    reuse: AppReuse,
+    profile: Option<&str>,
+) -> String {
     line(&Command::OpenUrl {
         url,
         version: VERSION,
+        profile,
         app: true,
         app_id: id,
         reuse,
@@ -247,12 +269,28 @@ pub fn extensions_line() -> String {
     line(&Command::Extensions { version: VERSION })
 }
 
-/// The request to enable or disable extension `id`.
-pub fn set_extension_enabled_line(id: &str, enabled: bool) -> String {
+/// The request to enable or disable extension `id`, in browser profile
+/// `profile` or the shell's own.
+pub fn set_extension_enabled_line(id: &str, enabled: bool, profile: Option<&str>) -> String {
     line(&Command::SetExtensionEnabled {
         version: VERSION,
         id,
         enabled,
+        profile,
+    })
+}
+
+/// The request for the desk's browser profiles.
+pub fn browser_profiles_line() -> String {
+    line(&Command::BrowserProfiles { version: VERSION })
+}
+
+/// The request to open `site` in browser profile `profile` from now on.
+pub fn pin_browser_site_line(site: &str, profile: &str) -> String {
+    line(&Command::PinBrowserSite {
+        version: VERSION,
+        site,
+        profile,
     })
 }
 
@@ -324,6 +362,27 @@ pub fn disable_while_typing_line(enabled: Option<bool>) -> String {
     })
 }
 
+/// The request to log at Chromium's minimum severity `min_level` and VLOG at
+/// `vmodule` in every engine process.
+pub fn set_log_levels_line(min_level: i32, vmodule: &str) -> String {
+    line(&Command::SetLogLevels {
+        version: VERSION,
+        min_level,
+        vmodule,
+    })
+}
+
+/// The request to send DevTools Protocol `method` with `params` to browser
+/// window `window`, by its id in the engine.
+pub fn devtools_line(window: &str, method: &str, params: &serde_json::Value) -> String {
+    line(&Command::DevTools {
+        version: VERSION,
+        window,
+        method,
+        params,
+    })
+}
+
 /// Parses one reply line, without its trailing newline.
 ///
 /// An unparseable reply is an error, not a [`Reply::Refused`]: it comes from
@@ -343,6 +402,9 @@ enum Command<'a> {
         version: u32,
         root: &'a Path,
         module: &'a Path,
+        /// Left out for a directory, which every engine reads.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        dev_server: bool,
     },
     RunApp {
         version: u32,
@@ -352,6 +414,9 @@ enum Command<'a> {
     OpenUrl {
         version: u32,
         url: &'a str,
+        // Left out when none, the profile the site opens in.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        profile: Option<&'a str>,
         // Left out when false, so a browser window's line is the one every
         // engine reads.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -398,6 +463,16 @@ enum Command<'a> {
         version: u32,
         id: &'a str,
         enabled: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        profile: Option<&'a str>,
+    },
+    BrowserProfiles {
+        version: u32,
+    },
+    PinBrowserSite {
+        version: u32,
+        site: &'a str,
+        profile: &'a str,
     },
     ConfigureExtension {
         version: u32,
@@ -433,11 +508,23 @@ enum Command<'a> {
         version: u32,
         host: &'a str,
     },
+    SetLogLevels {
+        version: u32,
+        min_level: i32,
+        vmodule: &'a str,
+    },
     DisableWhileTyping {
         version: u32,
         // Left out to ask.
         #[serde(skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
+    },
+    #[serde(rename = "devtools")]
+    DevTools {
+        version: u32,
+        window: &'a str,
+        method: &'a str,
+        params: &'a serde_json::Value,
     },
 }
 

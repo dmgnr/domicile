@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: the pointer stays put when the desk's host moves
+
+Sleeping or waking the host's monitor moves the host's window to another
+monitor. DrmCursor kept the pointer at its spot in the window, so a
+pointer on another monitor went along to the host's new one, and the
+shell's focus followed it there. A presenter that went with the pointer
+on it sent the pointer to the middle of the primary window.
+
+- OzonePlatform::SetDomicilePointerStays names the window the browser
+  is about to move; ShellWindows sets it before moving the host and
+  clears it once the presenters are open, which drops an unclaimed spot.
+- DrmCursor keeps the pointer's spot on screen through that move, on
+  whichever window holds it (`PointerStaysAt`, under src/). When none
+  holds it yet, the spot waits for the window that comes there.
+- A window removed with the pointer on it during that move hands the
+  pointer to the window that holds its spot, if any.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`.
+---
+ ui/ozone/platform/drm/host/drm_cursor.cc    | 91 +++++++++++++++++++++
+ ui/ozone/platform/drm/host/drm_cursor.h     | 17 ++++
+ ui/ozone/platform/drm/ozone_platform_drm.cc |  6 ++
+ ui/ozone/public/ozone_platform.h            |  7 ++
+ 4 files changed, 121 insertions(+)
+
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.cc b/ui/ozone/platform/drm/host/drm_cursor.cc
+index 88474de..f4f3ac8 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.cc
++++ b/ui/ozone/platform/drm/host/drm_cursor.cc
+@@ -142,6 +142,20 @@ void DrmCursor::OnWindowRemoved(gfx::AcceleratedWidget window) {
+   }
+ 
+   if (window_ == window) {
++    // DOMICILE: while the desk's host moves, the pointer stays where it is
++    // on screen if another window holds that spot, as the host does when it
++    // moves onto the monitor of a presenter that goes. Not on a hotplug,
++    // where windows still have their old rectangles. See `PointerStaysAt`.
++    const std::optional<PointerCrossing> stays =
++        stays_through_move_ != gfx::kNullAcceleratedWidget
++            ? PointerStaysAt(screens_, GetLocationWithoutLock())
++            : std::nullopt;
++    if (stays.has_value()) {
++      CrossLocked(*stays);
++      window_manager_->GetWindow(window_)->SynthesizeMouseMove(
++          GetLocationWithoutLock());
++      return;
++    }
+     // Try to find a new location for the cursor.
+     DrmWindowHost* dest_window = window_manager_->GetPrimaryWindow();
+ 
+@@ -174,6 +188,44 @@ void DrmCursor::CommitBoundsChange(
+   // onto nothing or cannot cross at all.
+   ScreenLocked(window).bounds_in_screen = new_display_bounds_in_screen;
+ 
++  // DOMICILE: A POINTER STAYS WHERE IT IS ON SCREEN WHEN THE DESK'S HOST
++  // MOVES. The host moves to another monitor when its own sleeps or wakes.
++  // Upstream keeps the pointer at its spot in the window, which carried a
++  // pointer on another monitor along to the host's new one, and the shell's
++  // focus followed it. Only for a move the browser names
++  // (`SetDomicilePointerStays`): when a hotplug shifts every monitor along
++  // the row, the pointer stays on its monitor, as upstream. See
++  // `PointerStaysAt`. Also the presenter that took a stranded pointer back,
++  // when it moves again: one opening for a scaled display is first placed at
++  // a scaled rectangle, then at its display's. Any other presenter shifted
++  // along the row keeps the pointer on its monitor.
++  if (window_ == window && window != gfx::kNullAcceleratedWidget &&
++      (window == stays_through_move_ || window == returned_to_)) {
++    // A pointer already stranded by the move before keeps that spot, not the
++    // one it was carried to.
++    const gfx::PointF was = stranded_.value_or(GetLocationWithoutLock());
++    if (const std::optional<PointerCrossing> stays =
++            PointerStaysAt(screens_, was)) {
++      CrossLocked(*stays);
++      window_manager_->GetWindow(window_)->SynthesizeMouseMove(
++          GetLocationWithoutLock());
++      return;
++    }
++    // No window holds the spot yet: the presenter for the monitor the host
++    // left opens next (`ShellWindows::Present`). Keep the spot for it, and
++    // don't tell the window the pointer moved until then. The GPU still draws
++    // the host's cursor on its new CRTC until the presenter takes it.
++    display_bounds_in_screen_ = new_display_bounds_in_screen;
++    confined_bounds_ = new_confined_bounds;
++    SetCursorLocationLocked(location_);
++    stranded_ = was;
++    return;
++  }
++  if (window_ != window) {
++    ReturnStrandedLocked();
++    return;
++  }
++
+   if (window_ == window) {
+     display_bounds_in_screen_ = new_display_bounds_in_screen;
+     confined_bounds_ = new_confined_bounds;
+@@ -204,6 +256,25 @@ gfx::PointF DrmCursor::ToWindow(gfx::AcceleratedWidget window,
+   return PointerInWindow(screens_, layout_, screen_location, window);
+ }
+ 
++void DrmCursor::SetDomicilePointerStays(gfx::AcceleratedWidget window) {
++  DCHECK_CALLED_ON_VALID_THREAD(ui_thread_checker_);
++  base::AutoLock lock(lock_);
++  stays_through_move_ = window;
++  // Cleared once the move and the windows it opens are done: a spot no
++  // window came for is not kept for a later one. The pointer is then where
++  // upstream leaves it, at its spot in the moved window, and is shown and
++  // heard there.
++  if (window == gfx::kNullAcceleratedWidget) {
++    returned_to_ = gfx::kNullAcceleratedWidget;
++  }
++  if (window == gfx::kNullAcceleratedWidget && stranded_.has_value()) {
++    stranded_.reset();
++    SendCursorShowLocked();
++    window_manager_->GetWindow(window_)->SynthesizeMouseMove(
++        GetLocationWithoutLock());
++  }
++}
++
+ void DrmCursor::SetDomicileDeskHost(gfx::AcceleratedWidget host) {
+   DCHECK_CALLED_ON_VALID_THREAD(ui_thread_checker_);
+   base::AutoLock lock(lock_);
+@@ -410,6 +481,26 @@ void DrmCursor::SetCursorLocationLocked(const gfx::PointF& location)
+       gfx::PointF(confined_bounds_.right() - 1, confined_bounds_.bottom() - 1));
+ 
+   location_ = clamped_location;
++  // DOMICILE: a pointer that moved on is no longer waiting for its spot.
++  stranded_.reset();
++}
++
++// DOMICILE: moves a stranded pointer back to its spot once a window holds it.
++// See `stranded_`.
++void DrmCursor::ReturnStrandedLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
++  DCHECK_CALLED_ON_VALID_THREAD(ui_thread_checker_);
++  if (!stranded_.has_value()) {
++    return;
++  }
++  const std::optional<PointerCrossing> stays =
++      PointerStaysAt(screens_, *stranded_);
++  if (!stays.has_value()) {
++    return;
++  }
++  CrossLocked(*stays);
++  returned_to_ = window_;
++  window_manager_->GetWindow(window_)->SynthesizeMouseMove(
++      GetLocationWithoutLock());
+ }
+ 
+ PointerScreen& DrmCursor::ScreenLocked(gfx::AcceleratedWidget window)
+diff --git a/ui/ozone/platform/drm/host/drm_cursor.h b/ui/ozone/platform/drm/host/drm_cursor.h
+index 9d92ed7..8cab80f 100644
+--- a/ui/ozone/platform/drm/host/drm_cursor.h
++++ b/ui/ozone/platform/drm/host/drm_cursor.h
+@@ -101,6 +101,11 @@ class DrmCursor : public CursorDelegateEvdev {
+   // `OzonePlatform::SetDomicileDeskHost`.
+   void SetDomicileDeskHost(gfx::AcceleratedWidget host);
+ 
++  // DOMICILE: while set, a move of `window` leaves the pointer where it is on
++  // screen. Clearing it also drops a spot no window came for. See
++  // `OzonePlatform::SetDomicilePointerStays`.
++  void SetDomicilePointerStays(gfx::AcceleratedWidget window);
++
+   // DOMICILE: the window that hears the pointer, and where in its pixels. See
+   // `PointerHeardAt`.
+   std::optional<PointerHeard> Heard();
+@@ -133,6 +138,7 @@ class DrmCursor : public CursorDelegateEvdev {
+   PointerScreen& ScreenLocked(gfx::AcceleratedWidget window);
+   void CrossLocked(const PointerCrossing& crossing);
+   void MoveLocked(const PointerCrossing& to);
++  void ReturnStrandedLocked();
+ 
+   void MoveCursorToOnEvdevThread(const gfx::PointF& screen_location);
+   void MoveCursorToOnUiThread(const gfx::PointF& screen_location);
+@@ -182,6 +188,17 @@ class DrmCursor : public CursorDelegateEvdev {
+       gfx::kNullAcceleratedWidget;
+   base::flat_map<int, gfx::Rect> absolute_areas_ GUARDED_BY(lock_);
+   PointerConfinement confinement_ GUARDED_BY(lock_);
++  // DOMICILE: where on the engine's desktop the pointer was when its window
++  // moved off that spot and no other window held it. The window that holds it
++  // next takes the pointer back there. Any move of the pointer clears it.
++  std::optional<gfx::PointF> stranded_ GUARDED_BY(lock_);
++  // DOMICILE: the window the browser is moving to another display, while it
++  // does. See `SetDomicilePointerStays`.
++  gfx::AcceleratedWidget stays_through_move_ GUARDED_BY(lock_) =
++      gfx::kNullAcceleratedWidget;
++  // DOMICILE: the window a stranded pointer went back to during that move.
++  gfx::AcceleratedWidget returned_to_ GUARDED_BY(lock_) =
++      gfx::kNullAcceleratedWidget;
+ 
+   const raw_ptr<DrmWindowHostManager> window_manager_
+       GUARDED_BY_CONTEXT(ui_thread_checker_);  // Not owned.
+diff --git a/ui/ozone/platform/drm/ozone_platform_drm.cc b/ui/ozone/platform/drm/ozone_platform_drm.cc
+index 0d8a21c..a84ee16 100644
+--- a/ui/ozone/platform/drm/ozone_platform_drm.cc
++++ b/ui/ozone/platform/drm/ozone_platform_drm.cc
+@@ -193,6 +193,12 @@ class OzonePlatformDrm : public OzonePlatform {
+     }
+   }
+ 
++  void SetDomicilePointerStays(gfx::AcceleratedWidget window) override {
++    if (cursor_) {
++      cursor_->SetDomicilePointerStays(window);
++    }
++  }
++
+   void SetDomicileDeskHost(gfx::AcceleratedWidget host) override {
+     if (window_manager_) {
+       window_manager_->set_desk_host(host);
+diff --git a/ui/ozone/public/ozone_platform.h b/ui/ozone/public/ozone_platform.h
+index 385de5a..cd496cf 100644
+--- a/ui/ozone/public/ozone_platform.h
++++ b/ui/ozone/public/ozone_platform.h
+@@ -510,6 +510,13 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
+   // (docs/architecture/ONE-PAGE-FOR-THE-DESK.md). `gfx::kNullAcceleratedWidget`
+   // gives each window its own events again. DRM only, like the layout above.
+   virtual void SetDomicileDeskHost(gfx::AcceleratedWidget host) {}
++  // DOMICILE: while `window` is set, moving it to another display leaves the
++  // pointer where it is on screen rather than carrying it along, waiting for
++  // a window to open there if none holds that spot yet. The browser sets it
++  // before moving the desk's host when the host's display sleeps or wakes,
++  // and clears it with `gfx::kNullAcceleratedWidget` once the windows that
++  // move opens are open. DRM only.
++  virtual void SetDomicilePointerStays(gfx::AcceleratedWidget window) {}
+   // DOMICILE: which display each tablet or touchscreen covers, replacing the
+   // last list. A device it does not name covers none. DRM only, like the
+   // layout above.

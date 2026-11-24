@@ -48,6 +48,12 @@ export type Dragged = {
   windows: readonly string[];
 };
 
+/**
+ * A drag carrying no window: a page's text, link or image, which opens a new
+ * tab where it is dropped. See `useTabDrop`.
+ */
+export const NO_WINDOW: Dragged = { node: { id: "", up: 0 }, windows: [] };
+
 /** A float's box, which hides every target behind it. */
 export type FloatCover = {
   depth: number;
@@ -153,7 +159,8 @@ const TAB_LINE = 4;
  * tab over its own strip takes the slot nearest the pointer, and over its own
  * window goes beside its group. Strips come before windows, whose frames hold
  * them. A float hides what is behind it, but not from a drag that carries it.
- * A tab dragged out of a nested group goes beside the group's own tab too.
+ * A tab dragged out of a nested group goes beside the group's own tab too,
+ * even when it is the group's only one.
  */
 export const aimAt = (
   { floats, screens, tabs, windows }: DropTargets,
@@ -173,7 +180,8 @@ export const aimAt = (
       ? windows.find(({ frame }) => contains(frame, x, y))
       : undefined;
   if (tab !== undefined) {
-    return tab.windows.every((id) => dragged.windows.includes(id))
+    return tab.windows.every((id) => dragged.windows.includes(id)) &&
+      !encloses(tab, dragged)
       ? undefined
       : aimAtTab(tab, tabOf(tabs, dragged), x, y);
   } else if (cover !== undefined) {
@@ -194,6 +202,13 @@ export const aimAt = (
     );
   }
 };
+
+/**
+ * Whether `tab` stands for a group around `dragged`, which it leaves: a group
+ * whose only window it carries.
+ */
+const encloses = ({ node }: TabTarget, dragged: Dragged): boolean =>
+  node.id === dragged.node.id && node.up > dragged.node.up;
 
 /** Whether any of `windows` is in `tab`'s node. */
 const holdsAny = (tab: TabTarget, windows: readonly string[]): boolean =>

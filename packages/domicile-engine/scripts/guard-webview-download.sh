@@ -12,6 +12,11 @@
 # Chrome's portal save dialog. It also sets `download.prompt_for_download` so
 # every download asks.
 #
+# The link is pressed twice. The positive run's shell holds the first question
+# unanswered, as a hidden window's picker, and answers the second: Chrome shows
+# one picker at a time per profile, and a guest's download must not wait behind
+# one nobody answers.
+#
 # Assertions, in order:
 #
 #   the shell page ran
@@ -21,6 +26,7 @@
 #   the file was fetched
 #   the browser called ChooseDownloadPath
 #   the shell was asked in save mode with the site's file name
+#   the second download asked while the first was held
 #   the shell answered without throwing
 #   the file is at the shell's path with the site's bytes (the claim)
 #   the desk listed the download in progress, then as finished, with its path
@@ -83,7 +89,11 @@ HTTP_LOG="${HTTP_LOG:-/tmp/domicile-webview-download$WHICH-http.log}"
 CLICK_LOG="${CLICK_LOG:-/tmp/domicile-webview-download$WHICH-mouse.log}"
 
 ANSWER="choose"
-[ "$NEGATIVE" = "1" ] && ANSWER="cancel"
+HOLD="&hold=first"
+if [ "$NEGATIVE" = "1" ]; then
+  ANSWER="cancel"
+  HOLD=""
+fi
 
 STARTED=()
 cleanup() {
@@ -136,7 +146,7 @@ rm -f "$ENGINE_LOG"
 HOME="$HOME_DIR" "$CHROMIUM/$OUT/chrome" \
   --ozone-platform=headless \
   --disable-gpu \
-  --app="domicile://shell/?strip=$STRIP_HEIGHT&src=$SITE/download&answer=$ANSWER&pick=$PICK" \
+  --app="domicile://shell/?strip=$STRIP_HEIGHT&src=$SITE/download&answer=$ANSWER&pick=$PICK$HOLD" \
   --domicile-shell-root="$SCRIPTS" \
   --domicile-shell-module="guard-webview-file-chooser.js" \
   --remote-debugging-port=0 \
@@ -170,11 +180,17 @@ python3 "$SCRIPTS/guard-webview-click-mouse.py" \
 wait_for_line 20 "GUARD chrome-mousedown" "$ENGINE_LOG" ||
   echo "the shell's document never reported the first click" >&2
 
-# 5. Click the link in the guest.
+# 5. Click the link in the guest, and again once the shell has been asked.
 python3 "$SCRIPTS/guard-webview-click-mouse.py" \
   --port "$DEBUG_PORT" --x "$WINDOW_X" --y "$WINDOW_Y" \
   >>"$CLICK_LOG" 2>&1 ||
   echo "the click into the window could not be driven; see $CLICK_LOG" >&2
+wait_for_line 40 "GUARD file-chooser mode=save " "$ENGINE_LOG" ||
+  echo "the first download never asked the shell" >&2
+python3 "$SCRIPTS/guard-webview-click-mouse.py" \
+  --port "$DEBUG_PORT" --x "$WINDOW_X" --y "$WINDOW_Y" \
+  >>"$CLICK_LOG" 2>&1 ||
+  echo "the second click into the window could not be driven; see $CLICK_LOG" >&2
 
 # A fixed wait, because the control checks for absences. Long enough to fetch,
 # ask, answer and write the file.
@@ -197,6 +213,7 @@ SAW_SUGGESTED=$(saw "GUARD file-chooser mode=save suggested=$NAME ")
 # No user-dirs.dirs under the guard's home, so the download folder is
 # ~/Downloads.
 SAW_FOLDER=$(saw "GUARD file-chooser mode=save suggested=$NAME accept= folder=$HOME_DIR/Downloads")
+SAW_ASKED_AGAIN=$([ "$(grep -cF "GUARD file-chooser mode=save " "$ENGINE_LOG")" -ge 2 ] && echo 1 || echo 0)
 SAW_ANSWERED=$(saw "GUARD answered")
 SAVED=$([ "$(cat "$HOME_DIR/$PICK" 2>/dev/null)" = "$TEXT" ] && echo 1 || echo 0)
 # The download anywhere in the home: a file with the site's bytes, or a
@@ -220,7 +237,7 @@ SAW_FORGOTTEN=$(saw "GUARD download-removed")
 
 echo
 echo "shell=$SAW_SHELL page=$SAW_PAGE press=$SAW_CHROME guest=$SAW_GUEST fetched=$SAW_FETCHED"
-echo "the browser asked=$SAW_BROWSER; the shell was asked=$SAW_ASKED with the name=$SAW_SUGGESTED in the folder=$SAW_FOLDER and answered=$SAW_ANSWERED"
+echo "the browser asked=$SAW_BROWSER; the shell was asked=$SAW_ASKED with the name=$SAW_SUGGESTED in the folder=$SAW_FOLDER, again=$SAW_ASKED_AGAIN and answered=$SAW_ANSWERED"
 echo "on the disk: where the shell said=$SAVED anywhere=$SAVED_ANYWHERE"
 echo "in progress: the desk listed=$SAW_GUEST_COUNTED; the shell heard=$SAW_COUNTED"
 echo "finished: listed=$SAW_FINISHED, removed=$SAW_FORGOTTEN"
@@ -252,8 +269,8 @@ says what was asked for"
 elif [ "$SAW_BROWSER" != "1" ]; then
   FAILURE="THE DOWNLOAD NEVER ASKED: the file was fetched and \
 WebViewGuest::ChooseDownloadPath never ran. Either download.prompt_for_download \
-is off -- patch 0053's PostProfileInit -- or ShowFilePickerForDownload did not \
-find this guest from the download's WebContents"
+is off -- patch 0053's PostProfileInit -- or ShowFilePickerWithUserTakeover \
+did not find this guest from the download's WebContents"
 elif [ "$SAW_ASKED" != "1" ]; then
   FAILURE="THE BROWSER ASKED AND THE SHELL WAS NOT TOLD: ChooseDownloadPath \
 ran and no domicile-file-chooser in save mode reached this document. That is \
@@ -267,6 +284,11 @@ elif [ "$SAW_FOLDER" != "1" ]; then
   FAILURE="the shell was asked with the wrong folder: a download's picker \
 starts in the download folder, the folder of the path //chrome proposed -- \
 see StartFolder in file_choice.h"
+elif [ "$NEGATIVE" != "1" ] && [ "$SAW_ASKED_AGAIN" != "1" ]; then
+  FAILURE="A HELD PICKER HELD THE NEXT DOWNLOAD: the shell held the first \
+question unanswered and the second download never asked. A guest's download \
+must ask before Chrome's one-picker-at-a-time queue -- see patch 0053's \
+ShowFilePickerWithUserTakeover"
 elif [ "$SAW_ANSWERED" != "1" ]; then
   FAILURE="the shell was asked and its answer threw: this guard's page called \
 choose() or cancel() and never got past it. The engine log has the exception"

@@ -8,6 +8,7 @@ import { Button } from "../Button/Button";
 import { ModalDialog } from "../ModalDialog/ModalDialog";
 import type { FramePoint } from "./frame-point";
 import { framePoint } from "./frame-point";
+import type { Presence } from "./presence";
 
 /** How many times the magnifier enlarges the frame. */
 const ZOOM = 12;
@@ -28,6 +29,8 @@ type Props = {
   /** Who asks, as the dialog names them. */
   asker: string;
   body: FrozenDesk;
+  /** Whether it is up; see {@link Presence}. */
+  presence: Presence;
   screen: string | undefined;
 };
 
@@ -36,7 +39,13 @@ type Props = {
  * pointer or the arrow keys move it; a click or Enter picks. Dismissing it
  * cancels.
  */
-export const PickColorDialog = ({ answer, asker, body, screen }: Props) => {
+export const PickColorDialog = ({
+  answer,
+  asker,
+  body,
+  presence,
+  screen,
+}: Props) => {
   const [at, setAt] = useState<FramePoint>({
     x: Math.floor(body.width / 2),
     y: Math.floor(body.height / 2),
@@ -65,7 +74,7 @@ export const PickColorDialog = ({ answer, asker, body, screen }: Props) => {
           answer(Answer.Canceled());
         }
       }}
-      open
+      {...presence}
       screen={screen}
       size="xl"
       title="Pick a color"

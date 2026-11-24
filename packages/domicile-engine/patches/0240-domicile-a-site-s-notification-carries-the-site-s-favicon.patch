@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] domicile: a site's notification carries the site's favicon
+
+Chrome's Linux bridge sent its own logo as every notification's
+application icon. The desktop draws a notification with its image-path
+(the page's own `icon`) when it has one, and with the application icon
+otherwise, so a site that gives no icon of its own was drawn as the
+browser.
+
+- NotificationPlatformBridgeLinuxImpl::Display looks up a web
+  notification's favicon for its origin, falling back to any page on the
+  host, and writes it as logo.png in place of the logo.
+- The logo stays when the site has no favicon yet, for a private page
+  (its profile keeps no favicons), and for the portal, which sends no
+  application icon.
+
+Verified: not built. This repository cannot build Chromium; the engine
+job builds it on `crux`. guard-notification-site-icon.sh covers it.
+---
+ chrome/browser/notifications/BUILD.gn         |  6 ++
+ .../notification_platform_bridge_linux.cc     | 90 ++++++++++++++++---
+ 2 files changed, 86 insertions(+), 10 deletions(-)
+
+diff --git a/chrome/browser/notifications/BUILD.gn b/chrome/browser/notifications/BUILD.gn
+index 5948541..dcf01b7 100644
+--- a/chrome/browser/notifications/BUILD.gn
++++ b/chrome/browser/notifications/BUILD.gn
+@@ -344,6 +344,12 @@ source_set("impl") {
+         # Domicile's engine fork: which browser window a page's
+         # notification came from.
+         "//components/domicile:notification_window",
++
++        # Domicile's engine fork: a site's favicon on its notifications.
++        "//chrome/browser/favicon",
++        "//components/favicon/core",
++        "//components/favicon_base",
++        "//components/keyed_service/core",
+       ]
+ 
+       if (use_glib && use_gio) {
+diff --git a/chrome/browser/notifications/notification_platform_bridge_linux.cc b/chrome/browser/notifications/notification_platform_bridge_linux.cc
+index 9f6ec4f..40b458a 100644
+--- a/chrome/browser/notifications/notification_platform_bridge_linux.cc
++++ b/chrome/browser/notifications/notification_platform_bridge_linux.cc
+@@ -45,6 +45,7 @@
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/cancelable_task_tracker.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/thread_pool.h"
+ #include "base/threading/sequence_bound.h"
+@@ -53,6 +54,7 @@
+ #include "base/types/expected.h"
+ #include "base/version.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
+ #include "chrome/browser/lifetime/termination_notification.h"
+ #include "chrome/browser/notifications/notification_display_service_impl.h"
+ #include "chrome/browser/profiles/profile_manager.h"
+@@ -71,6 +73,9 @@
+ #include "components/dbus/utils/variant.h"
+ #include "components/dbus/xdg/portal.h"
+ #include "components/domicile/browser/notification_window.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/favicon_base/favicon_types.h"
++#include "components/keyed_service/core/service_access_type.h"
+ #include "components/url_formatter/elide_url.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/browser_thread.h"
+@@ -171,6 +176,10 @@ const int kMaxImageHeight = 100;
+ // be rejected by the portal.
+ const int kMaxPortalIconSize = 128;
+ 
++// Domicile's engine fork: the size a site's favicon is drawn at in place of
++// the browser's logo, which is IDR_PRODUCT_LOGO_64.
++const int kSiteIconSize = 64;
++
+ // Notification on-screen time, in milliseconds.
+ const int32_t kExpireTimeout = 25000;
+ 
+@@ -556,16 +565,36 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
+       }
+     }
+ 
+-    file_task_runner_->PostTaskAndReplyWithResult(
+-        FROM_HERE,
+-        base::BindOnce(&WriteNotificationResourceFiles,
+-                       product_logo.As1xPNGBytes(),
+-                       notification_icon.As1xPNGBytes(),
+-                       notification_image.As1xPNGBytes()),
+-        base::BindOnce(
+-            &NotificationPlatformBridgeLinuxImpl::OnFilesWrittenForDisplay,
+-            weak_factory_.GetWeakPtr(), notification_type, profile_id,
+-            is_incognito, std::move(copy_notification)));
++    // Domicile's engine fork: a site's notification is drawn with the site's
++    // favicon in place of the browser's logo, so a page that gives no icon of
++    // its own is still drawn as the site. A private page's profile keeps no
++    // favicons, so it keeps the logo.
++    const bool from_a_site =
++        notification_type == NotificationHandler::Type::WEB_PERSISTENT ||
++        notification_type == NotificationHandler::Type::WEB_NON_PERSISTENT;
++    if (!using_portal_ && from_a_site && !is_incognito) {
++      favicon::FaviconService* favicons = FaviconServiceFactory::GetForProfile(
++          profile, ServiceAccessType::EXPLICIT_ACCESS);
++      CHECK(favicons);
++      const GURL site = copy_notification->origin_url();
++      favicons->GetRawFaviconForPageURL(
++          site, {favicon_base::IconType::kFavicon}, kSiteIconSize,
++          /*fallback_to_host=*/true,
++          base::BindOnce(
++              &NotificationPlatformBridgeLinuxImpl::OnSiteIconFound,
++              weak_factory_.GetWeakPtr(), notification_type, profile_id,
++              is_incognito, std::move(copy_notification),
++              product_logo.As1xPNGBytes(), notification_icon.As1xPNGBytes(),
++              notification_image.As1xPNGBytes()),
++          &site_icon_tracker_);
++      return;
++    }
++
++    WriteFilesForDisplay(notification_type, profile_id, is_incognito,
++                         std::move(copy_notification),
++                         product_logo.As1xPNGBytes(),
++                         notification_icon.As1xPNGBytes(),
++                         notification_image.As1xPNGBytes());
+   }
+ 
+   void Close(Profile* profile, const std::string& notification_id) override {
+@@ -975,6 +1004,44 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
+                           COULD_NOT_CONNECT_TO_SIGNALS));
+   }
+ 
++  // Domicile's engine fork: draws a site's notification with `site_icon`,
++  // the site's favicon, or the browser's `logo` when the site has none yet.
++  void OnSiteIconFound(
++      NotificationHandler::Type notification_type,
++      const std::string& profile_id,
++      bool is_incognito,
++      std::unique_ptr<message_center::Notification> notification,
++      scoped_refptr<base::RefCountedMemory> logo,
++      scoped_refptr<base::RefCountedMemory> icon,
++      scoped_refptr<base::RefCountedMemory> image,
++      const favicon_base::FaviconRawBitmapResult& site_icon) {
++    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
++    WriteFilesForDisplay(notification_type, profile_id, is_incognito,
++                         std::move(notification),
++                         site_icon.is_valid() ? site_icon.bitmap_data
++                                              : std::move(logo),
++                         std::move(icon), std::move(image));
++  }
++
++  // Writes a notification's pictures to files, then sends it.
++  void WriteFilesForDisplay(
++      NotificationHandler::Type notification_type,
++      const std::string& profile_id,
++      bool is_incognito,
++      std::unique_ptr<message_center::Notification> notification,
++      scoped_refptr<base::RefCountedMemory> logo,
++      scoped_refptr<base::RefCountedMemory> icon,
++      scoped_refptr<base::RefCountedMemory> image) {
++    file_task_runner_->PostTaskAndReplyWithResult(
++        FROM_HERE,
++        base::BindOnce(&WriteNotificationResourceFiles, std::move(logo),
++                       std::move(icon), std::move(image)),
++        base::BindOnce(
++            &NotificationPlatformBridgeLinuxImpl::OnFilesWrittenForDisplay,
++            weak_factory_.GetWeakPtr(), notification_type, profile_id,
++            is_incognito, std::move(notification)));
++  }
++
+   void OnFilesWrittenForDisplay(
+       NotificationHandler::Type notification_type,
+       const std::string& profile_id,
+@@ -1867,6 +1934,9 @@ class NotificationPlatformBridgeLinuxImpl : public NotificationPlatformBridge {
+   ScopedGSignal show_banners_signal_;
+ #endif
+ 
++  // Domicile's engine fork: the favicon lookups for sites' notifications.
++  base::CancelableTaskTracker site_icon_tracker_;
++
+   base::WeakPtrFactory<NotificationPlatformBridgeLinuxImpl> weak_factory_{this};
+ };
+ 

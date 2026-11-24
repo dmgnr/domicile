@@ -145,7 +145,7 @@ index c87e1b5..69372e1 100644
        libgbm # libgbm.so.1
        libdrm # libdrm.so.2
 diff --git a/ui/events/ozone/evdev/input_device_opener_evdev.cc b/ui/events/ozone/evdev/input_device_opener_evdev.cc
-index e9b64c7..93c5dd1 100644
+index 18f9ea4..ceff9c4 100644
 --- a/ui/events/ozone/evdev/input_device_opener_evdev.cc
 +++ b/ui/events/ozone/evdev/input_device_opener_evdev.cc
 @@ -48,8 +48,13 @@ std::unique_ptr<EventConverterEvdev> CreateConverter(

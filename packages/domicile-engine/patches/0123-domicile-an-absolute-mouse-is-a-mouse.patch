@@ -42,7 +42,7 @@ job builds it on `crux`.
  9 files changed, 86 insertions(+), 5 deletions(-)
 
 diff --git a/ui/events/ozone/evdev/BUILD.gn b/ui/events/ozone/evdev/BUILD.gn
-index 1cd9816..d1d1569 100644
+index c76b455..5f3e0ed 100644
 --- a/ui/events/ozone/evdev/BUILD.gn
 +++ b/ui/events/ozone/evdev/BUILD.gn
 @@ -47,8 +47,11 @@ component("evdev") {
@@ -168,7 +168,7 @@ index e4131d0..5d14b20 100644
    };
  
 diff --git a/ui/events/ozone/evdev/input_device_opener_evdev.cc b/ui/events/ozone/evdev/input_device_opener_evdev.cc
-index 93c5dd1..a2f5076 100644
+index ceff9c4..df0e6b3 100644
 --- a/ui/events/ozone/evdev/input_device_opener_evdev.cc
 +++ b/ui/events/ozone/evdev/input_device_opener_evdev.cc
 @@ -17,6 +17,7 @@
@@ -179,7 +179,7 @@ index 93c5dd1..a2f5076 100644
  #include "ui/events/ozone/evdev/event_converter_evdev_impl.h"
  #include "ui/events/ozone/evdev/gamepad_event_converter_evdev.h"
  #include "ui/events/ozone/evdev/microphone_mute_switch_event_converter_evdev.h"
-@@ -73,6 +74,13 @@ std::unique_ptr<EventConverterEvdev> CreateConverter(
+@@ -74,6 +75,13 @@ std::unique_ptr<EventConverterEvdev> CreateConverter(
    }
  #endif
  
@@ -194,10 +194,10 @@ index 93c5dd1..a2f5076 100644
    if (devinfo.HasTouchscreen()) {
      return TouchEventConverterEvdev::Create(
 diff --git a/ui/ozone/platform/drm/BUILD.gn b/ui/ozone/platform/drm/BUILD.gn
-index dc3d666..369d0a9 100644
+index fe060d5..99b8846 100644
 --- a/ui/ozone/platform/drm/BUILD.gn
 +++ b/ui/ozone/platform/drm/BUILD.gn
-@@ -286,6 +286,7 @@ source_set("gbm_unittests") {
+@@ -288,6 +288,7 @@ source_set("gbm_unittests") {
      # evdev's, not this platform's: `//ui/events/ozone/evdev:unittests` is
      # linked only into `events_unittests`, which no job here builds, and the
      # console is the one platform whose touchpad goes through libinput.
@@ -205,7 +205,7 @@ index dc3d666..369d0a9 100644
      "//ui/events/ozone/evdev/domicile/scroll_accelerator_unittest.cc",
      "//ui/events/ozone/evdev/domicile/wheel_ticks_unittest.cc",
    ]
-@@ -339,6 +340,11 @@ source_set("gbm_unittests") {
+@@ -341,6 +342,11 @@ source_set("gbm_unittests") {
      # platform's evdev thread reports to, and the stub layout its keyboard
      # needs, so it names both directly.
      "//ui/events/ozone/evdev",

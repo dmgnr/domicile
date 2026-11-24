@@ -43,6 +43,7 @@ const WIFI: Wifi = {
   hardwareAddress: "A4:C3:F0:85:AC:2D",
   interface: "wlan0",
   networks: [],
+  saved: [],
   scanning: false,
 };
 
@@ -114,6 +115,9 @@ describe(NetworkTile, () => {
     wifi.report(Ok(Some(WIFI)));
     expect(screen.getByText("Home")).toBeVisible();
     expect(screen.queryByRole("button", { pressed: true })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Wi-Fi details" }),
+    ).toHaveAttribute("data-lit");
 
     await userEvent.click(
       screen.getByRole("button", { name: "Wi-Fi details" }),
@@ -131,6 +135,9 @@ describe(NetworkTile, () => {
     wifi.report(Ok(Some({ ...WIFI, ...changes })));
 
     expect(screen.getByText(text)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Wi-Fi details" }),
+    ).not.toHaveAttribute("data-lit");
   });
 
   it("is the wired tile with a cable in, even beside Wi-Fi", () => {
@@ -139,7 +146,9 @@ describe(NetworkTile, () => {
     wifi.report(Ok(Some(WIFI)));
 
     expect(screen.queryByRole("button", { name: "Wi-Fi details" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Wired details" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Wired details" }),
+    ).toHaveAttribute("data-lit");
     expect(screen.getByText("Connected, 1 Gb/s")).toBeVisible();
   });
 
@@ -149,6 +158,9 @@ describe(NetworkTile, () => {
     wifi.report(Ok(None()));
 
     expect(screen.getByText("No cable")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Wired details" }),
+    ).not.toHaveAttribute("data-lit");
   });
 
   it("only shows the state without details to open", () => {

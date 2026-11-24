@@ -2,7 +2,9 @@ import {
   WEBVIEW_EXTERNAL_APP_EVENT,
   WEBVIEW_EXTERNAL_APP_WITHDRAWN_EVENT,
 } from "@domicile-desktop/sdk/webview-element";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+
+import { ShellLinksContext } from "./shell-links";
 
 /** A link for an application the page opened, waiting on the user. */
 export type ExternalAppRequest = {
@@ -26,6 +28,9 @@ export type ExternalAppRequest = {
  * as does the engine withdrawing it for a newer one. Unmounting answers
  * nothing: the engine opens nothing for a request whose element is gone.
  *
+ * A link the shell opens itself (see `ShellLinksContext`) goes to the shell,
+ * and the engine opens nothing.
+ *
  * `view` is `null` when missing, as React's callback refs provide.
  */
 export const useExternalAppRequest = (
@@ -34,6 +39,7 @@ export const useExternalAppRequest = (
   const [request, setRequest] = useState<ExternalAppRequest | undefined>(
     undefined,
   );
+  const shellLinks = useContext(ShellLinksContext);
 
   useEffect(() => {
     if (view === null) {
@@ -44,19 +50,24 @@ export const useExternalAppRequest = (
       };
       const asked = (event: DomicileExternalAppEvent) => {
         event.preventDefault();
-        setRequest({
-          dismiss: () => {
-            cleared();
-            event.dismiss();
-          },
-          mayRemember: event.mayRemember,
-          open: (remember) => {
-            cleared();
-            event.open(remember);
-          },
-          origin: event.origin,
-          url: event.url,
-        });
+        if (shellLinks?.opens(event.url) === true) {
+          event.dismiss();
+          shellLinks.open(event.url);
+        } else {
+          setRequest({
+            dismiss: () => {
+              cleared();
+              event.dismiss();
+            },
+            mayRemember: event.mayRemember,
+            open: (remember) => {
+              cleared();
+              event.open(remember);
+            },
+            origin: event.origin,
+            url: event.url,
+          });
+        }
       };
       view.addEventListener(WEBVIEW_EXTERNAL_APP_EVENT, asked);
       view.addEventListener(WEBVIEW_EXTERNAL_APP_WITHDRAWN_EVENT, cleared);
@@ -65,7 +76,7 @@ export const useExternalAppRequest = (
         view.removeEventListener(WEBVIEW_EXTERNAL_APP_WITHDRAWN_EVENT, cleared);
       };
     }
-  }, [view]);
+  }, [shellLinks, view]);
 
   return request;
 };

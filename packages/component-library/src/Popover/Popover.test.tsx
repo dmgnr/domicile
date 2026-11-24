@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import {
   drawAt,
   drawPopups,
@@ -396,6 +396,11 @@ describe(Popover, () => {
     });
 
     it("closes when focus moves to something outside it", async () => {
+      // Focus moves at once, which also logs a focus thief; that has its own
+      // test below.
+      const errors = spyOn(console, "error").mockImplementation(
+        () => undefined,
+      );
       render(
         <>
           <Popover title="Connection" trigger={<Button>Details</Button>}>
@@ -411,6 +416,38 @@ describe(Popover, () => {
       });
 
       await waitForElementToBeRemoved(() => screen.queryByText("Body"));
+      errors.mockRestore();
+    });
+
+    it("says what took focus when that shuts it as it opens", async () => {
+      const errors = spyOn(console, "error").mockImplementation(
+        () => undefined,
+      );
+      try {
+        render(
+          <>
+            <Popover title="Connection" trigger={<Button>Details</Button>}>
+              Body
+            </Popover>
+            <button className="thief" id="elsewhere" type="button">
+              Elsewhere
+            </button>
+          </>,
+        );
+        await userEvent.click(screen.getByRole("button", { name: "Details" }));
+
+        act(() => {
+          screen.getByRole("button", { name: "Elsewhere" }).focus();
+        });
+
+        await waitForElementToBeRemoved(() => screen.queryByText("Body"));
+        expect(errors).toHaveBeenCalledTimes(1);
+        expect(String(errors.mock.calls[0]?.[0])).toContain(
+          "button#elsewhere.thief took focus",
+        );
+      } finally {
+        errors.mockRestore();
+      }
     });
 
     it("asks nothing of its owner when focus moves while it is closed", () => {

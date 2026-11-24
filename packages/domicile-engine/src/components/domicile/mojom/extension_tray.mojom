@@ -3,7 +3,8 @@
 
 module domicile.mojom;
 
-// Extension actions for the shell's tray.
+// Extensions for the shell's tray: their actions, and every installed
+// extension for a menu that switches and configures them.
 //
 // A separate interface from ControlChannel because action state lives in the
 // browser process (ExtensionActionManager), not the compositor.
@@ -34,6 +35,52 @@ struct TrayExtension {
   string popup;
   // False after action.disable().
   bool enabled;
+  // The id of the browser profile it is in, which its popup opens in: the
+  // one SetProfile names, or the default profile's until that loads.
+  string profile;
+};
+
+// Where an extension runs on the sites it asks for, as chrome://extensions'
+// "Site access" offers.
+enum SiteAccess {
+  // Only on a site where its action was clicked (activeTab).
+  kOnClick,
+  // Only on ExtensionSettings.sites.
+  kSpecificSites,
+  // Everywhere it asks to.
+  kAllSites,
+};
+
+// An extension's chrome://extensions settings. Each is null where it is not
+// being set, or where the extension cannot use it.
+struct ExtensionSettings {
+  // Runs on file:// pages.
+  bool? file_access;
+  // May use chrome.userScripts.
+  bool? user_scripts;
+  SiteAccess? site_access;
+  // With kSpecificSites: hosts, each also as `*.host` for its subdomains.
+  array<string> sites;
+};
+
+// One extension installed in the shell's profile, switched on or off, for a
+// menu that manages them. Apps, themes and Chrome's own are left out, as
+// chrome://extensions leaves them out.
+struct InstalledExtension {
+  string id;
+  string name;
+  // The manifest's icon as data:image/png;base64,..., at the page's device
+  // scale factor. Chrome's placeholder until the icon loads.
+  string icon;
+  bool enabled;
+  ExtensionSettings settings;
+  // The settings the desk's config sets, each true or false as set. Only the
+  // config changes these: Configure refuses them.
+  ExtensionSettings config_settings;
+  // The config installed it, so only the config uninstalls it.
+  bool from_config;
+  // Empty if it has no options page.
+  string options_url;
 };
 
 // Renderer -> browser, bound per document.
@@ -43,12 +90,33 @@ interface ExtensionTray {
   // message.
   SetClient(pending_remote<ExtensionTrayClient> client);
 
+  // Shows the actions of browser profile `profile`'s extensions, as Chrome's
+  // toolbar shows those of its window's profile, and has Activate click them
+  // there: on the active tab of `profile`'s pages. The default profile's until
+  // it is called. An id the desk has no profile for shows the default
+  // profile's, and says so in the log; a shell asks for the profile of the
+  // page it last focused, which may have gone with the config.
+  SetProfile(string profile);
+
   // Clicks the action, as ExtensionActionRunner::RunAction does for a toolbar
   // click. Grants activeTab on the active tab, then dispatches
   // `action.onClicked` unless the action has a popup, which the shell opens
   // itself. An unknown or disabled id is ignored; the click may have raced an
   // uninstall.
   Activate(string id);
+
+  // Switches extension `id` on or off, as its user would on
+  // chrome://extensions. Answers with why not, or an empty string.
+  SetEnabled(string id, bool enabled) => (string error);
+
+  // Sets each of `settings` that is set on extension `id`. Answers with why
+  // not, or an empty string; then none is set. A setting the extension
+  // cannot use, or the config sets, is refused.
+  Configure(string id, ExtensionSettings settings) => (string error);
+
+  // Uninstalls extension `id`, as its user would. Answers with why not, or an
+  // empty string. One the config installed is refused.
+  Uninstall(string id) => (string error);
 };
 
 // Browser -> renderer.
@@ -57,8 +125,14 @@ interface ExtensionTrayClient {
   // leave the page wrong.
   ExtensionsChanged(array<TrayExtension> extensions);
 
+  // Every installed extension, on SetClient and on every change: one
+  // installed, uninstalled, switched on or off, or reconfigured.
+  InstalledChanged(array<InstalledExtension> extensions);
+
   // Extension `id` called `action.openPopup()`. The shell opens `popup` as it
   // opens a clicked action's. `popup` is carried because the extension may
   // set its action's popup back to none as soon as the call answers.
-  PopupRequested(string id, string popup);
+  // `profile` is the id of the browser profile it is in, which the popup
+  // opens in.
+  PopupRequested(string id, string popup, string profile);
 };
