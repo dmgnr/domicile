@@ -12,7 +12,7 @@ use smithay::backend::allocator::Format;
 use smithay::backend::egl::native::{EGLNativeDisplay, EGLPlatform, EGLSurfacelessDisplay};
 use smithay::backend::egl::{ffi, EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::{ImportDma as _, Renderer as _};
+use smithay::backend::renderer::ImportDma as _;
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -42,8 +42,10 @@ pub enum ImportError {
     NoDevice,
     #[error("cannot list the DRM render nodes")]
     NoRenderNodes(#[source] std::io::Error),
-    #[error("EGL setup failed")]
+    #[error("EGL operation failed")]
     Egl(#[from] smithay::backend::egl::Error),
+    #[error("EGL could not destroy the validation image (error {0:#x})")]
+    DestroyImage(i32),
     #[error("GLES failed to import or read back the buffer")]
     Gles(#[from] smithay::backend::renderer::gles::GlesError),
 }
@@ -192,17 +194,22 @@ impl DmabufImporter {
         advertisable(renderer.dmabuf_formats())
     }
 
-    /// Whether a client's buffer imports. Answers the protocol's import
-    /// notifier before the client can commit the buffer.
+    /// Checks a client's buffer before the client can commit it.
     ///
-    /// First drops the renderer's imports of buffers clients have destroyed.
-    /// Each import keeps its buffer's memory, and the renderer only drops them
-    /// when it draws, which it never does without a `wl_shm` client or a cast.
-    pub fn accepts(renderer: &mut GlesRenderer, dmabuf: &Dmabuf) -> bool {
-        renderer
-            .cleanup_texture_cache()
-            .and_then(|()| renderer.import_dmabuf(dmabuf, None))
-            .is_ok()
+    /// The engine composites the buffer, so validation needs no cached texture.
+    pub fn validate(renderer: &GlesRenderer, dmabuf: &Dmabuf) -> Result<(), ImportError> {
+        let display = renderer.egl_context().display();
+        let image = display.create_image_from_dmabuf(dmabuf)?;
+        // SAFETY: the image belongs to this live display and has not been
+        // handed to a texture or any other caller.
+        if unsafe { ffi::egl::DestroyImageKHR(**display.get_display_handle(), image) }
+            == ffi::egl::TRUE
+        {
+            Ok(())
+        } else {
+            // SAFETY: EGL is loaded and reports the error for this thread.
+            Err(ImportError::DestroyImage(unsafe { ffi::egl::GetError() }))
+        }
     }
 }
 
@@ -261,10 +268,10 @@ mod tests {
 
     use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufFlags};
     use smithay::backend::allocator::{Format, Fourcc, Modifier};
+    use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
+    use smithay::backend::renderer::gles::GlesRenderer;
 
-    use super::{
-        advertisable, gbm_or_surfaceless_display, headless_renderer, render_nodes, DmabufImporter,
-    };
+    use super::{advertisable, gbm_or_surfaceless_display, render_nodes, DmabufImporter};
 
     fn format(code: Fourcc) -> Format {
         Format {
@@ -371,20 +378,22 @@ mod tests {
         fds + maps
     }
 
-    // Without a draw to clear the renderer's cache, the validation import
-    // would keep every buffer a client ever made.
     #[test]
-    fn a_destroyed_buffer_is_let_go_by_the_next_import() {
-        let (mut renderer, _) = headless_renderer().expect("EGL: llvmpipe will do");
-        let destroyed = dmabuf(c"domicile-destroyed-buffer");
-        assert!(DmabufImporter::accepts(&mut renderer, &destroyed));
-        drop(destroyed);
+    fn validation_does_not_keep_an_import_for_a_live_client_buffer() {
+        let software = EGLDevice::enumerate()
+            .expect("lists EGL devices")
+            .find(EGLDevice::is_software)
+            .expect("Mesa exposes a software EGL device for importing a memfd");
+        // SAFETY: this device comes from EGL's own enumeration.
+        let display = unsafe { EGLDisplay::new(software) }.expect("opens software EGL display");
+        let context = EGLContext::new(&display).expect("creates software EGL context");
+        // SAFETY: the test creates, uses, and drops the renderer on this thread.
+        let renderer = unsafe { GlesRenderer::new(context) }.expect("creates software renderer");
+        let buffer = dmabuf(c"domicile-validation-only-buffer");
+        let client_holds = holds_on("domicile-validation-only-buffer");
 
-        assert!(DmabufImporter::accepts(
-            &mut renderer,
-            &dmabuf(c"domicile-next-buffer")
-        ));
+        DmabufImporter::validate(&renderer, &buffer).expect("the buffer imports");
 
-        assert_eq!(holds_on("domicile-destroyed-buffer"), 0);
+        assert_eq!(holds_on("domicile-validation-only-buffer"), client_holds);
     }
 }

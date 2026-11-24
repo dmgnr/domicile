@@ -588,8 +588,6 @@ impl DmabufHandler for DomicileCompositor {
         &mut self.dmabuf_state
     }
 
-    // Validate a client's dmabuf by importing it. This also warms the
-    // renderer's cache for the following commit.
     fn dmabuf_imported(
         &mut self,
         _global: &DmabufGlobal,
@@ -600,13 +598,16 @@ impl DmabufHandler for DomicileCompositor {
             .gpu
             .as_mut()
             .expect("the dmabuf global is only advertised alongside a renderer");
-        if DmabufImporter::accepts(gpu.renderer(), &dmabuf) {
-            if let Err(err) = notifier.successful::<DomicileCompositor>() {
-                tracing::debug!(?err, "client went away before its dmabuf was acknowledged");
+        match DmabufImporter::validate(gpu.renderer(), &dmabuf) {
+            Ok(()) => {
+                if let Err(err) = notifier.successful::<DomicileCompositor>() {
+                    tracing::debug!(?err, "client went away before its dmabuf was acknowledged");
+                }
             }
-        } else {
-            tracing::warn!(format = ?dmabuf.format(), "rejecting a dmabuf the renderer cannot import");
-            notifier.failed();
+            Err(err) => {
+                tracing::warn!(format = ?dmabuf.format(), ?err, "rejecting a dmabuf the renderer cannot import");
+                notifier.failed();
+            }
         }
     }
 }
