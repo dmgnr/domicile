@@ -1600,7 +1600,7 @@ const reduceAction = (
     case WindowActionKind.NewTabPressed: {
       return {
         ...reachWindow(state, openTabBeside(state, action.id)),
-        launcherOpen: true,
+        launcherOpen: false,
       };
     }
     // The scratchpad hangs above the desk and the overview sits under it, so

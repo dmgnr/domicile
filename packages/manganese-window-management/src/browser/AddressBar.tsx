@@ -182,19 +182,32 @@ export const AddressBar = ({
     suggest,
     typed === displayed && blankTab === undefined ? "" : query,
   );
+  const typedSite = typedAddress(query);
+  const explicitSite = typedSite?.kind === TypedAddressKind.Site;
+  const localRows = suggestionsFor(typed, visited, onNavigate);
+  const chromiumRows = chromium
+    ?.filter(
+      ({ description, url }) =>
+        !explicitSite || url !== typedSite.url || description !== "",
+    )
+    .map(({ description, label, search, url }) => {
+      // Chromium puts the address in contents and the page title in description.
+      const titledSite = !search && description !== "";
+      const siteDetail = titledSite ? label : undefined;
+      return {
+        description: search ? description || "Search" : siteDetail,
+        label: titledSite ? description : label,
+        text: search ? label : url,
+        value: () => {
+          onNavigate(url);
+        },
+      };
+    });
+  const directRows = explicitSite ? localRows.slice(0, 1) : [];
   const webRows =
-    chromium === undefined ||
-    chromium.length === 0 ||
-    typedAddress(query)?.kind === TypedAddressKind.Site
-      ? suggestionsFor(typed, visited, onNavigate)
-      : chromium.map(({ description, label, search, url }) => ({
-          description: description === "" && search ? "Search" : description,
-          label,
-          text: search ? label : url,
-          value: () => {
-            onNavigate(url);
-          },
-        }));
+    chromiumRows === undefined || chromiumRows.length === 0
+      ? localRows
+      : [...directRows, ...chromiumRows];
   const appRows = apps.map(({ icon, launch, name }) => ({
     description: "App",
     icon:

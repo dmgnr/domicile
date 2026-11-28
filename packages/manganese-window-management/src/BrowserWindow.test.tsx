@@ -553,6 +553,7 @@ describe("BrowserWindow", () => {
       expect(view(container).getAttribute("src")).toBe(
         "https://docs.example.com",
       );
+      expect(view(container)).toHaveFocus();
     });
 
     // A video's fullscreen button: the page fills the window, as in Chrome.

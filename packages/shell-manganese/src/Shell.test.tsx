@@ -1141,17 +1141,18 @@ describe("Shell", () => {
       expect(screen.queryByRole("meter")).toBeNull();
     });
 
-    it("opens the launcher from the button left of the tray", async () => {
-      // `mod+Space` also opens it; the button is for pointer users.
+    it("opens the omnibox from the button left of the tray", async () => {
       await renderShell();
 
       fireEvent.click(screen.getByRole("button", { name: "Launcher" }));
 
-      expect(
-        screen.getByRole("combobox", {
-          name: "Open an app, a file, a URL, or search",
-        }),
-      ).toBeVisible();
+      expect(domicile.calls).toContainEqual([
+        "openBrowserWindow",
+        "about:blank",
+        "",
+        "",
+      ]);
+      expect(screen.getByRole("combobox", { name: "Address" })).toHaveFocus();
     });
 
     it("has no button for the terminal: that is a key", async () => {
@@ -2300,19 +2301,20 @@ describe("Shell", () => {
       expect(shadows(container)).toHaveLength(0);
     });
 
-    it("opens the launcher from the new-tab button at a strip's end", async () => {
-      // The pointer equivalent of `mod+space` from inside the strip.
+    it("opens the omnibox from the new-tab button at a strip's end", async () => {
       const user = userEvent.setup();
       await renderShell();
       clientAppears("term");
 
       await user.click(screen.getByRole("button", { name: "New tab" }));
 
-      expect(
-        screen.getByRole("combobox", {
-          name: "Open an app, a file, a URL, or search",
-        }),
-      ).toBeVisible();
+      expect(domicile.calls).toContainEqual([
+        "openBrowserWindow",
+        "about:blank",
+        "",
+        "",
+      ]);
+      expect(screen.getByRole("combobox", { name: "Address" })).toHaveFocus();
     });
 
     it("takes the window away when the client goes", async () => {

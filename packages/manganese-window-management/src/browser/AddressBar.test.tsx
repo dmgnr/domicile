@@ -77,6 +77,37 @@ describe("AddressBar", () => {
     ).toBeNull();
   });
 
+  it("shows the history title first and the matching address beside it", async () => {
+    render(
+      <AddressBar
+        {...BAR}
+        address="about:blank"
+        suggest={async () => [
+          {
+            description: "YouTube Music",
+            label: "music.youtube.com",
+            search: false,
+            url: "https://music.youtube.com/",
+          },
+        ]}
+      />,
+    );
+    await userEvent.type(address(), "mus");
+    expect(
+      await screen.findByRole("option", {
+        name: "YouTube Music music.youtube.com",
+      }),
+    ).toBeVisible();
+
+    await userEvent.clear(address());
+    await userEvent.type(address(), "music.youtube.com");
+    expect(
+      await screen.findByRole("option", {
+        name: "YouTube Music music.youtube.com",
+      }),
+    ).toBeVisible();
+  });
+
   it("offers apps on focus and ranks matching apps ahead of web search in a blank launcher tab", async () => {
     const picked: string[] = [];
     render(

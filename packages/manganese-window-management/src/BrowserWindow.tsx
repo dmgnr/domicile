@@ -777,6 +777,7 @@ export const BrowserWindow = ({
       // `<webview>` the property would not update the DOM.
       loaded.setAttribute("src", url);
       setSent(url);
+      focusOwn(loaded);
     });
   };
 

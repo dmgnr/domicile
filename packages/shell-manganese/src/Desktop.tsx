@@ -722,7 +722,7 @@ export const Desktop = ({
   const launcherControl = useMemo(
     () => ({
       toggle: () => {
-        act(WindowAction.LauncherToggled());
+        act(WindowAction.BrowserOpened("about:blank", false));
       },
     }),
     [act],

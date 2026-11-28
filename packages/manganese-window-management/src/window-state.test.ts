@@ -2481,7 +2481,7 @@ describe("the launcher", () => {
     );
   });
 
-  it("opens from a tab strip's new-tab button, on the strip's open tab", () => {
+  it("focuses the new-tab button's strip without opening the launcher", () => {
     // A new window opens beside the focused one, so it joins the strip.
     const state = reduce(
       desktop("kitty", "editor"),
@@ -2493,7 +2493,7 @@ describe("the launcher", () => {
       WindowAction.NewTabPressed(APP("mail")),
     );
 
-    expect(state.launcherOpen).toBe(true);
+    expect(state.launcherOpen).toBe(false);
     expect(activeIdOf(state)).toBe(APP("editor"));
   });
 

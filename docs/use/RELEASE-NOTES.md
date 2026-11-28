@@ -32,6 +32,8 @@ Keep work and personal apart: each profile has its own sign-ins and extensions, 
 
 ### Also new
 
+- Open the focused address bar from the taskbar launcher or the new-tab button. Confirming a destination returns focus to the page.
+- Show the page title before the address in Chromium history suggestions.
 - Open a blank tab with Super+R and search for installed apps in its address bar. Pick an app to replace the tab or switch to its open window. Apps you pick rise in later searches.
 - Get Chromium address suggestions from the current tab's browser profile.
 - Open desktop screenshots in the full-screen area selector. Press Escape to choose a monitor or window instead.
