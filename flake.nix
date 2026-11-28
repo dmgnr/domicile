@@ -196,6 +196,8 @@
           mkdir -p unpacked
           tar --use-compress-program=unzstd -xf "$src" -C unpacked
           cd unpacked/*
+          # Archives staged from the Nix store retain its read-only modes.
+          chmod -R u+w .
           runHook postUnpack
         '';
 
