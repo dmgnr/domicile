@@ -32,6 +32,9 @@ Keep work and personal apart: each profile has its own sign-ins and extensions, 
 
 ### Also new
 
+- Open a blank tab with Super+R and search for installed apps in its address bar. Pick an app to replace the tab or switch to its open window. Apps you pick rise in later searches.
+- Get Chromium address suggestions from the current tab's browser profile.
+- Open desktop screenshots in the full-screen area selector. Press Escape to choose a monitor or window instead.
 - Email links, in apps and on web pages, ask which Gmail inbox or alias to write from, then open a new message in that inbox. Each Gmail account signs in once more, for its aliases. [Notifications](NOTIFICATIONS.md#inboxes)
 - Remove a copy from the clipboard history with its Remove button or the Delete key. Removing what is on your clipboard empties it. [Clipboard](CLIPBOARD.md)
 - Spell checking in every text field: right-click a misspelled word for suggestions, or add it to your dictionary. [Spelling](BROWSER.md#spelling)

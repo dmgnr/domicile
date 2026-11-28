@@ -146,7 +146,10 @@ export const ScreenshotDialog = ({
       ? partOf(pickAt(choices, picked).pick, part)
       : Pick.Area(picked);
   // Whether the area is being selected on screen, over the frozen desk.
-  const { dialog, picker, setPicking } = usePicking(presence);
+  const { dialog, picker, setPicking } = usePicking(
+    presence,
+    asker === undefined,
+  );
   useEffect(() => {
     const copy = (event: KeyboardEvent) => {
       if (dialog.open && isCopy(event)) {

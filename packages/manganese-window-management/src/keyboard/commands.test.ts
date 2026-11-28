@@ -57,6 +57,13 @@ describe("manganese's command builders", () => {
 });
 
 describe("manganese's default keys", () => {
+  it("opens the omnibox on Super+R", () => {
+    expect(DEFAULT_KEYBINDINGS["Meta+r"]).toEqual({
+      args: ["omnibox"],
+      kind: KeyActionKind.SendShell,
+    });
+  });
+
   // Every default binding must parse, or that key does nothing.
   it("are every one a command manganese knows", () => {
     for (const [chord, action] of Object.entries(DEFAULT_KEYBINDINGS)) {

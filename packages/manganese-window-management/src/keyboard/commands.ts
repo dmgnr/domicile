@@ -28,6 +28,8 @@ export const kill = () => command("kill");
 export const lock = () => command("lock");
 /** Toggle the launcher. */
 export const launcher = () => command("launcher");
+/** Open a blank tab with the address bar focused. */
+export const omnibox = () => command("omnibox");
 /**
  * Toggle the overview: each screen's workspaces at once. `only` opens it
  * without closing it, or closes it without opening it.
@@ -170,6 +172,7 @@ export const DEFAULT_KEYBINDINGS: ModeKeybindings = {
   "Meta+minus": scratchpad(),
   "Meta+o": overview(),
   "Meta+Return": terminal(),
+  "Meta+r": omnibox(),
   "Meta+Shift+a": focus("child"),
   "Meta+Shift+f": fullscreen(true),
   "Meta+Shift+minus": move("scratchpad"),

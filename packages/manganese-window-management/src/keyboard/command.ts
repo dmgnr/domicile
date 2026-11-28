@@ -2,7 +2,7 @@
 //
 // - Commands use sway's syntax where sway has one (`focus left`, `layout
 //   tabbed`), so sway bindings can be copied over. `lock`, `launcher`,
-//   `overview`, `layer`, `clipboard`, `search-clipboard`, `screenshot`, `terminal`,
+//   `omnibox`, `overview`, `layer`, `clipboard`, `search-clipboard`, `screenshot`, `terminal`,
 //   `volume`, `mic`,
 //   `brightness`, `keymap`, `notifications`, `idle-inhibitor`,
 //   `night-light`, `virtual-monitor` and `resize grow <direction>` are
@@ -43,6 +43,7 @@ const COMMANDS: ReadonlyMap<string, Action> = new Map<string, Action>([
   // A toggle, so the same key opens and closes it. Escape and the backdrop
   // close it from the dialog (see `launcher/Launcher.tsx`).
   ["launcher", WindowAction.LauncherToggled()],
+  ["omnibox", WindowAction.BrowserOpened("about:blank", false)],
   // Each screen's workspaces at once; a toggle, like the launcher.
   ["overview", WindowAction.OverviewToggled()],
   // Manganese's: one way each, for gestures that go one way.
@@ -206,6 +207,10 @@ export const COMMAND_HELP: readonly ShellCommandHelp[] = [
     usage: "group",
   },
   { description: "Toggle the launcher.", usage: "launcher" },
+  {
+    description: "Open a blank tab with its address bar focused.",
+    usage: "omnibox",
+  },
   {
     description:
       "Toggle the overview of every screen's workspaces, or one way only.",

@@ -427,6 +427,7 @@ export enum WindowActionKind {
   AppMinSize,
   AppTitled,
   AppLaunched,
+  BlankTabReplaced,
   BrowserDescribed,
   BrowserIconChanged,
   BrowserOpened,
@@ -581,9 +582,13 @@ export const WindowAction = {
    * The user picked an application in the launcher. The compositor runs
    * `command`; the reducer only closes the launcher.
    */
-  AppLaunched: (command: readonly string[]) => ({
+  AppLaunched: (
+    command: readonly string[],
+    replace?: { appId: string; stillBlank: () => boolean; tab: string },
+  ) => ({
     command,
     kind: WindowActionKind.AppLaunched as const,
+    replace,
   }),
 
   /** The client said the largest it will draw its window. */
@@ -610,6 +615,12 @@ export const WindowAction = {
     appId,
     kind: WindowActionKind.AppTitled as const,
     title,
+  }),
+
+  BlankTabReplaced: (tab: string, app: string) => ({
+    app,
+    kind: WindowActionKind.BlankTabReplaced as const,
+    tab,
   }),
 
   /**
@@ -1434,6 +1445,21 @@ const reduceAction = (
         browserWindowId(action.windowId),
         action.icon === "" ? undefined : action.icon,
       );
+    }
+    case WindowActionKind.BlankTabReplaced: {
+      const tab = windowOf(state, action.tab);
+      if (tab?.kind === WindowKind.Browser && tab.url === "about:blank") {
+        const placed = dropNode(
+          state,
+          { id: action.app, up: 0 },
+          { id: action.tab, up: 0 },
+          undefined,
+          Beside.InStrip,
+        );
+        return placed === state ? state : closeWindow(placed, action.tab);
+      } else {
+        return state;
+      }
     }
     case WindowActionKind.BrowserOpened: {
       // Closes the launcher, since opening a URL is one of its results. The

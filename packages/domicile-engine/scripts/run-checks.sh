@@ -113,6 +113,7 @@ TOGETHER=(
   guard-webview-hidden
   guard-webview-moved
   guard-profile-routing
+  guard-omnibox-profile
   guard-webview-paused
   guard-animation-main-frames
   guard-one-spare-renderer
@@ -168,6 +169,7 @@ LAST=(
 
 # Guards with no control run.
 ONCE=(
+  guard-omnibox-profile
   node-runs-on-the-engine
   guard-agent-devtools-shell
   guard-app-only-in-shell

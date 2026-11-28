@@ -63,6 +63,15 @@ import { ShellLinksContext } from "@domicile-desktop/manganese-page-requests/she
 import { useWallpapers } from "@domicile-desktop/manganese-wallpaper/useWallpapers";
 import { Wallpaper } from "@domicile-desktop/manganese-wallpaper/Wallpaper";
 import type { Wallpapers } from "@domicile-desktop/manganese-wallpaper/wallpapers";
+import {
+  rankAddressApps,
+  rememberAddressApp,
+} from "@domicile-desktop/manganese-window-management/browser/address-app-ranking";
+import type { AddressAppSearch } from "@domicile-desktop/manganese-window-management/browser/address-apps";
+import {
+  AddressApps,
+  LaunchingAddressTab,
+} from "@domicile-desktop/manganese-window-management/browser/address-apps";
 import { desktopClientIcons } from "@domicile-desktop/manganese-window-management/client-icons";
 import type { Direction } from "@domicile-desktop/manganese-window-management/direction";
 import type { FloatingRules } from "@domicile-desktop/manganese-window-management/floating/floating-rules";
@@ -248,6 +257,32 @@ export const Desktop = ({
         launcherApps,
       ),
     [applications, domicile, launcherApps],
+  );
+  const findAddressApps = useCallback<AddressAppSearch>(
+    async (query, isPrivate) => {
+      const matches = await apps.matchingApps(query);
+      const ranked = isPrivate
+        ? matches
+        : rankAddressApps(globalThis.localStorage, matches);
+      return Promise.all(
+        ranked.slice(0, 3).map(async ({ command, id, loadIcon, name }) => ({
+          icon: await loadIcon(),
+          launch: (blank) => {
+            act(
+              WindowAction.AppLaunched(
+                command,
+                blank === undefined ? undefined : { ...blank, appId: id },
+              ),
+            );
+            if (!isPrivate) {
+              rememberAddressApp(globalThis.localStorage, id);
+            }
+          },
+          name,
+        })),
+      );
+    },
+    [act, apps],
   );
   // Read while the launcher is closed so its rows render with it rather than
   // a moment later.
@@ -842,35 +877,39 @@ export const Desktop = ({
         tie with a bar it overlaps; see `Stage`.
       */}
         {screens.length > 0 && (
-          <Stage
-            activeId={windows.activeId}
-            behindPanel={
-              windows.launcherOpen ||
-              windows.overviewOpen ||
-              windows.clipboardOpen ||
-              opened !== undefined ||
-              portal.url !== undefined ||
-              notificationsOpen ||
-              heldPanels > 0 ||
-              lock.locked
-            }
-            // While a desktop panel is open the page keeps the keyboard; see
-            // `AppWindow`. Extension popups, a portal's sign-in page,
-            // applications' dialogs and the lock screen count.
-            clientIcons={clientIcons}
-            domicile={domicile}
-            draggingId={windows.draggingId}
-            focusedId={windows.focusedId}
-            handed={windows.handed}
-            modifiers={modifiers}
-            {...stageActions}
-            overview={sight}
-            popups={windows.popups}
-            scratchpad={windows.scratchpad}
-            screens={screens}
-            shut={shut}
-            windows={windows.windows}
-          />
+          <AddressApps value={findAddressApps}>
+            <LaunchingAddressTab value={windows.launchingTab}>
+              <Stage
+                activeId={windows.activeId}
+                behindPanel={
+                  windows.launcherOpen ||
+                  windows.overviewOpen ||
+                  windows.clipboardOpen ||
+                  opened !== undefined ||
+                  portal.url !== undefined ||
+                  notificationsOpen ||
+                  heldPanels > 0 ||
+                  lock.locked
+                }
+                // While a desktop panel is open the page keeps the keyboard; see
+                // `AppWindow`. Extension popups, a portal's sign-in page,
+                // applications' dialogs and the lock screen count.
+                clientIcons={clientIcons}
+                domicile={domicile}
+                draggingId={windows.draggingId}
+                focusedId={windows.focusedId}
+                handed={windows.handed}
+                modifiers={modifiers}
+                {...stageActions}
+                overview={sight}
+                popups={windows.popups}
+                scratchpad={windows.scratchpad}
+                screens={screens}
+                shut={shut}
+                windows={windows.windows}
+              />
+            </LaunchingAddressTab>
+          </AddressApps>
         )}
         {/*
         Over every window and under the toasts and panels, on every

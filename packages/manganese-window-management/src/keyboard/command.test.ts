@@ -18,6 +18,7 @@ describe("parseCommand", () => {
     ["kill", WindowAction.WindowKilled()],
     ["lock", WindowAction.DeskLocked()],
     ["launcher", WindowAction.LauncherToggled()],
+    ["omnibox", WindowAction.BrowserOpened("about:blank", false)],
     ["overview", WindowAction.OverviewToggled()],
     ["clipboard", WindowAction.ClipboardToggled()],
     ["screenshot", WindowAction.ScreenshotTaken()],

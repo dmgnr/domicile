@@ -1,6 +1,7 @@
 // The desk's browser windows, which the browser holds and a shell draws with
 // `<webview window="id">`, and fetches with the browser's cookies.
 
+import { z } from "zod";
 import type {
   DomicileBrowserProfile,
   DomicileBrowserWindow,
@@ -15,6 +16,16 @@ import type { On } from "./subscribe";
 import { hostEvent, on } from "./subscribe";
 
 export type BrowserWindow = Defined<DomicileBrowserWindow>;
+
+const suggestionSchema = z.object({
+  description: z.string(),
+  label: z.string(),
+  search: z.boolean(),
+  url: z.url({ protocol: /^https?$/ }),
+});
+const suggestionsSchema = z.array(suggestionSchema);
+
+export type BrowserSuggestion = z.infer<typeof suggestionSchema>;
 
 /**
  * One of the desk's browser profiles: a set of sign-ins, site data and
@@ -215,6 +226,10 @@ export type Browser = {
    * or a network failure.
    */
   fetch: (url: string, init?: FetchInit) => Promise<FetchResponse>;
+  /** Chromium's ranked matches from the tab's own browser profile. */
+  suggestions?:
+    | ((id: string, query: string) => Promise<readonly BrowserSuggestion[]>)
+    | undefined;
   on: On<BrowserListeners>;
 };
 
@@ -226,6 +241,7 @@ export type BrowserHost = Pick<
   | "browserProfileFor"
   | "browserProfiles"
   | "browserSiteFor"
+  | "browserSuggestions"
   | "browserWindows"
   | "clickBrowserWindowMatch"
   | "clickBrowserWindowMenu"
@@ -250,6 +266,7 @@ export type WindowStateReport = {
 };
 
 export const browser = (host: BrowserHost): Browser => {
+  const suggest = host.browserSuggestions?.bind(host);
   const windowsOf = memoizeLast(
     (list: readonly DomicileBrowserWindow[] | null) =>
       list?.filter(({ parent }) => parent === null).map(defined),
@@ -323,6 +340,11 @@ export const browser = (host: BrowserHost): Browser => {
       const site = await host.browserSiteFor(url);
       return site === "" ? undefined : site;
     },
+    suggestions:
+      suggest === undefined
+        ? undefined
+        : async (id, query) =>
+            suggestionsSchema.parse(JSON.parse(await suggest(id, query))),
     get views() {
       return viewsOf(host.browserWindows);
     },

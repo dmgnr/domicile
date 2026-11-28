@@ -41,6 +41,30 @@ const knownIcons = (icons: Readonly<Record<string, string>>) => {
 const configured = (theme?: string) => () => Promise.resolve(theme);
 
 describe("appSearch", () => {
+  it("looks up apps for the address bar without fetching bookmark icons", async () => {
+    const { asked, icons } = knownIcons({});
+    const apps = appSearch(
+      fakeDesktop(
+        {
+          "/home/applications/editor.desktop": entry("Editor", "Icon=editor\n"),
+          "/home/icons/hicolor/48x48/apps/editor.png": "png",
+        },
+        desktop,
+      ),
+      { bookmarks: [], omit: [] },
+      configured(),
+      icons,
+    );
+    const [editor] = await apps.matchingApps("edi");
+    expect(editor).toMatchObject({
+      command: ["editor"],
+      id: "editor.desktop",
+      name: "Editor",
+    });
+    expect(await editor?.loadIcon?.()).toBe("data:image/png;base64,cG5n");
+    expect(asked).toEqual([]);
+  });
+
   it("offers what is installed and not omitted, with its pictures", async () => {
     const system = fakeDesktop(
       {

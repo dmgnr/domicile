@@ -322,6 +322,10 @@ class MODULES_EXPORT DomicileHost final
   ScriptPromise<IDLString> browserSiteFor(ScriptState*,
                                           const String& url,
                                           ExceptionState&);
+  ScriptPromise<IDLString> browserSuggestions(ScriptState*,
+                                              const String& id,
+                                              const String& query,
+                                              ExceptionState&);
   ScriptPromise<IDLUndefined> pinBrowserSite(ScriptState*,
                                              const String& site,
                                              const String& profile,

@@ -24,6 +24,11 @@ import type { Bookmark, DesktopEntry, FoundApps } from "./found-apps";
 const FOUND = 50;
 
 export type AppSearch = {
+  matchingApps: (query: string) => Promise<
+    readonly (Pick<InstalledEntry, "command" | "id" | "name"> & {
+      loadIcon: () => Promise<string | undefined>;
+    })[]
+  >;
   /** Reads what is installed again, then offers the empty box's rows. */
   opening: () => Promise<FoundApps>;
   /** What matches `query`, from what was read on the last opening. */
@@ -67,7 +72,17 @@ export const appSearch = (
 ): AppSearch => {
   const omits = omitting(config.omit);
   const sites = new Map(webApps.map((app) => [webAppId(app), app.url]));
+  const appPictures = new WeakMap<
+    InstalledEntry,
+    Promise<string | undefined>
+  >();
   let installed: Promise<Installed> | undefined;
+  const matching = ({ entries }: Installed, query: string) =>
+    findApps([...entries, ...webApps.map(webAppEntry)], query, FOUND);
+  const installedAppsForSearch = () => {
+    installed ??= read(domicile, omits, iconTheme);
+    return installed;
+  };
   const search = async (query: string): Promise<FoundApps> => {
     icons
       .lookFor([
@@ -78,25 +93,22 @@ export const appSearch = (
         // biome-ignore lint/suspicious/noConsole: surfacing a lookup that broke
         console.error("could not look for bookmarks' icons", error);
       });
-    installed ??= read(domicile, omits, iconTheme);
-    const { entries, icon } = await installed;
+    const current = await installedAppsForSearch();
     return {
       apps: await Promise.all(
-        findApps([...entries, ...webApps.map(webAppEntry)], query, FOUND).map(
-          (entry) => {
-            const site = sites.get(entry.id);
-            return site === undefined
-              ? drawn(entry, icon)
-              : {
-                  command: entry.command,
-                  comment: entry.comment,
-                  icon: orUndefined(icons.icon(site)),
-                  id: entry.id,
-                  name: entry.name,
-                  preview: undefined,
-                };
-          },
-        ),
+        matching(current, query).map((entry) => {
+          const site = sites.get(entry.id);
+          return site === undefined
+            ? drawn(entry, current.icon)
+            : {
+                command: entry.command,
+                comment: entry.comment,
+                icon: orUndefined(icons.icon(site)),
+                id: entry.id,
+                name: entry.name,
+                preview: undefined,
+              };
+        }),
       ),
       bookmarks: findBookmarks(config.bookmarks, query, FOUND).map(
         (bookmark): Bookmark => ({
@@ -107,6 +119,24 @@ export const appSearch = (
     };
   };
   return {
+    matchingApps: async (query) => {
+      const current = await installedAppsForSearch();
+      return matching(current, query).map((entry) => ({
+        command: entry.command,
+        id: entry.id,
+        loadIcon: () => {
+          const cached = appPictures.get(entry);
+          if (cached === undefined) {
+            const picture = pictureOf(current.icon, entry.icon);
+            appPictures.set(entry, picture);
+            return picture;
+          } else {
+            return cached;
+          }
+        },
+        name: entry.name,
+      }));
+    },
     opening: () => {
       installed = read(domicile, omits, iconTheme);
       return search("");
@@ -172,17 +202,21 @@ const drawn = async (
   }: InstalledEntry,
   icon: IconLookup,
 ): Promise<DesktopEntry> => {
-  const picture = async (named: string | undefined) =>
-    named === undefined ? undefined : orUndefined(succeeded(await icon(named)));
   return {
     command,
     comment,
-    icon: await picture(iconName),
+    icon: await pictureOf(icon, iconName),
     id,
     name,
-    preview: await picture(previewName),
+    preview: await pictureOf(icon, previewName),
   };
 };
+
+const pictureOf = async (
+  icon: IconLookup,
+  named: string | undefined,
+): Promise<string | undefined> =>
+  named === undefined ? undefined : orUndefined(succeeded(await icon(named)));
 
 /** The value, or a throw: a desktop that refuses to read fails the search. */
 const succeeded = <T extends NonNullable<unknown>>(

@@ -2591,6 +2591,26 @@ ScriptPromise<IDLString> DomicileHost::browserSiteFor(
   return promise;
 }
 
+ScriptPromise<IDLString> DomicileHost::browserSuggestions(
+    ScriptState* script_state,
+    const String& id,
+    const String& query,
+    ExceptionState& exception_state) {
+  if (id.empty() || query.length() > 2048) {
+    exception_state.ThrowTypeError("expected a window id and a short query");
+    return EmptyPromise();
+  }
+  if (!Ready(exception_state)) {
+    return EmptyPromise();
+  }
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  windows_->Suggestions(
+      id, query, BindOnce(&SettleBrowserProfile, WrapPersistent(resolver)));
+  return promise;
+}
+
 ScriptPromise<IDLUndefined> DomicileHost::pinBrowserSite(
     ScriptState* script_state,
     const String& site,

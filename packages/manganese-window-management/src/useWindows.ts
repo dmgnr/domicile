@@ -21,7 +21,8 @@ import type { HandedDrag } from "./handed-drag";
 import { followPresses } from "./handed-drag";
 import { openCommand } from "./open-command";
 import type { PlacedScreen } from "./screens/screen-toward";
-import { appIdOf, appWindowId, browserIdOf } from "./window";
+import type { ShellWindow } from "./window";
+import { appIdOf, appWindowId, browserIdOf, WindowKind } from "./window";
 import { windowChanges } from "./window-changes";
 import { describedAction, describedChange } from "./window-log";
 import { hearWindowRequests } from "./window-requests";
@@ -36,8 +37,10 @@ import {
   NO_WINDOWS,
   reduceWindows,
   WindowActionKind,
+  windowOf,
   windowsInGroup,
 } from "./window-state";
+import { floatOn } from "./workspace";
 
 export type Windows = WindowState & {
   /**
@@ -54,12 +57,30 @@ export type Windows = WindowState & {
    * it, for the window's grab to run. Cleared when that press ends.
    */
   handed: HandedDrag | undefined;
+  /** The blank tab waiting for an app to open. */
+  launchingTab: string | undefined;
 };
 
 const log = logger("windows");
 
 /** No app runs in the background. One array, so the default never changes. */
 const NO_BACKGROUND_APPS: readonly string[] = [];
+const LAUNCH_WAIT_MS = 30_000;
+const FLOAT_GRACE_MS = 1500;
+
+type AppReplacement = NonNullable<
+  ReturnType<typeof Action.AppLaunched>["replace"]
+>;
+
+const matchesInstalledApp = (
+  window: ShellWindow,
+  installedId: string,
+): boolean =>
+  window.kind === WindowKind.App
+    ? !installedId.startsWith("web-app:") &&
+      window.desktopId.toLowerCase() ===
+        installedId.replace(/\.desktop$/i, "").toLowerCase()
+    : window.isApp && `web-app:${window.appId}` === installedId;
 
 /**
  * The desktop's windows and the actions that change them.
@@ -93,6 +114,14 @@ export const useWindows = (
   // The state as last drawn, for `act` to read without depending on it. A new
   // `act` would re-add every listener that runs commands.
   const drawn = useRef(state);
+  const [waitingForApp, setWaitingForApp] = useState<
+    | (AppReplacement & { until: number; before: ReadonlySet<string> })
+    | undefined
+  >(undefined);
+  const floatingCandidate = useRef<
+    | { launch: NonNullable<typeof waitingForApp>; id: string; until: number }
+    | undefined
+  >(undefined);
   useLayoutEffect(() => {
     const changed = describedChange(drawn.current, state);
     if (changed !== undefined) {
@@ -122,7 +151,33 @@ export const useWindows = (
         domicile.processes.launch(openFile(action.path));
       }
       if (action.kind === WindowActionKind.AppLaunched) {
-        domicile.processes.launch(action.command);
+        const replace = action.replace;
+        const existing =
+          replace === undefined
+            ? undefined
+            : drawn.current.windows.find((window) =>
+                matchesInstalledApp(window, replace.appId),
+              );
+        if (
+          replace !== undefined &&
+          existing !== undefined &&
+          replace.stillBlank()
+        ) {
+          setWaitingForApp(undefined);
+          dispatch(Action.FocusRequested(existing.id));
+          closeWindows(domicile, [replace.tab]);
+        } else {
+          setWaitingForApp(
+            replace === undefined
+              ? undefined
+              : {
+                  ...replace,
+                  before: new Set(drawn.current.windows.map(({ id }) => id)),
+                  until: performance.now() + LAUNCH_WAIT_MS,
+                },
+          );
+          domicile.processes.launch(action.command);
+        }
       }
       if (action.kind === WindowActionKind.ClipboardSearched) {
         // From a private window, the search stays private.
@@ -173,6 +228,74 @@ export const useWindows = (
     },
     [domicile, openFile, dispatch],
   );
+
+  useEffect(() => {
+    const waiting = waitingForApp;
+    if (waiting !== undefined) {
+      const tab = windowOf(state, waiting.tab);
+      if (
+        performance.now() >= waiting.until ||
+        tab?.kind !== WindowKind.Browser ||
+        tab.url !== "about:blank" ||
+        !waiting.stillBlank()
+      ) {
+        setWaitingForApp(undefined);
+      } else {
+        const matches = state.windows.filter(
+          (window) =>
+            !waiting.before.has(window.id) &&
+            matchesInstalledApp(window, waiting.appId),
+        );
+        const opened = matches.find((window) =>
+          state.workspaces.every(
+            (workspace) => floatOn(workspace, window.id) === undefined,
+          ),
+        );
+        if (opened !== undefined) {
+          const action = Action.BlankTabReplaced(waiting.tab, opened.id);
+          if (reduceWindows(state, action) !== state) {
+            setWaitingForApp(undefined);
+            dispatch(action);
+            closeWindows(domicile, [waiting.tab]);
+            return undefined;
+          }
+        }
+        const floatingId = opened === undefined ? matches[0]?.id : undefined;
+        if (floatingId === undefined) {
+          floatingCandidate.current = undefined;
+        } else if (
+          floatingCandidate.current?.launch !== waiting ||
+          floatingCandidate.current.id !== floatingId
+        ) {
+          floatingCandidate.current = {
+            id: floatingId,
+            launch: waiting,
+            until: performance.now() + FLOAT_GRACE_MS,
+          };
+        }
+        const candidate = floatingCandidate.current;
+        const wake = Math.min(waiting.until, candidate?.until ?? waiting.until);
+        const timer = setTimeout(
+          () => {
+            setWaitingForApp(undefined);
+            if (
+              candidate !== undefined &&
+              candidate.until <= waiting.until &&
+              waiting.stillBlank()
+            ) {
+              dispatch(Action.FocusRequested(candidate.id));
+              closeWindows(domicile, [waiting.tab]);
+            }
+          },
+          Math.max(0, wake - performance.now()),
+        );
+        return () => {
+          clearTimeout(timer);
+        };
+      }
+    }
+    return undefined;
+  }, [dispatch, domicile, state, waitingForApp]);
 
   // The host's last window list, diffed against the next. A ref, not
   // effect-local, so a re-run effect does not announce every window again.
@@ -263,8 +386,9 @@ export const useWindows = (
       act,
       activeId: activeIdOf(state),
       handed,
+      launchingTab: waitingForApp?.tab,
     }),
-    [act, handed, state],
+    [act, handed, state, waitingForApp],
   );
 };
 

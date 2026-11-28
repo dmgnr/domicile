@@ -35,7 +35,9 @@
 #include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/types/expected.h"
+#include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
 #include "chrome/browser/domicile/domicile_browser_profiles.h"
 #include "chrome/browser/domicile/domicile_electron_page.h"
 #include "chrome/browser/domicile/domicile_electron_page_events.h"
@@ -53,6 +55,11 @@
 #include "components/domicile/browser/web_view_partition.h"
 #include "components/domicile/common/domicile_scheme.h"
 #include "components/embedder_support/user_agent_utils.h"
+#include "components/omnibox/browser/autocomplete_classifier.h"
+#include "components/omnibox/browser/autocomplete_controller.h"
+#include "components/omnibox/browser/autocomplete_input.h"
+#include "components/omnibox/browser/autocomplete_match.h"
+#include "components/omnibox/browser/autocomplete_result.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/document_service.h"
@@ -1436,6 +1443,93 @@ class Host final : public BrowserWindowHost {
   }
 };
 
+// A one-shot snapshot of Chrome's ranked results, limited to the tab's
+// profile. Superseded queries and closed tabs resolve without results.
+class OmniboxQuery final : public AutocompleteController::Observer,
+                           public content::WebContentsObserver {
+ public:
+  OmniboxQuery(content::WebContents& page,
+               base::OnceCallback<void(const std::string&)> reply)
+      : content::WebContentsObserver(&page),
+        reply_(std::move(reply)),
+        controller_(std::make_unique<AutocompleteController>(
+            std::make_unique<ChromeAutocompleteProviderClient>(
+                Profile::FromBrowserContext(page.GetBrowserContext())),
+            AutocompleteControllerConfig{
+                .provider_types =
+                    AutocompleteClassifier::DefaultOmniboxProviders()})) {
+    controller_->AddObserver(this);
+  }
+
+  ~OmniboxQuery() override {
+    if (controller_) {
+      controller_->RemoveObserver(this);
+    }
+    Cancel();
+  }
+
+  void Start(const std::string& query) {
+    AutocompleteInput input(
+        base::UTF8ToUTF16(query), metrics::OmniboxEventProto::OTHER,
+        controller_->autocomplete_provider_client()->GetSchemeClassifier());
+    deadline_.Start(FROM_HERE, base::Milliseconds(1200), this,
+                    &OmniboxQuery::Publish);
+    controller_->Start(input);
+    if (controller_->done()) {
+      Publish();
+    }
+  }
+
+ private:
+  void OnResultChanged(AutocompleteController* controller, bool) override {
+    if (controller->done()) {
+      // Observer notification runs inside the controller's result update.
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&OmniboxQuery::Publish, weak_.GetWeakPtr()));
+    }
+  }
+
+  void WebContentsDestroyed() override {
+    controller_->RemoveObserver(this);
+    controller_.reset();
+    Cancel();
+  }
+
+  void Cancel() {
+    deadline_.Stop();
+    if (reply_) {
+      std::move(reply_).Run("[]");
+    }
+  }
+
+  void Publish() {
+    if (!reply_) {
+      return;
+    }
+    deadline_.Stop();
+    base::ListValue rows;
+    for (const auto& match : controller_->result()) {
+      // A provider's internal actions or privileged URLs are not navigations.
+      if (!match.destination_url.SchemeIsHTTPOrHTTPS()) {
+        continue;
+      }
+      base::DictValue row;
+      row.Set("url", match.destination_url.spec());
+      row.Set("label", base::UTF16ToUTF8(match.contents));
+      row.Set("description", base::UTF16ToUTF8(match.description));
+      row.Set("search", AutocompleteMatch::IsSearchType(match.type));
+      rows.Append(std::move(row));
+    }
+    std::move(reply_).Run(base::WriteJson(rows).value());
+  }
+
+  base::OnceCallback<void(const std::string&)> reply_;
+  std::unique_ptr<AutocompleteController> controller_;
+  base::OneShotTimer deadline_;
+  base::WeakPtrFactory<OmniboxQuery> weak_{this};
+};
+
 // The list for one shell document. A DocumentService like ExtensionTray, so a
 // reloaded shell binds a new one and gets the list again.
 class BrowserWindowsService final
@@ -1460,6 +1554,24 @@ class BrowserWindowsService final
   }
 
   // mojom::BrowserWindows:
+  void Suggestions(const std::string& id,
+                   const std::string& query,
+                   SuggestionsCallback callback) override {
+    omnibox_.reset();
+    WebViewGuest* guest = windows_->Find(id);
+    if (!guest || query.empty()) {
+      std::move(callback).Run("[]");
+      return;
+    }
+    if (query.size() > 8192) {
+      ReportBadMessageAndDeleteThis("domicile: oversized omnibox query.");
+      return;
+    }
+    omnibox_ =
+        std::make_unique<OmniboxQuery>(guest->contents(), std::move(callback));
+    omnibox_->Start(query);
+  }
+
   void SetClient(
       mojo::PendingRemote<mojom::BrowserWindowsClient> client) override {
     if (client_.is_bound()) {
@@ -1676,6 +1788,7 @@ class BrowserWindowsService final
   // Owned by the profile, which outlives every document in it.
   const raw_ptr<DeskWindows> windows_;
   mojo::Remote<mojom::BrowserWindowsClient> client_;
+  std::unique_ptr<OmniboxQuery> omnibox_;
   base::WeakPtrFactory<BrowserWindowsService> weak_factory_{this};
 };
 

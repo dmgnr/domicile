@@ -2,8 +2,8 @@
 
 ## Screenshots
 
-Press Print, or pick **Screenshot** in the launcher. Then choose a monitor, a
-window, or drag out an area.
+Press Print, or pick **Screenshot** in the launcher. Drag over the screen to
+select an area, or press Escape to choose a monitor or window from the list.
 
 ![Taking a screenshot](../media/tour-screenshots.png)
 

@@ -7,18 +7,18 @@ import type { Presence } from "./presence";
  * `picker`, while it is drawn, to the picker. Whichever is up when `presence`
  * closes fades out, then completes it.
  */
-export const usePicking = ({
-  onOpenChangeComplete,
-  open,
-}: Presence): {
+export const usePicking = (
+  { onOpenChangeComplete, open }: Presence,
+  startInPicker = false,
+): {
   dialog: Presence;
   picker: Presence | undefined;
   /** Brings the picker up, or with `false`, back to the dialog. */
   setPicking: (picking: boolean) => void;
 } => {
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState(startInPicker);
   // Drawn, though perhaps fading out.
-  const [drawn, setDrawn] = useState(false);
+  const [drawn, setDrawn] = useState(startInPicker);
   return {
     dialog: {
       onOpenChangeComplete: (opened) => {

@@ -1197,6 +1197,8 @@ export type DomicileHost = {
    * Throws TypeError for a `url` that is no address.
    */
   browserSiteFor(url: string): Promise<string>;
+  /** Ranked Chromium suggestions for the browser window's own profile. */
+  browserSuggestions(id: string, query: string): Promise<string>;
   /**
    * Opens `site` in browser profile `profile` from now on, kept across
    * restarts; the default profile unpins it. `site` is a host, `*.host`, or

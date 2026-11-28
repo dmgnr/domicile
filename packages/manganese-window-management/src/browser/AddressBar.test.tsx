@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { ConnectionSafety } from "@domicile-desktop/manganese-address/connection-safety";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { css } from "../../styled-system/css";
 import { AddressBar } from "./AddressBar";
+import { AddressApps } from "./address-apps";
 import type { PageHistoryChoice } from "./page-history";
 
 /** Shared props; each case overrides what it tests. */
@@ -46,6 +47,126 @@ const middleClick = (): MouseEvent =>
   new MouseEvent("auxclick", { bubbles: true, button: 1 });
 
 describe("AddressBar", () => {
+  it("uses Chromium's ranked results instead of the local history fallback", async () => {
+    render(
+      <AddressBar
+        {...BAR}
+        address="about:blank"
+        suggest={(query) =>
+          Promise.resolve(
+            query === "example"
+              ? [
+                  {
+                    description: "Visited in this profile",
+                    label: "A Chromium match",
+                    search: false,
+                    url: "https://example.com/history",
+                  },
+                ]
+              : [],
+          )
+        }
+      />,
+    );
+    await userEvent.type(address(), "example");
+    expect(
+      await screen.findByRole("option", { name: /A Chromium match/ }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("option", { name: /example.*Search/i }),
+    ).toBeNull();
+  });
+
+  it("offers apps on focus and ranks matching apps ahead of web search in a blank launcher tab", async () => {
+    const picked: string[] = [];
+    render(
+      <AddressApps
+        value={() =>
+          Promise.resolve([
+            {
+              launch: (blank) => {
+                picked.push(blank?.tab ?? "no blank tab");
+              },
+              name: "Discord",
+            },
+          ])
+        }
+      >
+        <AddressBar
+          {...BAR}
+          address="about:blank"
+          blankTab={{ stillBlank: () => true, tab: "browser:new" }}
+          visited={[]}
+        />
+      </AddressApps>,
+    );
+    act(() => {
+      address().focus();
+    });
+    expect(
+      await screen.findByRole("option", { name: /Discord/ }),
+    ).toBeVisible();
+    await userEvent.keyboard("disc");
+    expect(address()).toHaveValue("disc");
+    expect(
+      await screen.findByRole("option", { name: /disc.*Search/i }),
+    ).toBeVisible();
+    const app = await screen.findByRole("option", { name: "Discord App" });
+    expect(screen.getAllByRole("option")[0]).toBe(app);
+    await userEvent.click(app);
+    expect(picked).toEqual(["browser:new"]);
+  });
+
+  it("launches installed apps from autocomplete without navigating the page", async () => {
+    const calls: string[] = [];
+    render(
+      <AddressApps
+        value={(query) =>
+          Promise.resolve(
+            query === "disc"
+              ? [
+                  {
+                    icon: "data:image/png;base64,cG5n",
+                    launch: () => {
+                      calls.push("Discord");
+                    },
+                    name: "Discord",
+                  },
+                ]
+              : [],
+          )
+        }
+      >
+        <AddressBar
+          {...BAR}
+          onNavigate={(url) => {
+            calls.push(url);
+          }}
+        />
+      </AddressApps>,
+    );
+    const field = screen.getByRole("combobox", { name: "Address" });
+    await userEvent.clear(field);
+    await userEvent.type(field, "disc");
+    const app = await screen.findByRole("option", { name: /Discord/ });
+    expect(app.querySelector("img")).toHaveAttribute(
+      "src",
+      "data:image/png;base64,cG5n",
+    );
+    await userEvent.click(app);
+
+    expect(calls).toEqual(["Discord"]);
+  });
+
+  it("disables the address while its app is opening", () => {
+    const { rerender } = render(<AddressBar {...BAR} launching />);
+    expect(screen.getByRole("combobox", { name: "Address" })).toBeDisabled();
+    expect(screen.getByRole("status", { name: "Opening app…" })).toBeVisible();
+    rerender(<AddressBar {...BAR} />);
+    expect(screen.getByRole("combobox", { name: "Address" })).toBeEnabled();
+    expect(screen.queryByRole("status", { name: "Opening app…" })).toBeNull();
+  });
+
   it("shuts its lock when a page turns out to be secure", () => {
     const { rerender } = render(
       <AddressBar {...BAR} security={ConnectionSafety.Unstated} />,

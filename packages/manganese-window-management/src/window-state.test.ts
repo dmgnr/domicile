@@ -87,6 +87,40 @@ const sideBySide = (...names: readonly string[]) =>
   }));
 
 describe("the windows a host announces", () => {
+  it("puts a launched app in the blank tab's slot, keeping its neighbors", () => {
+    const state = reduce(
+      desktop("before"),
+      WindowAction.BrowserWindowsListed([listed("blank", "about:blank")], []),
+      WindowAction.AppAppeared("after", "After"),
+      WindowAction.AppAppeared("chosen", "Chosen"),
+      WindowAction.BlankTabReplaced(BROWSER("blank"), APP("chosen")),
+    );
+
+    expect(windowsOn(workspaceHere(state))).toEqual([
+      APP("before"),
+      APP("chosen"),
+      APP("after"),
+    ]);
+    expect(activeIdOf(state)).toBe(APP("chosen"));
+  });
+
+  it("does not replace a tab that has navigated", () => {
+    const state = reduce(
+      desktop("chosen"),
+      WindowAction.BrowserWindowsListed(
+        [listed("site", "https://example.com")],
+        [],
+      ),
+    );
+
+    expect(
+      reduceWindows(
+        state,
+        WindowAction.BlankTabReplaced(BROWSER("site"), APP("chosen")),
+      ),
+    ).toBe(state);
+  });
+
   it("opens a window for each client, tiled on the workspace on screen", () => {
     const state = desktop("kitty", "editor");
 

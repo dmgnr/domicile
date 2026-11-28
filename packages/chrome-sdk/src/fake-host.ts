@@ -207,6 +207,8 @@ export class FakeDomicileHost {
             const [url, appId = "", reuse = "new", profile = ""] = args;
             this.openApp(url, appId, reuse, profile);
           };
+        } else if (name === "browserSuggestions") {
+          return undefined;
         } else if (name === "browserSiteFor") {
           return (url: string) => {
             calls.push([name, url]);

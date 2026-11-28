@@ -44,6 +44,9 @@ type CommonProps<V> = Partial<ControlVariant> & {
    * bar, which sits on a toolbar rather than on a page.
    */
   filled?: boolean | undefined;
+  inlineCompletion?: boolean | undefined;
+  open?: boolean | undefined;
+  onOpenChange?: ((open: boolean) => void) | undefined;
   onSuggestionTaken?: ((value: V) => void) | undefined;
   onValueChange?: ((value: string) => void) | undefined;
   rounded?: boolean | undefined;
@@ -83,6 +86,9 @@ export const Autocomplete = <V,>({
   disabled,
   emptyMessage,
   filled = false,
+  inlineCompletion = true,
+  open,
+  onOpenChange,
   onSuggestionTaken,
   onValueChange,
   prefixButtons,
@@ -97,7 +103,7 @@ export const Autocomplete = <V,>({
 }: Props<V>) => {
   const { attach, boundary } = usePopupBoundary(false);
   const actions = useRef<BaseAutocomplete.Root.Actions | null>(null);
-  const heard = useClosedWithScene(actions, {});
+  const heard = useClosedWithScene(actions, { onOpenChange, open });
   return (
     <BaseAutocomplete.Root<Suggestion<V>>
       actionsRef={actions}
@@ -105,13 +111,13 @@ export const Autocomplete = <V,>({
       disabled={disabled}
       items={suggestions}
       itemToStringValue={(suggestion) => suggestion.text}
-      // `inline` skips base-ui's filtering; the caller already filtered
-      // `suggestions`.
-      mode="inline"
+      // Both modes keep the caller's filtering and ranking.
+      mode={inlineCompletion ? "inline" : "none"}
       onOpenChange={heard}
       onValueChange={(next) => {
         onValueChange?.(next);
       }}
+      open={open}
       value={value}
     >
       {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: focuses the field when the wrapper's padding is clicked; mirrors native <label> behavior without a second label polluting the accessible name */}

@@ -22,6 +22,7 @@ replaces them.
 | Meta+Minus / Meta+Shift+Minus | `scratchpad show` / `move scratchpad`. |
 | Meta+Shift+Q | Close the window. |
 | Meta+Space, Meta+D | Toggle the launcher, closing the overview. |
+| Meta+R | Open a blank tab with its address bar focused. |
 | Meta+O, Super tapped alone | Toggle the overview. Super held for a chord, a drag, a scroll or over 300 ms is no tap. |
 | `pinch:4:inward` / `pinch:4:outward` | `overview show` / `overview hide`: open and close the overview. |
 | `swipe:4:up` / `swipe:4:down` | `layer up` / `layer down`: put the scratchpad away or else open the overview / close the overview or else pull the scratchpad down. |
@@ -71,6 +72,7 @@ Manganese-only commands:
 | `lock` | Lock the desktop. |
 | `group` | Turn the focused tab into a group of its own, nested in its slot, so new windows open in it. Does nothing for a window alone in its group. |
 | `launcher` | Toggle the launcher. Closes the overview. |
+| `omnibox` | Open a blank tab with its address bar focused. |
 | `overview` | Toggle the overview: each screen's workspaces with windows, and the shown one, at once. Closes the launcher and clipboard. While it is open, `focus <way>` moves between its workspaces and `move <way>` swaps them; no other key's command runs but `lock`, `screenshot`, the volume and brightness commands, `launcher`, `clipboard`, `layer` and `overview` itself. |
 | `layer up` / `layer down` | Step from the scratchpad to the desk to the overview: up runs `scratchpad hide` while a scratchpad window is out, else `overview show`; down runs `overview hide` while the overview is open, else `scratchpad bring`. Both run while the overview is open. |
 | `clipboard` | Toggle the clipboard history. |

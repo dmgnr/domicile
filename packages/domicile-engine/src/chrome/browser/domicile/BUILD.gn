@@ -132,6 +132,8 @@ source_set("domicile") {
 
   deps = [
     "//base",
+    "//chrome/browser/autocomplete",
+    "//components/omnibox/browser",
     # The TVs the shell casts the desktop to, through Chrome's Media Router.
     "//chrome/browser/media/router:media_router_feature",
     "//components/media_router/browser",

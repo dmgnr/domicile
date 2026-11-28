@@ -48,6 +48,7 @@ import { AddressBar } from "./browser/AddressBar";
 import { AppAddress } from "./browser/AppAddress";
 import { AppMenuBar } from "./browser/AppMenuBar";
 import { AppPopupMenu } from "./browser/AppPopupMenu";
+import { LaunchingAddressTab } from "./browser/address-apps";
 import { leftOrigin } from "./browser/app-origin";
 import { BrowserCommand, browserCommandFor } from "./browser/browser-command";
 import { FindBar } from "./browser/FindBar";
@@ -291,6 +292,7 @@ export const BrowserWindow = ({
   const unclickable = covered || behindPanel;
   // `null` because React passes `null` to a callback ref on unmount.
   const [view, setView] = useState<HTMLWebViewElement | null>(null);
+  const launching = useContext(LaunchingAddressTab) === `browser:${window}`;
   /** The page and the app's views over it, whose keys bubble up to it. */
   const [page, setPage] = useState<HTMLDivElement | null>(null);
   // The whole window, used to check whether focus is inside it and to ease it
@@ -322,6 +324,15 @@ export const BrowserWindow = ({
   // the shell did not start (links, redirects, form posts).
   const shown = useShownPage(view);
   const address = addressOf(shown.url, sent);
+  const addressField = useRef<HTMLInputElement>(null);
+  const focusBlankAddress = useRef(start === "about:blank");
+  const blank = address === "about:blank";
+  const suggest = useMemo(() => {
+    const suggestions = domicile.browser.suggestions;
+    return suggestions === undefined
+      ? undefined
+      : (query: string) => suggestions(window, query);
+  }, [domicile, window]);
   const pageProfile = useBrowserProfile(domicile, window);
   const pinned = usePinnedSite(domicile, address);
   const profileExtensions = useProfileExtensions(
@@ -656,17 +667,24 @@ export const BrowserWindow = ({
   // - Skips the page if focus is already in this window. Otherwise a click in
   //   the address bar would have its focus pulled into the page.
   // - Focuses the file picker or the page's dialog instead while one is open,
-  //   since the page is waiting on it.
+  //   since the page is waiting on it. A new blank tab focuses its address.
   useEffect(() => {
     if (holdsKeyboard && view !== null) {
       domicile.windows.focusShell();
       if (waiting !== null) {
         focusOwn(waiting);
+      } else if (
+        blank &&
+        focusBlankAddress.current &&
+        addressField.current !== null
+      ) {
+        focusBlankAddress.current = false;
+        focusOwn(addressField.current);
       } else if (!holdsFocus(element.current)) {
         focusOwn(view);
       }
     }
-  }, [domicile, focusOwn, holdsKeyboard, view, waiting]);
+  }, [blank, domicile, focusOwn, holdsKeyboard, view, waiting]);
 
   // Takes the keyboard back for the file picker or the page's dialog when the
   // waiting page takes focus. The PDF viewer refocuses its own button after
@@ -830,12 +848,25 @@ export const BrowserWindow = ({
         {hasAddressBar && (
           <AddressBar
             address={address}
+            addressRef={addressField}
+            blankTab={
+              blank && start === "about:blank" && view !== null
+                ? {
+                    stillBlank: () =>
+                      view.isConnected &&
+                      (view.getAttribute("src") ?? "about:blank") ===
+                        "about:blank",
+                    tab: `browser:${window}`,
+                  }
+                : undefined
+            }
             canGoBack={canGoBack}
             canGoForward={canGoForward}
             // Cheap, so read each render rather than memoized with the view.
             history={view === null ? undefined : pageHistoryFor(view)}
             holdZoom={zoomShown}
             isPrivate={isPrivate}
+            launching={launching}
             loading={loading}
             loadProgress={loadProgress}
             mediaDevices={mediaDevices}
@@ -918,6 +949,7 @@ export const BrowserWindow = ({
             }
             security={shown.security}
             sitePermissions={sitePermissions}
+            suggest={suggest}
             visited={shown.visited}
             zoom={zoom}
           />

@@ -5,33 +5,42 @@ import { AnimatedReloadIcon } from "@domicile-desktop/component-library/Animated
 import type { Suggestion } from "@domicile-desktop/component-library/Autocomplete";
 import { Autocomplete } from "@domicile-desktop/component-library/Autocomplete";
 import { Button } from "@domicile-desktop/component-library/Button";
+import { Loading } from "@domicile-desktop/component-library/Loading";
 import type { AddressSuggestion } from "@domicile-desktop/manganese-address/address-suggestions";
 import {
   AddressSuggestionKind,
   addressSuggestions,
 } from "@domicile-desktop/manganese-address/address-suggestions";
 import type { ConnectionSafety } from "@domicile-desktop/manganese-address/connection-safety";
-import { typedAddress } from "@domicile-desktop/manganese-address/typed-address";
+import {
+  TypedAddressKind,
+  typedAddress,
+} from "@domicile-desktop/manganese-address/typed-address";
 import type { SitePermission } from "@domicile-desktop/manganese-page-requests/site-permissions";
 import type { PermissionRequest } from "@domicile-desktop/manganese-page-requests/usePermissionRequest";
 import type {
   WebViewPermission,
   WebViewPermissionSetting,
 } from "@domicile-desktop/sdk/webview-element";
+import { AppWindowIcon } from "@phosphor-icons/react/dist/ssr/AppWindow";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/ssr/ClockCounterClockwise";
 import { DetectiveIcon } from "@phosphor-icons/react/dist/ssr/Detective";
 import { GlobeSimpleIcon } from "@phosphor-icons/react/dist/ssr/GlobeSimple";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/ssr/MagnifyingGlass";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, Ref } from "react";
 import { useState } from "react";
 import { css } from "../../styled-system/css";
 import { hstack } from "../../styled-system/patterns";
+import type { BlankAddressTab } from "./address-apps";
+import { useAddressApps } from "./address-apps";
 import { ConnectionIndicator } from "./ConnectionIndicator";
 import { HistoryButton } from "./HistoryButton";
 import type { MediaDeviceChoice } from "./media-devices";
 import { ProfileMenu } from "./ProfileMenu";
 import type { PageHistoryChoice } from "./page-history";
 import { SitePermissions } from "./SitePermissions";
+import type { Suggest } from "./useBrowserSuggestions";
+import { useBrowserSuggestions } from "./useBrowserSuggestions";
 import {
   isFullyZoomedIn,
   isFullyZoomedOut,
@@ -51,6 +60,10 @@ type Props = {
    * lock could describe a different page, which enables address-bar spoofing.
    */
   address: string;
+  suggest?: Suggest | undefined;
+  addressRef?: Ref<HTMLInputElement> | undefined;
+  blankTab?: BlankAddressTab | undefined;
+  launching?: boolean | undefined;
   canGoBack: boolean;
   canGoForward: boolean;
   /**
@@ -118,6 +131,9 @@ type Props = {
  */
 export const AddressBar = ({
   address,
+  addressRef,
+  blankTab,
+  launching = false,
   canGoBack,
   canGoForward,
   history,
@@ -142,16 +158,60 @@ export const AddressBar = ({
   profile,
   security,
   sitePermissions,
+  suggest,
   visited,
   zoom,
 }: Props) => {
   // Typing is discarded when the address changes. Reset during render, not in
   // an effect, to avoid a frame showing stale text over the new page.
-  const [edit, setEdit] = useState({ address, typed: address });
+  const displayed = address === "about:blank" ? "" : address;
+  const [edit, setEdit] = useState({ address, typed: displayed });
   if (edit.address !== address) {
-    setEdit({ address, typed: address });
+    setEdit({ address, typed: displayed });
   }
-  const typed = edit.address === address ? edit.typed : address;
+  const typed = edit.address === address ? edit.typed : displayed;
+  const [completionOpen, setCompletionOpen] = useState(false);
+  const query = typed.trim();
+  const apps = useAddressApps(
+    blankTab !== undefined || (typed !== displayed && query !== "")
+      ? query
+      : undefined,
+    isPrivate,
+  );
+  const chromium = useBrowserSuggestions(
+    suggest,
+    typed === displayed && blankTab === undefined ? "" : query,
+  );
+  const webRows =
+    chromium === undefined ||
+    chromium.length === 0 ||
+    typedAddress(query)?.kind === TypedAddressKind.Site
+      ? suggestionsFor(typed, visited, onNavigate)
+      : chromium.map(({ description, label, search, url }) => ({
+          description: description === "" && search ? "Search" : description,
+          label,
+          text: search ? label : url,
+          value: () => {
+            onNavigate(url);
+          },
+        }));
+  const appRows = apps.map(({ icon, launch, name }) => ({
+    description: "App",
+    icon:
+      icon === undefined ? (
+        <AppWindowIcon size={14} />
+      ) : (
+        <img alt="" className={appIconStyles} src={icon} />
+      ),
+    label: name,
+    text: name,
+    value: () => {
+      launch(blankTab);
+    },
+  }));
+  const appsFirst =
+    blankTab !== undefined &&
+    typedAddress(query)?.kind !== TypedAddressKind.Site;
 
   const type = (next: string) => {
     setEdit({ address, typed: next });
@@ -160,7 +220,7 @@ export const AddressBar = ({
   // Enter on an empty line does nothing, as in other browsers.
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const action = typedAddress(typed);
+    const action = launching ? undefined : typedAddress(typed);
     if (action !== undefined) {
       onNavigate(action.url);
     }
@@ -217,16 +277,22 @@ export const AddressBar = ({
       <Autocomplete
         aria-label="Address"
         autoComplete="off"
-        // Highlights the first suggestion, which is what the typed text would
-        // do (see `addressSuggestions`), so Enter takes it and the field
-        // completes inline.
-        //
-        // Off for an empty line, where the list is only history: Enter then
-        // reaches the form, which ignores it.
-        autoHighlight={typed.trim() !== ""}
+        // An empty box shows suggestions without picking one for Enter.
+        autoHighlight={query !== ""}
+        disabled={launching}
         filled
-        onSuggestionTaken={onNavigate}
+        inlineCompletion={blankTab === undefined}
+        onFocus={() => {
+          if (blankTab !== undefined) {
+            setCompletionOpen(true);
+          }
+        }}
+        onOpenChange={setCompletionOpen}
+        onSuggestionTaken={(take) => {
+          take();
+        }}
         onValueChange={type}
+        open={blankTab === undefined ? undefined : !launching && completionOpen}
         prefixButtons={
           <>
             <ConnectionIndicator security={security} url={address} />
@@ -239,9 +305,15 @@ export const AddressBar = ({
             />
           </>
         }
+        ref={addressRef}
         size="sm"
         spellCheck={false}
-        suggestions={suggestionsFor(typed, visited)}
+        suffixButtons={
+          launching ? <Loading layout="glyph">Opening app…</Loading> : undefined
+        }
+        suggestions={
+          appsFirst ? [...appRows, ...webRows] : [...webRows, ...appRows]
+        }
         value={typed}
       />
       {/* At the inline end, as in Chrome, and only while the page is
@@ -313,8 +385,13 @@ const filledTo = (
 const suggestionsFor = (
   typed: string,
   visited: readonly string[],
-): readonly Suggestion<string>[] =>
-  addressSuggestions(typed, visited).map(lineFor);
+  navigate: (url: string) => void,
+): readonly Suggestion<() => void>[] =>
+  addressSuggestions(typed, visited).map((suggestion) =>
+    lineFor(suggestion, () => {
+      navigate(suggestion.url);
+    }),
+  );
 
 /**
  * One suggestion as a list line.
@@ -322,7 +399,10 @@ const suggestionsFor = (
  * `text` fills the field when the line is highlighted. For a search it is the
  * query, not the search URL, so the user can keep editing their words.
  */
-const lineFor = (suggestion: AddressSuggestion): Suggestion<string> => {
+const lineFor = (
+  suggestion: AddressSuggestion,
+  take: () => void,
+): Suggestion<() => void> => {
   switch (suggestion.kind) {
     case AddressSuggestionKind.Search: {
       return {
@@ -330,7 +410,7 @@ const lineFor = (suggestion: AddressSuggestion): Suggestion<string> => {
         icon: <MagnifyingGlassIcon size={14} />,
         label: suggestion.query,
         text: suggestion.query,
-        value: suggestion.url,
+        value: take,
       };
     }
     case AddressSuggestionKind.Site: {
@@ -339,7 +419,7 @@ const lineFor = (suggestion: AddressSuggestion): Suggestion<string> => {
         icon: <GlobeSimpleIcon size={14} />,
         label: suggestion.url,
         text: suggestion.url,
-        value: suggestion.url,
+        value: take,
       };
     }
     case AddressSuggestionKind.Visited: {
@@ -348,7 +428,7 @@ const lineFor = (suggestion: AddressSuggestion): Suggestion<string> => {
         icon: <ClockCounterClockwiseIcon size={14} />,
         label: suggestion.url,
         text: suggestion.url,
-        value: suggestion.url,
+        value: take,
       };
     }
   }
@@ -357,6 +437,12 @@ const lineFor = (suggestion: AddressSuggestion): Suggestion<string> => {
 // The open tab's surface, so the bar reads as chrome, not page, and joins the
 // tab above. A private window's bar is tinted its own color, so it is
 // never mistaken for an ordinary one.
+const appIconStyles = css({
+  blockSize: 4,
+  inlineSize: 4,
+  objectFit: "contain",
+});
+
 const barStyles = hstack({
   // The address in 13px, the desktop's text size, rather than the field's.
   "& input[aria-label=Address]": { fontSize: "ui" },

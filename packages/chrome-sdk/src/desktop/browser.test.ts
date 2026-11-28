@@ -4,6 +4,33 @@ import { AppReuse } from "./browser";
 import { desktop } from "./desktop";
 
 describe("browser", () => {
+  it("asks Chromium for ranked suggestions by window id", async () => {
+    const fake = new FakeDomicileHost();
+    const rows = [
+      {
+        description: "Example page",
+        label: "example.com",
+        search: false,
+        url: "https://example.com/",
+      },
+    ];
+    const host = new Proxy(fake.host, {
+      get: (target, key, receiver): unknown => {
+        if (key === "browserSuggestions") {
+          return (id: string, query: string) => {
+            expect([id, query]).toEqual(["window", "example"]);
+            return Promise.resolve(JSON.stringify(rows));
+          };
+        } else {
+          return Reflect.get(target, key, receiver);
+        }
+      },
+    });
+    await expect(
+      desktop(host).browser.suggestions?.("window", "example"),
+    ).resolves.toEqual(rows);
+  });
+
   it("lists nothing until the browser has", () => {
     expect(
       desktop(new FakeDomicileHost().host).browser.windows,

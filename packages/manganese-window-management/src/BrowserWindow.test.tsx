@@ -322,6 +322,39 @@ const nothingEnded = () => {
 };
 
 describe("BrowserWindow", () => {
+  it("starts a blank tab with an empty, focused address bar", () => {
+    const { container } = render(
+      <BrowserWindow
+        behindPanel={false}
+        clickThrough={false}
+        covered={false}
+        depth={0}
+        domicile={silentDomicile}
+        dragging={false}
+        focused
+        frame={FRAME}
+        fullscreen={false}
+        motion="resting"
+        onDescription={noDescription}
+        onFocusRequest={() => undefined}
+        onIcon={noIcon}
+        onMotionEnded={nothingEnded}
+        onPageFullscreen={noFullscreen}
+        onReach={() => undefined}
+        rect={ON_SCREEN}
+        resizing={false}
+        url="about:blank"
+        window="1"
+      />,
+    );
+
+    expect(address()).toHaveFocus();
+    expect(address()).toHaveValue("");
+    shows(view(container), "about:blank", "");
+    expect(address()).toHaveFocus();
+    expect(address()).toHaveValue("");
+  });
+
   // A float hanging off its screen would slide into view beside its
   // workspace.
   it("clips itself to its workspace while a switch slides it", () => {

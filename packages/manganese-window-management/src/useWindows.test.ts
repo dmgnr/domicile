@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { Display } from "@domicile-desktop/component-library/display-source";
 import type { DomicileBrowserWindow } from "@domicile-desktop/sdk/domicile-host";
 import { FakeDomicileHost } from "@domicile-desktop/sdk/fake-host";
-import { act, fireEvent, renderHook } from "@testing-library/react";
+import { act, fireEvent, renderHook, waitFor } from "@testing-library/react";
 
 import type { FloatingOptions } from "./floating/floating-rules";
 import { floatingRulesSchema } from "./floating/floating-rules";
@@ -652,6 +652,92 @@ describe("a command", () => {
 
     expect(host.spawned).toEqual([["gedit", "--new-window"]]);
   });
+
+  it.each([true, false])(
+    "waits for the chosen app (tiled main window: %s)",
+    async (tiled) => {
+      const { host, result } = desktop([LEFT]);
+      host.lists([
+        {
+          appId: "",
+          height: 0,
+          id: "blank",
+          isApp: false,
+          isCaptured: false,
+          isHidden: false,
+          isPrivate: false,
+          menu: null,
+          menuBarAutoHide: false,
+          menuBarVisible: true,
+          messageBox: null,
+          parent: null,
+          partition: "",
+          popupMenu: null,
+          popupWindow: null,
+          profile: "default",
+          title: "",
+          toplevelId: null,
+          url: "about:blank",
+          wantsFullscreen: false,
+          wantsMaximized: false,
+          wantsMinimized: false,
+          width: 0,
+          x: 0,
+          y: 0,
+        },
+      ]);
+      act(() => {
+        result.current.act(
+          WindowAction.AppLaunched(["gedit"], {
+            appId: "org.gnome.gedit.desktop",
+            stillBlank: () => true,
+            tab: browserWindowId("blank"),
+          }),
+        );
+      });
+      expect(host.spawned).toEqual([["gedit"]]);
+      expect(result.current.launchingTab).toBe(browserWindowId("blank"));
+      host.announces("unrelated");
+      expect(host.closed).toEqual([]);
+      act(() => {
+        host.fake.appear("splash", {
+          desktopId: "org.gnome.gedit",
+          dialog: true,
+          height: 250,
+          title: "Starting Editor",
+          width: 400,
+        });
+      });
+      expect(host.closed).toEqual([]);
+      const sizeOfFloats = () =>
+        workspaceOn(result.current, "left").floats.map(({ width, height }) => ({
+          height,
+          width,
+        }));
+      const splashSize = sizeOfFloats();
+      expect(splashSize).toHaveLength(1);
+      if (tiled) {
+        act(() => {
+          host.fake.appear("editor", {
+            desktopId: "org.gnome.gedit",
+            title: "Editor",
+          });
+        });
+        expect(result.current.activeId).toBe(appWindowId("editor"));
+      } else {
+        await waitFor(
+          () => {
+            expect(host.closed).toEqual(["blank"]);
+          },
+          { timeout: 3500 },
+        );
+        expect(result.current.activeId).toBe(appWindowId("splash"));
+        expect(sizeOfFloats()).toEqual(splashSize);
+      }
+      expect(host.closed).toEqual(["blank"]);
+      expect(result.current.launchingTab).toBeUndefined();
+    },
+  );
 
   it("opens a file the launcher chose with what opens it", () => {
     const host = client();

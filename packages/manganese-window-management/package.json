@@ -30,6 +30,8 @@
     "bun": ">=1.4.2"
   },
   "exports": {
+    "./browser/address-app-ranking": "./src/browser/address-app-ranking.ts",
+    "./browser/address-apps": "./src/browser/address-apps.ts",
     "./client-icons": "./src/client-icons.ts",
     "./direction": "./src/direction.ts",
     "./floating/floating-rules": "./src/floating/floating-rules.ts",

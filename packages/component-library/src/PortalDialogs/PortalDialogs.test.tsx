@@ -2248,13 +2248,19 @@ describe("PortalDialogs", () => {
       ]);
     });
 
-    it("names no asker when the shell asked for it", () => {
+    it("opens on screen for the shell and goes back to the source list", async () => {
       const host = new FakeHost();
       render(<PortalDialogs domicile={host.domicile} />);
       host.push([{ ...frozen(1, "screenshot"), app_id: SHELL_APP_ID }]);
 
+      expect(screen.getByRole("img", { name: "The desk" })).toBeVisible();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+      await userEvent.keyboard("{Escape}");
+
       expect(screen.getByRole("dialog")).toHaveTextContent("Take a screenshot");
       expect(screen.getByRole("dialog")).not.toHaveTextContent("asks");
+      expect(host.answers).toEqual([]);
     });
 
     it("saves the whole desk, picked again", async () => {

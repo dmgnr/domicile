@@ -254,6 +254,10 @@ interface BrowserWindows {
   // switches (`locked`).
   SetExtensionEnabled(string profile, string id, bool enabled)
       => (string error);
+
+  // Chromium's ranked matches for the profile of the browser window `id`.
+  // The JSON list contains url, label, description and search for each match.
+  Suggestions(string id, string query) => (string matches);
 };
 
 // Browser -> renderer.

@@ -520,6 +520,10 @@
   [CallWith=ScriptState, RaisesException] Promise<DOMString>
       browserSiteFor(USVString url);
 
+  // Ranked Chromium suggestions for the browser window's own profile.
+  [CallWith=ScriptState, RaisesException] Promise<DOMString>
+      browserSuggestions(DOMString id, USVString query);
+
   // Opens `site` in browser profile `profile` from now on, kept across
   // restarts; the default profile unpins it. `site` is a host, `*.host`, or
   // a host and path, as the config's `browser.sites` keys are; it shows in
